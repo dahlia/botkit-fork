@@ -4,7 +4,7 @@ BotKit changelog
 Version 0.3.3
 -------------
 
-To be released.
+Released on May 21, 2026.
 
  -  Upgraded Fedify to 1.9.11 to fix a security vulnerability in Linked Data
     Signature verification that could allow certain signed activities to be
