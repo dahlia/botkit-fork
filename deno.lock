@@ -2,7 +2,7 @@
   "version": "5",
   "specifiers": {
     "jsr:@es-toolkit/es-toolkit@^1.39.5": "1.43.0",
-    "jsr:@fedify/fedify@^1.9.10": "1.10.9",
+    "jsr:@fedify/fedify@^1.9.11": "1.10.5",
     "jsr:@fedify/markdown-it-hashtag@0.3": "0.3.0",
     "jsr:@fedify/markdown-it-mention@0.3": "0.3.0",
     "jsr:@hongminhee/x-forwarded-fetch@0.2": "0.2.0",
@@ -42,8 +42,8 @@
     "@es-toolkit/es-toolkit@1.43.0": {
       "integrity": "ce62274cd14ad9317290b5d77e2c2bf752b78a96e393c0306640f59753e7e043"
     },
-    "@fedify/fedify@1.10.9": {
-      "integrity": "9869ab87c146ef2fbef388f25a93f5494d1a83ea59830a79b8d3881e0c48bf30",
+    "@fedify/fedify@1.10.5": {
+      "integrity": "648047e8fb497db71275a1a069a97d428b25d8822a322e4ef5713d340c99f15d",
       "dependencies": [
         "jsr:@es-toolkit/es-toolkit",
         "jsr:@logtape/logtape@^1.2.2",
@@ -673,7 +673,7 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@fedify/fedify@^1.9.10",
+      "jsr:@fedify/fedify@^1.9.11",
       "jsr:@hongminhee/x-forwarded-fetch@0.2",
       "jsr:@hono/hono@^4.8.2",
       "jsr:@logtape/logtape@^1.0.4",

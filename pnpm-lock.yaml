@@ -7,7 +7,7 @@ settings:
 catalogs:
   default:
     '@fedify/fedify':
-      specifier: ^1.9.10
+      specifier: ^1.9.11
       version: 1.10.9
     '@js-temporal/polyfill':
       specifier: ^0.5.1

@@ -6,7 +6,7 @@ allowBuilds:
   esbuild: true
 
 catalog:
-  "@fedify/fedify": ^1.9.10
+  "@fedify/fedify": ^1.9.11
   "@js-temporal/polyfill": ^0.5.1
   "@logtape/logtape": ^1.0.4
   hono: ^4.8.2
