@@ -7,6 +7,9 @@ allowBuilds:
 
 linkWorkspacePackages: true
 
+minimumReleaseAgeExclude:
+  - "@fedify/*"
+
 catalog:
   "@fedify/denokv": 2.1.14
   "@fedify/fedify": 2.1.14
