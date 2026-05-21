@@ -7,6 +7,20 @@ Version 0.5.0
 To be released.
 
 
+Version 0.4.2
+-------------
+
+Released on May 21, 2026.
+
+### @fedify/botkit
+
+ -  Upgraded Fedify to 2.1.14 to fix a security vulnerability in Linked Data
+    Signature verification that could allow certain signed activities to be
+    interpreted differently than intended.  [[CVE-2026-42462]]
+
+[CVE-2026-42462]: https://github.com/fedify-dev/fedify/security/advisories/GHSA-9rfg-v8g9-9367
+
+
 Version 0.4.1
 -------------
 
@@ -84,6 +98,16 @@ Released on March 30, 2026.
 
 [#11]: https://github.com/fedify-dev/botkit/issues/11
 [#19]: https://github.com/fedify-dev/botkit/pull/19
+
+
+Version 0.3.3
+-------------
+
+Released on May 21, 2026.
+
+ -  Upgraded Fedify to 1.9.11 to fix a security vulnerability in Linked Data
+    Signature verification that could allow certain signed activities to be
+    interpreted differently than intended.  [[CVE-2026-42462]]
 
 
 Version 0.3.2
