@@ -6,6 +6,11 @@ Version 0.3.4
 
 To be released.
 
+ -  Upgraded Fedify to 1.9.12, which fixes an SSRF protection bypass
+    vulnerability.  [[CVE-2026-50131]]
+
+[CVE-2026-50131]: https://github.com/fedify-dev/fedify/security/advisories/GHSA-xw9q-2mv6-9fr8
+
 
 Version 0.3.3
 -------------
