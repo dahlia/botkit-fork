@@ -38,12 +38,12 @@ a simple two-factor authentication mechanism through the fediverse.
 
 The authentication flow works as follows:
 
-1.  *Initial setup*: The user visits the web interface and enters their fediverse
-    handle (e.g., `@username@server.com`).
+1.  *Initial setup*: The user visits the web interface and enters their
+    fediverse handle (e.g., `@username@server.com`).
 
-2.  *Challenge generation*: The system generates a random set of emojis and sends
-    a direct message containing a poll with all available emoji options to
-    the user's fediverse account.
+2.  *Challenge generation*: The system generates a random set of emojis and
+    sends a direct message containing a poll with all available emoji options
+    to the user's fediverse account.
 
 3.  *Web interface display*: The correct emoji sequence is displayed on the
     web page.

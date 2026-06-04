@@ -2,10 +2,10 @@
   "workspace": ["packages/*", "examples/*"],
   "unstable": ["kv", "temporal"],
   "imports": {
-    "@fedify/denokv": "jsr:@fedify/denokv@2.1.14",
-    "@fedify/fedify": "jsr:@fedify/fedify@2.1.14",
-    "@fedify/vocab": "jsr:@fedify/vocab@2.1.14",
-    "@fedify/vocab-runtime": "jsr:@fedify/vocab-runtime@2.1.14",
+    "@fedify/denokv": "jsr:@fedify/denokv@~2.1.15",
+    "@fedify/fedify": "jsr:@fedify/fedify@~2.1.15",
+    "@fedify/vocab": "jsr:@fedify/vocab@~2.1.15",
+    "@fedify/vocab-runtime": "jsr:@fedify/vocab-runtime@~2.1.15",
     "@logtape/logtape": "jsr:@logtape/logtape@^1.3.5",
     "@std/fs": "jsr:@std/fs@^1.0.19",
     "@std/path": "jsr:@std/path@^1.1.1",
@@ -27,7 +27,7 @@
     "exclude": ["*.md", "*.yaml", "*.yml"]
   },
   "tasks": {
-    "hongdown": "deno run -A npm:hongdown@^0.3.8",
+    "hongdown": "deno run -A npm:hongdown@^0.4.3",
     "check": {
       "dependencies": ["check-versions"],
       "command": "deno check && deno lint && deno fmt --check && deno task hongdown --check && deno publish --dry-run --allow-dirty"
