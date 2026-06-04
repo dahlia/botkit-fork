@@ -106,6 +106,7 @@ Features
      -  Follower and following relationship management
      -  Poll voting system
 
- -  **Resource management**: Implements `Disposable` interface for proper cleanup
+ -  **Resource management**: Implements `Disposable` interface for proper
+    cleanup
 
 <!-- cSpell: ignore mybot -->
