@@ -4,7 +4,7 @@ BotKit changelog
 Version 0.3.4
 -------------
 
-To be released.
+Released on June 4, 2026.
 
  -  Upgraded Fedify to 1.9.12, which fixes an SSRF protection bypass
     vulnerability.  [[CVE-2026-50131]]
