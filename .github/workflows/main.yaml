@@ -50,6 +50,7 @@ jobs:
     if: github.event_name == 'push'
     needs: [test]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: write
       id-token: write
@@ -89,7 +90,37 @@ jobs:
         fi
       env:
         NPM_CONFIG_PROVENANCE: "true"
-    - run: deno publish --allow-dirty
+    - run: |
+        set -euo pipefail
+
+        max_attempts=30
+        timeout_seconds=60
+
+        for attempt in $(seq 1 "$max_attempts"); do
+          echo "Publishing to JSR (attempt $attempt/$max_attempts)..."
+
+          set +e
+          timeout --foreground "${timeout_seconds}s" deno publish --allow-dirty
+          status=$?
+          set -e
+
+          if [[ "$status" -eq 0 ]]; then
+            exit 0
+          fi
+
+          if [[ "$attempt" -eq "$max_attempts" ]]; then
+            echo "deno publish failed after $max_attempts attempts."
+            exit "$status"
+          fi
+
+          if [[ "$status" -eq 124 ]]; then
+            echo "deno publish timed out after ${timeout_seconds}s; retrying."
+          else
+            echo "deno publish failed with exit code $status; retrying."
+          fi
+
+          sleep 5
+        done
     - if: github.ref_type == 'tag'
       id: extract-changelog
       uses: dahlia/submark@ed8f47b4d51fda07e12b6e991641a8bd5ec62f8e
