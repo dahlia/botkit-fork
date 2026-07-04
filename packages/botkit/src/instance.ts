@@ -148,7 +148,8 @@ export interface BotGroup<TContextData> extends BotEventHandlers<TContextData> {
    * @param origin The origin of the session.  Even if a URL with some path
    *               or query is passed, only the origin part will be used.
    * @param identifier The identifier of the bot to control.
-   * @param contextData The context data to pass to the federation.
+   * @param contextData The context data to pass to the federation.  It can
+   *                    be omitted when `TContextData` is `void`.
    * @returns The session for the bot.
    * @throws {TypeError} If the group's dispatcher does not resolve
    *                     the identifier.
@@ -156,7 +157,7 @@ export interface BotGroup<TContextData> extends BotEventHandlers<TContextData> {
   getSession(
     origin: string | URL,
     identifier: string,
-    contextData?: TContextData,
+    contextData: TContextData,
   ): Promise<Session<TContextData>>;
 }
 

@@ -223,6 +223,21 @@ describe("dynamic bots", () => {
     assert.deepStrictEqual(response.status, 200);
   });
 
+  test("require context data unless TContextData is void", () => {
+    const instance = new InstanceImpl<{ db: string }>({
+      kv: new MemoryKvStore(),
+      repository: new MemoryRepository(),
+    });
+    const group = instance.createBot((_ctx, identifier) => ({
+      username: identifier,
+    }));
+    // @ts-expect-error: contextData is required when TContextData is not
+    // void.
+    group.getSession("https://example.com", "someone").catch(() => {});
+    group.getSession("https://example.com", "someone", { db: "x" })
+      .catch(() => {});
+  });
+
   test("create sessions for resolved identifiers", async () => {
     const { instance } = createInstance();
     const group = instance.createBot(

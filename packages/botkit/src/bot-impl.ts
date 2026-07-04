@@ -1499,11 +1499,11 @@ export class BotGroupImpl<TContextData> implements BotGroup<TContextData> {
   async getSession(
     origin: string | URL,
     identifier: string,
-    contextData?: TContextData,
+    contextData: TContextData,
   ): Promise<Session<TContextData>> {
     const ctx = this.instance.federation.createContext(
       new URL(origin),
-      contextData!,
+      contextData,
     );
     const bot = await this.instance.resolveBot(ctx, identifier);
     if (bot == null || !(bot instanceof GroupBotImpl) || bot.group !== this) {
