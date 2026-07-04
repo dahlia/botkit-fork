@@ -18,6 +18,7 @@ import {
   createFederation,
   type Federation,
   generateCryptoKeyPair,
+  type InboxContext,
   type KvStore,
   type MessageQueue,
   type NodeInfo,
@@ -38,6 +39,8 @@ import {
   Follow,
   Image,
   Like as RawLike,
+  Link,
+  Mention,
   Note,
   Question,
   Reject,
@@ -57,10 +60,11 @@ import type {
   CreateInstanceOptions,
   Instance,
 } from "./instance.ts";
+import { isMessageObject, isQuoteLink } from "./message-impl.ts";
 import { app } from "./pages.tsx";
 import { KvRepository, type Repository } from "./repository.ts";
 import type { Session } from "./session.ts";
-import { rewriteLegacyObjectPath } from "./uri.ts";
+import { parseLocalUri, rewriteLegacyObjectPath } from "./uri.ts";
 
 /**
  * The reserved identifier of the instance actor: an internal
@@ -254,54 +258,13 @@ export class InstanceImpl<TContextData>
       .onUnverifiedActivity((ctx, activity, reason) =>
         this.onUnverifiedActivity(ctx, activity, reason)
       )
-      .on(Follow, async (ctx, follow) => {
-        for (const bot of this.#bots.values()) {
-          await bot.onFollowed(ctx, follow);
-        }
-      })
-      .on(Undo, async (ctx, undo) => {
-        const object = await undo.getObject(ctx);
-        if (object instanceof Follow) {
-          for (const bot of this.#bots.values()) {
-            await bot.onUnfollowed(ctx, undo);
-          }
-        } else if (object instanceof RawLike) {
-          for (const bot of this.#bots.values()) {
-            await bot.onUnliked(ctx, undo);
-          }
-        } else {
-          const logger = getLogger(["botkit", "bot", "inbox"]);
-          logger.warn(
-            "The Undo object {undoId} is not about Follow or Like: {object}.",
-            { undoId: undo.id?.href, object },
-          );
-        }
-      })
-      .on(Accept, async (ctx, accept) => {
-        for (const bot of this.#bots.values()) {
-          await bot.onFollowAccepted(ctx, accept);
-        }
-      })
-      .on(Reject, async (ctx, reject) => {
-        for (const bot of this.#bots.values()) {
-          await bot.onFollowRejected(ctx, reject);
-        }
-      })
-      .on(Create, async (ctx, create) => {
-        for (const bot of this.#bots.values()) {
-          await bot.onCreated(ctx, create);
-        }
-      })
-      .on(Announce, async (ctx, announce) => {
-        for (const bot of this.#bots.values()) {
-          await bot.onAnnounced(ctx, announce);
-        }
-      })
-      .on(RawLike, async (ctx, like) => {
-        for (const bot of this.#bots.values()) {
-          await bot.onLiked(ctx, like);
-        }
-      })
+      .on(Follow, (ctx, follow) => this.onFollowed(ctx, follow))
+      .on(Undo, (ctx, undo) => this.onUndone(ctx, undo))
+      .on(Accept, (ctx, accept) => this.onFollowAccepted(ctx, accept))
+      .on(Reject, (ctx, reject) => this.onFollowRejected(ctx, reject))
+      .on(Create, (ctx, create) => this.onCreated(ctx, create))
+      .on(Announce, (ctx, announce) => this.onAnnounced(ctx, announce))
+      .on(RawLike, (ctx, like) => this.onLiked(ctx, like))
       .setSharedKeyDispatcher((ctx) => this.dispatchSharedKey(ctx));
     if (this.software != null) {
       this.federation.setNodeInfoDispatcher(
@@ -410,6 +373,230 @@ export class InstanceImpl<TContextData>
     ) {
       return new Response(null, { status: 202 });
     }
+  }
+
+  /**
+   * Resolves which bots an incoming shared-inbox activity is relevant to.
+   * On a compatible (single-bot) instance every hosted bot is returned,
+   * preserving the pre-0.5 behavior.  A personal-inbox delivery targets
+   * its recipient only.  Otherwise the given resolver computes the
+   * relevant bot identifiers.
+   */
+  async #resolveTargets(
+    ctx: InboxContext<TContextData>,
+    resolve: () =>
+      | Promise<Iterable<string>>
+      | Iterable<string>,
+  ): Promise<BotImpl<TContextData>[]> {
+    if (this.compatMode) return [...this.#bots.values()];
+    if (ctx.recipient != null) {
+      const bot = this.getBot(ctx.recipient);
+      return bot == null ? [] : [bot];
+    }
+    const identifiers = new Set(await resolve());
+    const bots: BotImpl<TContextData>[] = [];
+    for (const identifier of identifiers) {
+      const bot = this.getBot(identifier);
+      if (bot != null) bots.push(bot);
+    }
+    return bots;
+  }
+
+  /**
+   * Attributes a local object URI to its owning bot identifier, or logs and
+   * yields nothing when the URI is not a local object.  Activities on
+   * objects the instance does not own cannot be attributed to any bot on
+   * a multi-bot instance, so they are dropped.
+   */
+  #localObjectTarget(
+    ctx: InboxContext<TContextData>,
+    uri: URL | null,
+  ): Iterable<string> {
+    const parsed = parseLocalUri(ctx, uri, this.legacyObjectUrisIdentifier);
+    if (
+      parsed?.type === "object" &&
+      typeof parsed.values.identifier === "string"
+    ) {
+      return [parsed.values.identifier];
+    }
+    const logger = getLogger(["botkit", "instance", "inbox"]);
+    logger.debug(
+      "The object {uri} is not owned by any bot on this instance; " +
+        "the activity is not routed.",
+      { uri: uri?.href },
+    );
+    return [];
+  }
+
+  async onFollowed(
+    ctx: InboxContext<TContextData>,
+    follow: Follow,
+  ): Promise<void> {
+    const bots = await this.#resolveTargets(ctx, () => {
+      const parsed = ctx.parseUri(follow.objectId);
+      return parsed?.type === "actor" ? [parsed.identifier] : [];
+    });
+    for (const bot of bots) await bot.onFollowed(ctx, follow);
+  }
+
+  async onUndone(
+    ctx: InboxContext<TContextData>,
+    undo: Undo,
+  ): Promise<void> {
+    const object = await undo.getObject(ctx);
+    if (object instanceof Follow) {
+      const bots = await this.#resolveTargets(ctx, () => {
+        const parsed = ctx.parseUri(object.objectId);
+        return parsed?.type === "actor" ? [parsed.identifier] : [];
+      });
+      for (const bot of bots) await bot.onUnfollowed(ctx, undo);
+    } else if (object instanceof RawLike) {
+      const bots = await this.#resolveTargets(
+        ctx,
+        () => this.#localObjectTarget(ctx, object.objectId),
+      );
+      for (const bot of bots) await bot.onUnliked(ctx, undo);
+    } else {
+      const logger = getLogger(["botkit", "bot", "inbox"]);
+      logger.warn(
+        "The Undo object {undoId} is not about Follow or Like: {object}.",
+        { undoId: undo.id?.href, object },
+      );
+    }
+  }
+
+  async onFollowAccepted(
+    ctx: InboxContext<TContextData>,
+    accept: Accept,
+  ): Promise<void> {
+    const bots = await this.#resolveTargets(
+      ctx,
+      () => this.#localObjectTarget(ctx, accept.objectId),
+    );
+    for (const bot of bots) await bot.onFollowAccepted(ctx, accept);
+  }
+
+  async onFollowRejected(
+    ctx: InboxContext<TContextData>,
+    reject: Reject,
+  ): Promise<void> {
+    const bots = await this.#resolveTargets(
+      ctx,
+      () => this.#localObjectTarget(ctx, reject.objectId),
+    );
+    for (const bot of bots) await bot.onFollowRejected(ctx, reject);
+  }
+
+  async onLiked(
+    ctx: InboxContext<TContextData>,
+    like: RawLike,
+  ): Promise<void> {
+    const bots = await this.#resolveTargets(
+      ctx,
+      () => this.#localObjectTarget(ctx, like.objectId),
+    );
+    for (const bot of bots) await bot.onLiked(ctx, like);
+  }
+
+  async onCreated(
+    ctx: InboxContext<TContextData>,
+    create: Create,
+  ): Promise<void> {
+    const bots = await this.#resolveTargets(ctx, async () => {
+      const targets = new Set<string>();
+      // Bots following the author see the message on their timeline:
+      if (create.actorId != null) {
+        for await (
+          const identifier of this.repository.findFollowedBots(create.actorId)
+        ) {
+          targets.add(identifier);
+        }
+      }
+      // Bots addressed directly, or whose followers collection is
+      // addressed (either on the activity or on the embedded object):
+      const addAddressee = (uri: URL) => {
+        const parsed = ctx.parseUri(uri);
+        if (parsed?.type === "actor" || parsed?.type === "followers") {
+          if (parsed.identifier != null) targets.add(parsed.identifier);
+        }
+      };
+      for (const uri of [...create.toIds, ...create.ccIds]) {
+        addAddressee(uri);
+      }
+      const addLocalObject = (uri: URL | null) => {
+        const parsed = parseLocalUri(
+          ctx,
+          uri,
+          this.legacyObjectUrisIdentifier,
+        );
+        if (
+          parsed?.type === "object" &&
+          typeof parsed.values.identifier === "string"
+        ) {
+          targets.add(parsed.values.identifier);
+        }
+      };
+      const object = await create.getObject(ctx);
+      if (isMessageObject(object)) {
+        for (const uri of [...object.toIds, ...object.ccIds]) {
+          addAddressee(uri);
+        }
+        // Bots mentioned in or quoted by the message:
+        for await (const tag of object.getTags(ctx)) {
+          if (tag instanceof Mention && tag.href != null) {
+            const parsed = ctx.parseUri(tag.href);
+            if (parsed?.type === "actor") targets.add(parsed.identifier);
+          } else if (tag instanceof Link && isQuoteLink(tag)) {
+            addLocalObject(tag.href);
+          }
+        }
+        addLocalObject(object.quoteUrl);
+        // Bots whose message is replied to:
+        addLocalObject(object.replyTargetId);
+      }
+      return targets;
+    });
+    for (const bot of bots) await bot.onCreated(ctx, create);
+  }
+
+  async onAnnounced(
+    ctx: InboxContext<TContextData>,
+    announce: Announce,
+  ): Promise<void> {
+    const bots = await this.#resolveTargets(ctx, async () => {
+      const targets = new Set<string>();
+      // Bots following the sharer see the share on their timeline:
+      if (announce.actorId != null) {
+        for await (
+          const identifier of this.repository.findFollowedBots(
+            announce.actorId,
+          )
+        ) {
+          targets.add(identifier);
+        }
+      }
+      // Bots addressed directly, or whose followers collection is
+      // addressed, or whose message is shared:
+      for (const uri of [...announce.toIds, ...announce.ccIds]) {
+        const parsed = ctx.parseUri(uri);
+        if (parsed?.type === "actor" || parsed?.type === "followers") {
+          if (parsed.identifier != null) targets.add(parsed.identifier);
+        }
+      }
+      const parsedObject = parseLocalUri(
+        ctx,
+        announce.objectId,
+        this.legacyObjectUrisIdentifier,
+      );
+      if (
+        parsedObject?.type === "object" &&
+        typeof parsedObject.values.identifier === "string"
+      ) {
+        targets.add(parsedObject.values.identifier);
+      }
+      return targets;
+    });
+    for (const bot of bots) await bot.onAnnounced(ctx, announce);
   }
 
   dispatchSharedKey(_ctx: Context<TContextData>): { identifier: string } {
