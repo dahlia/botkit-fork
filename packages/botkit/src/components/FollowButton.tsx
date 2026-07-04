@@ -3,9 +3,10 @@ import type { BotImpl } from "../bot-impl.ts";
 
 export interface FollowButtonProps {
   readonly bot: BotImpl<unknown>;
+  readonly action?: string;
 }
 
-export function FollowButton({ bot }: FollowButtonProps) {
+export function FollowButton({ bot, action }: FollowButtonProps) {
   return (
     <>
       <button
@@ -29,7 +30,7 @@ export function FollowButton({ bot }: FollowButtonProps) {
           </header>
           <main>
             <p>Enter your fediverse handle to follow this account:</p>
-            <form action="/follow" method="post">
+            <form action={action ?? "/follow"} method="post">
               <input
                 type="text"
                 id="fediverse-handle"

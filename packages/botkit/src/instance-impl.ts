@@ -61,7 +61,7 @@ import type {
   Instance,
 } from "./instance.ts";
 import { isMessageObject, isQuoteLink } from "./message-impl.ts";
-import { app } from "./pages.tsx";
+import { app, multiApp } from "./pages.tsx";
 import { KvRepository, type Repository } from "./repository.ts";
 import type { Session } from "./session.ts";
 import { parseLocalUri, rewriteLegacyObjectPath } from "./uri.ts";
@@ -857,8 +857,51 @@ export class InstanceImpl<TContextData>
         },
       });
     }
-    const bot = this.#firstBot();
-    if (bot == null) return new Response("Not Found", { status: 404 });
-    return await app.fetch(request, { bot, contextData });
+    if (this.compatMode) {
+      const bot = this.#firstBot();
+      if (bot == null) return new Response("Not Found", { status: 404 });
+      return await app.fetch(request, { bot, contextData });
+    }
+    return await multiApp.fetch(request, {
+      // deno-lint-ignore no-explicit-any
+      instance: this as InstanceImpl<any>,
+      contextData,
+    });
+  }
+
+  /**
+   * The web page URL of a bot hosted on the instance.  A compatible
+   * (single-bot) instance serves its bot at the web root; a multi-bot
+   * instance serves each bot under a path derived from its username.
+   * @param bot The bot to get the web page URL of.
+   * @param origin The origin of the URL.
+   * @returns The web page URL of the bot.
+   */
+  getBotWebUrl(bot: BotImpl<TContextData>, origin: string | URL): URL {
+    return new URL(
+      this.compatMode ? "/" : `/@${encodeURIComponent(bot.username)}`,
+      origin,
+    );
+  }
+
+  /**
+   * The web permalink of a message published by a bot hosted on
+   * the instance.
+   * @param bot The bot that published the message.
+   * @param id The UUID of the message.
+   * @param origin The origin of the URL.
+   * @returns The web permalink of the message.
+   */
+  getMessageWebUrl(
+    bot: BotImpl<TContextData>,
+    id: string,
+    origin: string | URL,
+  ): URL {
+    return new URL(
+      this.compatMode
+        ? `/message/${id}`
+        : `/@${encodeURIComponent(bot.username)}/${id}`,
+      origin,
+    );
   }
 }

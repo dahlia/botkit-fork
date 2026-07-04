@@ -298,7 +298,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       outbox: ctx.getOutboxUri(identifier),
       publicKey: keyPairs[0].cryptographicKey,
       assertionMethods: keyPairs.map((pair) => pair.multikey),
-      url: new URL("/", ctx.origin),
+      url: this.instance.getBotWebUrl(this, ctx.origin),
     });
   }
 
