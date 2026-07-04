@@ -226,6 +226,79 @@ first, and it rejects with a `TypeError` when the dispatcher doesn't
 recognize the identifier.
 
 
+Multiple bot groups
+-------------------
+
+An instance can host several bot groups side by side, each serving
+a different kind of bot.  Since a dispatcher that returns `null` passes the
+identifier on to the next group, giving each group its own identifier
+namespace (e.g. a prefix) is all it takes to keep them apart:
+
+~~~~ typescript twoslash
+declare const db: {
+  getRegion(code: string): Promise<{ name: string } | null>;
+  getWeather(code: string): Promise<string>;
+  getTopic(slug: string): Promise<{ name: string } | null>;
+  getHeadlines(slug: string): Promise<string>;
+};
+import { createInstance, text } from "@fedify/botkit";
+import { MemoryKvStore } from "@fedify/fedify";
+
+const instance = createInstance<void>({
+  kv: new MemoryKvStore(),
+});
+// ---cut-before---
+// A static bot for instance-wide announcements:
+const announcements = instance.createBot("announcements", {
+  username: "announcements",
+  name: "Announcements",
+});
+
+// One bot per region, under the weather_ prefix:
+const weatherBots = instance.createBot(async (ctx, identifier) => {
+  if (!identifier.startsWith("weather_")) return null;
+  const region = await db.getRegion(identifier.slice("weather_".length));
+  if (region == null) return null;
+  return { username: identifier, name: `${region.name} Weather Bot` };
+});
+
+// One bot per topic, under the news_ prefix:
+const newsBots = instance.createBot(async (ctx, identifier) => {
+  if (!identifier.startsWith("news_")) return null;
+  const topic = await db.getTopic(identifier.slice("news_".length));
+  if (topic == null) return null;
+  return { username: identifier, name: `${topic.name} News Bot` };
+});
+
+weatherBots.onMention = async (session, message) => {
+  const code = session.bot.identifier.slice("weather_".length);
+  await message.reply(text`Current weather: ${await db.getWeather(code)}`);
+};
+
+newsBots.onMention = async (session, message) => {
+  const slug = session.bot.identifier.slice("news_".length);
+  await message.reply(text`Today's headlines: ${await db.getHeadlines(slug)}`);
+};
+~~~~
+
+Resolving the identifier `news_tech` on this instance walks through the
+registrations in order: it is not a static bot, `weatherBots` returns `null`
+because the prefix doesn't match, and `newsBots` resolves it.  Each group
+keeps its own event handlers, so a mention of `@news_tech@your-domain`
+reaches `newsBots.onMention` only.
+
+Registering any number of groups is allowed and never an error.  BotKit
+cannot tell at registration time whether two arbitrary dispatchers overlap,
+so overlaps are resolved by order instead: if two groups would resolve the
+same identifier, the group created first wins and the later group's
+dispatcher is not even invoked for it.  WebFinger username resolution has
+its own order: static bots' usernames win first, then the groups'
+`~CreateBotGroupOptions.mapUsername` callbacks are tried in creation order,
+and the username-as-identifier fallback for groups without the callback
+comes last.  In practice, disjoint namespaces like the prefixes above are
+the way to keep group boundaries obvious.
+
+
 The instance actor
 ------------------
 
