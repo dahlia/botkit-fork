@@ -48,6 +48,13 @@ The `CreateInstanceOptions` take the infrastructure-related options that
 bot hosted on the instance, scoped by their identifiers; see the
 [*Repository* concept document](./repository.md) for details.
 
+Two options are specific to multi-bot instances:
+`~CreateInstanceOptions.instanceActorIdentifier` overrides the reserved
+identifier of [the instance actor](#the-instance-actor), and
+`~CreateInstanceOptions.legacyObjectUris` keeps object URIs from an older
+single-bot deployment working (see [*Migrating a single-bot
+deployment*](#migrating-a-single-bot-deployment)).
+
 Like a `Bot`, an `Instance` has a `~Instance.fetch()` method to be connected
 to the HTTP server:
 
@@ -306,11 +313,28 @@ A multi-bot instance has no single obvious actor whose key should sign
 shared-inbox related requests, so it exposes an *instance actor*: an
 internal, non-discoverable `Application` actor, similar to Mastodon's
 instance actor.  It lives under a reserved identifier, which defaults to
-`DEFAULT_INSTANCE_ACTOR_IDENTIFIER` (`__botkit_instance__`) and can be
-overridden through the `~CreateInstanceOptions.instanceActorIdentifier`
-option.  Bots cannot take the reserved identifier, whether they are static
-or resolved by a dispatcher.  Like bot identifiers, it is used for the
-actor URI, so it *should not* be changed after the instance is federated.
+`DEFAULT_INSTANCE_ACTOR_IDENTIFIER` (`__botkit_instance__`).  Bots cannot
+take the reserved identifier, whether they are static or resolved by
+a dispatcher.
+
+In the unlikely case that the default collides with an identifier you need,
+override it through the `~CreateInstanceOptions.instanceActorIdentifier`
+option:
+
+~~~~ typescript twoslash
+import { createInstance } from "@fedify/botkit";
+import { MemoryKvStore } from "@fedify/fedify";
+// ---cut-before---
+const instance = createInstance<void>({
+  kv: new MemoryKvStore(),
+  instanceActorIdentifier: "fetcher",
+});
+~~~~
+
+Like bot identifiers, the instance actor identifier is used for the actor
+URI, so it *should not* be changed after the instance is federated: remote
+servers that have seen the instance actor would no longer be able to fetch
+its key.
 
 Instances created through the single-bot `createBot()` function keep the
 pre-0.5 behavior: the sole bot's key signs shared-inbox requests and no
