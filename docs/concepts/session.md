@@ -59,6 +59,21 @@ const session = bot.getSession(`https://${SERVER_NAME}`);  // [!code highlight]
 
 :::
 
+> [!NOTE]
+> A dynamic [bot group](./instance.md#dynamic-bots) hosts many bots, so
+> `BotGroup.getSession()` additionally takes the identifier of the bot to
+> control and returns a `Promise`:
+>
+> ~~~~ typescript twoslash
+> import type { BotGroup } from "@fedify/botkit";
+> const weatherBots = {} as unknown as BotGroup<void>;
+> // ---cut-before---
+> const session = await weatherBots.getSession(
+>   "https://mydomain",
+>   "weather_kr",
+> );
+> ~~~~
+
 
 Getting a session from an event handler
 ---------------------------------------
@@ -76,6 +91,32 @@ bot.onMention = async (session, message) => {
 ~~~~
 
 To learn more about event handlers, see the [*Events* section](./events.md).
+
+
+Determining which bot the session belongs to
+--------------------------------------------
+
+The `Session.bot` property is a `ReadonlyBot`: a read-only view of the bot's
+identity and profile, including its `~ReadonlyBot.identifier`,
+`~ReadonlyBot.username`, and `~ReadonlyBot.name`.  It is particularly useful
+in handlers registered on a [dynamic bot group](./instance.md#dynamic-bots),
+where the same handler runs for many bots:
+
+~~~~ typescript twoslash
+import type { BotGroup } from "@fedify/botkit";
+const weatherBots = {} as unknown as BotGroup<void>;
+// ---cut-before---
+weatherBots.onMention = async (session, message) => {
+  const identifier = session.bot.identifier;
+  // …look up the data this particular bot serves…
+};
+~~~~
+
+> [!NOTE]
+> Before BotKit 0.5.0, this property was typed as `Bot`, so event handlers
+> could be reassigned through it.  It is now a `ReadonlyBot`, which exposes
+> the identity and profile only.  If you need the full `Bot`, hold on to
+> the object returned by `createBot()` instead.
 
 
 Determining the actor URI of the bot

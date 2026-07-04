@@ -109,6 +109,11 @@ same process for development purposes.
 >  -  [*Key–value store*]
 >  -  [*Message queue*]
 
+> [!TIP]
+> A bot created by `createBot()` occupies its whole server.  If you want to
+> host multiple bots on a single server, create them on an *instance*
+> instead; see the [*Instance* chapter](./concepts/instance.md).
+
 [`MemoryKvStore`]: https://fedify.dev/manual/kv#memorykvstore
 [`InProcessMessageQueue`]: https://fedify.dev/manual/mq#inprocessmessagequeue
 [*Key–value store*]: https://fedify.dev/manual/kv
