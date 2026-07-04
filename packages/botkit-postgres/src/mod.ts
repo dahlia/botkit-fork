@@ -138,6 +138,16 @@ export async function initializePostgresRepositorySchema(
     [],
     prepare,
   );
+  await upgradeLegacySchema(sql, validatedSchema, prepare);
+  await execute(
+    sql,
+    `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."botkit_metadata" (
+       "key" TEXT PRIMARY KEY,
+       value TEXT NOT NULL
+     )`,
+    [],
+    prepare,
+  );
   await execute(
     sql,
     `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."key_pairs" (
@@ -190,6 +200,7 @@ export async function initializePostgresRepositorySchema(
        FOREIGN KEY (bot_id, follower_id)
          REFERENCES "${validatedSchema}"."followers" (bot_id, follower_id)
          ON DELETE CASCADE
+         DEFERRABLE INITIALLY IMMEDIATE
      )`,
     [],
     prepare,
@@ -249,6 +260,136 @@ export async function initializePostgresRepositorySchema(
     [],
     prepare,
   );
+}
+
+const upgradableTables = [
+  "key_pairs",
+  "messages",
+  "followers",
+  "follow_requests",
+  "sent_follows",
+  "followees",
+  "poll_votes",
+] as const;
+
+/**
+ * Upgrades tables created by \@fedify/botkit-postgres 0.4, which had no
+ * `bot_id` column, into the bot-scoped schema.  Existing rows get the
+ * empty-string bot ID; use {@link PostgresRepository.migrate} to assign them
+ * to a bot actor identifier.
+ *
+ * The whole upgrade is sent as a single multi-statement query without
+ * parameters, which PostgreSQL executes over the simple query protocol in
+ * one implicit transaction on one connection, so it is atomic even when
+ * `sql` is a connection pool.
+ */
+async function upgradeLegacySchema(
+  sql: Queryable,
+  schema: string,
+  prepare: boolean,
+): Promise<void> {
+  const rows = await execute<{ readonly table_name: string }>(
+    sql,
+    `SELECT t.table_name
+       FROM information_schema.tables t
+      WHERE t.table_schema = $1
+        AND t.table_name = ANY($2)
+        AND NOT EXISTS (
+          SELECT 1
+            FROM information_schema.columns c
+           WHERE c.table_schema = t.table_schema
+             AND c.table_name = t.table_name
+             AND c.column_name = 'bot_id'
+        )`,
+    [schema, [...upgradableTables]],
+    prepare,
+  );
+  if (rows.length < 1) return;
+  const tables = rows.map((row) => row.table_name);
+  logger.info(
+    "Upgrading legacy tables without a bot_id column: {tables}.",
+    { tables },
+  );
+  const statements: string[] = [];
+  if (tables.includes("follow_requests")) {
+    // The old foreign key referenced followers (follower_id) only; it has to
+    // go away before the followers primary key changes:
+    statements.push(
+      `ALTER TABLE "${schema}"."follow_requests"
+         DROP CONSTRAINT IF EXISTS "follow_requests_follower_id_fkey"`,
+    );
+  }
+  for (const table of tables) {
+    statements.push(
+      `ALTER TABLE "${schema}"."${table}"
+         ADD COLUMN bot_id TEXT NOT NULL DEFAULT ''`,
+      `ALTER TABLE "${schema}"."${table}" ALTER COLUMN bot_id DROP DEFAULT`,
+      `ALTER TABLE "${schema}"."${table}"
+         DROP CONSTRAINT IF EXISTS "${table}_pkey"`,
+    );
+  }
+  if (tables.includes("key_pairs")) {
+    statements.push(
+      `ALTER TABLE "${schema}"."key_pairs" ADD PRIMARY KEY (bot_id, position)`,
+    );
+  }
+  if (tables.includes("messages")) {
+    statements.push(
+      `ALTER TABLE "${schema}"."messages" ADD PRIMARY KEY (bot_id, id)`,
+      `DROP INDEX IF EXISTS "${schema}"."idx_messages_published"`,
+    );
+  }
+  if (tables.includes("followers")) {
+    statements.push(
+      `ALTER TABLE "${schema}"."followers"
+         ADD PRIMARY KEY (bot_id, follower_id)`,
+    );
+  }
+  if (tables.includes("follow_requests")) {
+    statements.push(
+      `ALTER TABLE "${schema}"."follow_requests"
+         ADD PRIMARY KEY (bot_id, follow_request_id)`,
+      `ALTER TABLE "${schema}"."follow_requests"
+         ADD FOREIGN KEY (bot_id, follower_id)
+         REFERENCES "${schema}"."followers" (bot_id, follower_id)
+         ON DELETE CASCADE
+         DEFERRABLE INITIALLY IMMEDIATE`,
+      `DROP INDEX IF EXISTS "${schema}"."idx_follow_requests_follower"`,
+    );
+  }
+  if (tables.includes("sent_follows")) {
+    statements.push(
+      `ALTER TABLE "${schema}"."sent_follows" ADD PRIMARY KEY (bot_id, id)`,
+    );
+  }
+  if (tables.includes("followees")) {
+    statements.push(
+      `ALTER TABLE "${schema}"."followees"
+         ADD PRIMARY KEY (bot_id, followee_id)`,
+    );
+  }
+  if (tables.includes("poll_votes")) {
+    statements.push(
+      `ALTER TABLE "${schema}"."poll_votes"
+         ADD PRIMARY KEY (bot_id, message_id, voter_id, option)`,
+      `DROP INDEX IF EXISTS "${schema}"."idx_poll_votes_message_option"`,
+    );
+  }
+  // The marker lets migrate() distinguish rows carried over from a legacy
+  // schema (bot_id = '') from data legitimately stored under an
+  // empty-string identifier:
+  statements.push(
+    `CREATE TABLE IF NOT EXISTS "${schema}"."botkit_metadata" (
+       "key" TEXT PRIMARY KEY,
+       value TEXT NOT NULL
+     )`,
+    `INSERT INTO "${schema}"."botkit_metadata" ("key", value)
+     VALUES ('legacy_data', '1')
+     ON CONFLICT ("key") DO NOTHING`,
+  );
+  // Multi-statement queries cannot be prepared:
+  await execute(sql, statements.join(";\n"), [], false);
+  logger.info("Finished upgrading legacy tables.");
 }
 
 /**
@@ -818,6 +959,50 @@ export class PostgresRepository implements Repository, AsyncDisposable {
       result[row.option] = row.count;
     }
     return result;
+  }
+
+  /**
+   * Migrates data stored by \@fedify/botkit-postgres 0.4, which was not
+   * scoped by bot actor identifiers, so that it belongs to the given
+   * identifier.  Rows carried over from a legacy schema have the
+   * empty-string bot ID; this method assigns them to the identifier in
+   * a single transaction.  It only acts when the schema was actually
+   * upgraded from a legacy layout, so data legitimately stored under an
+   * empty-string identifier is never touched, and calling it again is
+   * a no-op.
+   * @param identifier The identifier of the bot actor that adopts the legacy
+   *                   data.
+   * @since 0.5.0
+   */
+  async migrate(identifier: string): Promise<void> {
+    await this.ensureReady();
+    await this.sql.begin(async (sql) => {
+      const rows = await this.query<{ readonly value: string }>(
+        sql,
+        `SELECT value FROM ${this.table("botkit_metadata")}
+          WHERE "key" = 'legacy_data'
+            FOR UPDATE`,
+      );
+      if (rows.length < 1) return;
+      // The followers and follow_requests rows move in tandem, which
+      // temporarily breaks the foreign key between them; defer the check to
+      // the commit:
+      await execute(sql, "SET CONSTRAINTS ALL DEFERRED", [], false);
+      for (const table of upgradableTables) {
+        await this.query(
+          sql,
+          `UPDATE "${this.schema}"."${table}"
+              SET bot_id = $1
+            WHERE bot_id = ''`,
+          [identifier],
+        );
+      }
+      await this.query(
+        sql,
+        `DELETE FROM ${this.table("botkit_metadata")}
+          WHERE "key" = 'legacy_data'`,
+      );
+    });
   }
 
   forIdentifier(identifier: string): ActorScopedRepository {

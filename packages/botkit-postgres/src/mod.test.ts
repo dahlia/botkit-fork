@@ -122,6 +122,7 @@ if (postgresUrl == null) {
         assert.deepStrictEqual(
           tables.map((row) => row.table_name),
           [
+            "botkit_metadata",
             "follow_requests",
             "followees",
             "followers",
@@ -1025,6 +1026,345 @@ if (postgresUrl == null) {
       } finally {
         await sql.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
         await sql.end();
+      }
+    });
+  });
+}
+
+if (postgresUrl != null) {
+  describe("PostgresRepository multitenancy", () => {
+    test("isolates data by bot identifier", async () => {
+      const harness = createHarness();
+      try {
+        const repo = harness.repository;
+        const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0" as const;
+        const message = new Create({
+          id: new URL(`https://example.com/ap/actor/botA/create/${messageId}`),
+          actor: new URL("https://example.com/ap/actor/botA"),
+          object: new Note({
+            id: new URL(`https://example.com/ap/actor/botA/note/${messageId}`),
+            content: "Hello, world!",
+          }),
+        });
+        await repo.addMessage("botA", messageId, message);
+        assert.equal(await repo.getMessage("botB", messageId), undefined);
+        assert.equal(await repo.countMessages("botB"), 0);
+        assert.equal(await repo.countMessages("botA"), 1);
+        assert.equal(await repo.removeMessage("botB", messageId), undefined);
+        assert.equal(await repo.countMessages("botA"), 1);
+
+        await repo.setKeyPairs("botA", keyPairs);
+        assert.equal(await repo.getKeyPairs("botB"), undefined);
+        assert.deepStrictEqual(await repo.getKeyPairs("botA"), keyPairs);
+      } finally {
+        await harness.cleanup();
+      }
+    });
+
+    test("findFollowedBots()", async () => {
+      const harness = createHarness();
+      try {
+        const repo = harness.repository;
+        const followeeId = new URL("https://example.com/ap/actor/john");
+        const followA = new Follow({
+          id: new URL(
+            "https://example.com/ap/actor/botA/follow/03a395a2-353a-4894-afdb-2cab31a7b004",
+          ),
+          actor: new URL("https://example.com/ap/actor/botA"),
+          object: followeeId,
+        });
+        const followB = new Follow({
+          id: new URL(
+            "https://example.com/ap/actor/botB/follow/e35ff5d8-ede9-4f5e-9b83-4bfcd4c9a69c",
+          ),
+          actor: new URL("https://example.com/ap/actor/botB"),
+          object: followeeId,
+        });
+        assert.deepStrictEqual(
+          await Array.fromAsync(repo.findFollowedBots(followeeId)),
+          [],
+        );
+        await repo.addFollowee("botA", followeeId, followA);
+        await repo.addFollowee("botB", followeeId, followB);
+        assert.deepStrictEqual(
+          await Array.fromAsync(repo.findFollowedBots(followeeId)),
+          ["botA", "botB"],
+        );
+        await repo.removeFollowee("botA", followeeId);
+        assert.deepStrictEqual(
+          await Array.fromAsync(repo.findFollowedBots(followeeId)),
+          ["botB"],
+        );
+      } finally {
+        await harness.cleanup();
+      }
+    });
+  });
+
+  describe("PostgresRepository legacy schema migration", () => {
+    async function createLegacySchema(
+      sql: postgres.Sql,
+      schema: string,
+    ): Promise<void> {
+      // The schema used by @fedify/botkit-postgres 0.4:
+      await sql.unsafe(`CREATE SCHEMA "${schema}"`);
+      await sql.unsafe(`
+        CREATE TABLE "${schema}"."key_pairs" (
+          position INTEGER PRIMARY KEY,
+          private_key_jwk JSONB NOT NULL,
+          public_key_jwk JSONB NOT NULL
+        )
+      `);
+      await sql.unsafe(`
+        CREATE TABLE "${schema}"."messages" (
+          id TEXT PRIMARY KEY,
+          activity_json JSONB NOT NULL,
+          published BIGINT
+        )
+      `);
+      await sql.unsafe(`
+        CREATE INDEX "idx_messages_published"
+          ON "${schema}"."messages" (published, id)
+      `);
+      await sql.unsafe(`
+        CREATE TABLE "${schema}"."followers" (
+          follower_id TEXT PRIMARY KEY,
+          actor_json JSONB NOT NULL
+        )
+      `);
+      await sql.unsafe(`
+        CREATE TABLE "${schema}"."follow_requests" (
+          follow_request_id TEXT PRIMARY KEY,
+          follower_id TEXT NOT NULL
+            REFERENCES "${schema}"."followers" (follower_id)
+            ON DELETE CASCADE
+        )
+      `);
+      await sql.unsafe(`
+        CREATE INDEX "idx_follow_requests_follower"
+          ON "${schema}"."follow_requests" (follower_id)
+      `);
+      await sql.unsafe(`
+        CREATE TABLE "${schema}"."sent_follows" (
+          id TEXT PRIMARY KEY,
+          follow_json JSONB NOT NULL
+        )
+      `);
+      await sql.unsafe(`
+        CREATE TABLE "${schema}"."followees" (
+          followee_id TEXT PRIMARY KEY,
+          follow_json JSONB NOT NULL
+        )
+      `);
+      await sql.unsafe(`
+        CREATE TABLE "${schema}"."poll_votes" (
+          message_id TEXT NOT NULL,
+          voter_id TEXT NOT NULL,
+          option TEXT NOT NULL,
+          PRIMARY KEY (message_id, voter_id, option)
+        )
+      `);
+      await sql.unsafe(`
+        CREATE INDEX "idx_poll_votes_message_option"
+          ON "${schema}"."poll_votes" (message_id, option)
+      `);
+    }
+
+    async function seedLegacySchema(
+      sql: postgres.Sql,
+      schema: string,
+    ): Promise<{
+      messageId: string;
+      followerId: string;
+      followRequestId: string;
+      followeeId: string;
+      sentFollowId: string;
+    }> {
+      const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+      const message = new Create({
+        id: new URL(`https://example.com/ap/create/${messageId}`),
+        actor: new URL("https://example.com/ap/actor/bot"),
+        object: new Note({
+          id: new URL(`https://example.com/ap/note/${messageId}`),
+          content: "Hello, world!",
+          published: Temporal.Instant.from("2025-01-01T00:00:00Z"),
+        }),
+        published: Temporal.Instant.from("2025-01-01T00:00:00Z"),
+      });
+      await sql.unsafe(
+        `INSERT INTO "${schema}"."messages" (id, activity_json, published)
+         VALUES ($1, $2::jsonb, $3)`,
+        [
+          messageId,
+          JSON.stringify(await message.toJsonLd({ format: "compact" })),
+          Temporal.Instant.from("2025-01-01T00:00:00Z").epochMilliseconds,
+        ],
+      );
+
+      const follower = new Person({
+        id: new URL("https://example.com/ap/actor/john"),
+        preferredUsername: "john",
+      });
+      const followRequestId =
+        "https://example.com/ap/follow/be2da56a-0ea3-4a6a-9dff-2a1837be67e0";
+      await sql.unsafe(
+        `INSERT INTO "${schema}"."followers" (follower_id, actor_json)
+         VALUES ($1, $2::jsonb)`,
+        [
+          follower.id!.href,
+          JSON.stringify(await follower.toJsonLd({ format: "compact" })),
+        ],
+      );
+      await sql.unsafe(
+        `INSERT INTO "${schema}"."follow_requests"
+           (follow_request_id, follower_id)
+         VALUES ($1, $2)`,
+        [followRequestId, follower.id!.href],
+      );
+
+      const followeeId = "https://example.com/ap/actor/jane";
+      const followeeFollow = new Follow({
+        id: new URL(
+          "https://example.com/ap/follow/03a395a2-353a-4894-afdb-2cab31a7b004",
+        ),
+        actor: new URL("https://example.com/ap/actor/bot"),
+        object: new URL(followeeId),
+      });
+      await sql.unsafe(
+        `INSERT INTO "${schema}"."followees" (followee_id, follow_json)
+         VALUES ($1, $2::jsonb)`,
+        [
+          followeeId,
+          JSON.stringify(
+            await followeeFollow.toJsonLd({ format: "compact" }),
+          ),
+        ],
+      );
+
+      const sentFollowId = "e35ff5d8-ede9-4f5e-9b83-4bfcd4c9a69c";
+      const sentFollow = new Follow({
+        id: new URL(`https://example.com/ap/follow/${sentFollowId}`),
+        actor: new URL("https://example.com/ap/actor/bot"),
+        object: new URL("https://example.com/ap/actor/joe"),
+      });
+      await sql.unsafe(
+        `INSERT INTO "${schema}"."sent_follows" (id, follow_json)
+         VALUES ($1, $2::jsonb)`,
+        [
+          sentFollowId,
+          JSON.stringify(await sentFollow.toJsonLd({ format: "compact" })),
+        ],
+      );
+
+      await sql.unsafe(
+        `INSERT INTO "${schema}"."poll_votes" (message_id, voter_id, option)
+         VALUES ($1, $2, $3)`,
+        [messageId, "https://example.com/ap/actor/alice", "option1"],
+      );
+
+      return {
+        messageId,
+        followerId: follower.id!.href,
+        followRequestId,
+        followeeId,
+        sentFollowId,
+      };
+    }
+
+    test("upgrades a legacy schema and adopts its data", async () => {
+      const sql = createSql(postgresUrl!);
+      const schema = createSchemaName();
+      try {
+        await createLegacySchema(sql, schema);
+        const seed = await seedLegacySchema(sql, schema);
+
+        const repo = new PostgresRepository({
+          url: postgresUrl!,
+          schema,
+          maxConnections: 1,
+        });
+        try {
+          assert.equal(await repo.countMessages("bot"), 0);
+
+          await repo.migrate("bot");
+          assert.equal(await repo.countMessages("bot"), 1);
+          assert.ok(
+            await repo.getMessage(
+              "bot",
+              seed
+                .messageId as `${string}-${string}-${string}-${string}-${string}`,
+            ) != null,
+          );
+          assert.ok(await repo.hasFollower("bot", new URL(seed.followerId)));
+          assert.ok(
+            await repo.getFollowee("bot", new URL(seed.followeeId)) != null,
+          );
+          assert.ok(
+            await repo.getSentFollow(
+              "bot",
+              seed
+                .sentFollowId as `${string}-${string}-${string}-${string}-${string}`,
+            ) != null,
+          );
+          assert.equal(
+            await repo.countVoters(
+              "bot",
+              seed
+                .messageId as `${string}-${string}-${string}-${string}-${string}`,
+            ),
+            1,
+          );
+          assert.deepStrictEqual(
+            await Array.fromAsync(
+              repo.findFollowedBots(new URL(seed.followeeId)),
+            ),
+            ["bot"],
+          );
+
+          // removeFollower() exercises the upgraded follow_requests rows:
+          const removed = await repo.removeFollower(
+            "bot",
+            new URL(seed.followRequestId),
+            new URL(seed.followerId),
+          );
+          assert.ok(removed != null);
+
+          // migrate() is idempotent:
+          await repo.migrate("bot");
+          assert.equal(await repo.countMessages("bot"), 1);
+        } finally {
+          await repo.close();
+        }
+
+        // Reopening the upgraded schema works without another upgrade:
+        const repo2 = new PostgresRepository({
+          url: postgresUrl!,
+          schema,
+          maxConnections: 1,
+        });
+        try {
+          assert.equal(await repo2.countMessages("bot"), 1);
+        } finally {
+          await repo2.close();
+        }
+      } finally {
+        await sql.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+        await sql.end();
+      }
+    });
+
+    test("does not reassign data stored under an empty identifier", async () => {
+      const harness = createHarness();
+      try {
+        const repo = harness.repository;
+        // A fresh schema has no legacy marker, so data stored under the
+        // empty-string identifier must never be adopted by migrate():
+        await repo.setKeyPairs("", keyPairs);
+        await repo.migrate("bot");
+        assert.deepStrictEqual(await repo.getKeyPairs(""), keyPairs);
+        assert.equal(await repo.getKeyPairs("bot"), undefined);
+      } finally {
+        await harness.cleanup();
       }
     });
   });
