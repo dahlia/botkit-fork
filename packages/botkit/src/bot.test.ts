@@ -18,7 +18,7 @@ import type { Actor } from "@fedify/vocab";
 import assert from "node:assert";
 import { test } from "node:test";
 import type { BotImpl } from "./bot-impl.ts";
-import { createBot } from "./bot.ts";
+import { createBot, type ReadonlyBot } from "./bot.ts";
 import type { FollowRequest } from "./follow.ts";
 import type { Message, MessageClass, SharedMessage } from "./message.ts";
 import type { Like } from "./reaction.ts";
@@ -118,4 +118,22 @@ test("createBot()", async () => {
     ],
     subject: "acct:bot@example.com",
   });
+});
+
+test("Session.bot is a ReadonlyBot", () => {
+  const bot = createBot<void>({
+    kv: new MemoryKvStore(),
+    username: "readonlybot",
+  });
+  const session = bot.getSession("https://example.com");
+  const view: ReadonlyBot = session.bot;
+  assert.deepStrictEqual(view.identifier, "bot");
+  assert.deepStrictEqual(view.username, "readonlybot");
+  assert.deepStrictEqual(view.followerPolicy, "accept");
+
+  // Event handlers must not be reachable through the session's bot view:
+  // @ts-expect-error: ReadonlyBot does not expose event handlers.
+  session.bot.onMention = undefined;
+  // @ts-expect-error: ReadonlyBot does not expose the repository.
+  session.bot.repository;
 });

@@ -22,11 +22,13 @@ export {
 export {
   Application,
   type Bot,
+  type BotEventHandlers,
   type BotWithVoidContextData,
   createBot,
   type CreateBotOptions,
   Image,
   type PagesOptions,
+  type ReadonlyBot,
   Service,
   type Software,
 } from "./bot.ts";

@@ -410,7 +410,7 @@ export function mention<TContextData>(
       isActor(b) ? b : async (session) => {
         if (session.actorId.href === b.href) return await session.getActor();
         const documentLoader = await session.context.getDocumentLoader(
-          session.bot,
+          { identifier: session.bot.identifier },
         );
         return await session.context.lookupObject(b, { documentLoader });
       },
@@ -422,7 +422,7 @@ export function mention<TContextData>(
       async (session) => {
         if (session.actorHandle === a) return await session.getActor();
         const documentLoader = await session.context.getDocumentLoader(
-          session.bot,
+          { identifier: session.bot.identifier },
         );
         return await session.context.lookupObject(a, { documentLoader });
       },
@@ -446,7 +446,7 @@ export function mention<TContextData>(
     async (session) => {
       if (a.href === session.actorId.href) return await session.getActor();
       const documentLoader = await session.context.getDocumentLoader(
-        session.bot,
+        { identifier: session.bot.identifier },
       );
       return await session.context.lookupObject(a, { documentLoader });
     },
@@ -888,7 +888,9 @@ export class MarkdownText<TContextData> implements Text<"block", TContextData> {
   ): Promise<Record<string, Object>> {
     if (this.#mentions == null) return {};
     if (this.#actors != null) return this.#actors;
-    const documentLoader = await session.context.getDocumentLoader(session.bot);
+    const documentLoader = await session.context.getDocumentLoader({
+      identifier: session.bot.identifier,
+    });
     const objects = await Promise.all(
       this.#mentions.map((m) =>
         m === session.actorHandle

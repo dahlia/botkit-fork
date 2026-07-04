@@ -22,7 +22,7 @@ import type {
   Question,
 } from "@fedify/vocab";
 import type { Context } from "@fedify/fedify/federation";
-import type { Bot } from "./bot.ts";
+import type { ReadonlyBot } from "./bot.ts";
 import type {
   AuthorizedMessage,
   Message,
@@ -37,9 +37,14 @@ import type { Text } from "./text.ts";
  */
 export interface Session<TContextData> {
   /**
-   * The bot to which the session belongs.
+   * A read-only view of the bot to which the session belongs.  It exposes
+   * the bot's identity and profile (e.g. `identifier`, `username`, `name`)
+   * without allowing event handlers to be reassigned through it.
+   *
+   * Before BotKit 0.5.0, this property was typed as `Bot`; it is now
+   * a {@link ReadonlyBot} so that a session cannot mutate its bot.
    */
-  readonly bot: Bot<TContextData>;
+  readonly bot: ReadonlyBot;
 
   /**
    * The Fedify context of the session.
