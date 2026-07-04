@@ -169,7 +169,7 @@ if (postgresUrl == null) {
           schema: repositorySchema,
           prepare: false,
         });
-        await repo.countMessages();
+        await repo.countMessages("bot");
 
         assert.ok(prepares.length > 0);
         assert.ok(prepares.every((prepare) => !prepare));
@@ -189,7 +189,7 @@ if (postgresUrl == null) {
               sql,
               url: undefined,
               maxConnections: undefined,
-            }]).countMessages(),
+            }]).countMessages("bot"),
         );
         await assert.rejects(
           async () =>
@@ -197,7 +197,7 @@ if (postgresUrl == null) {
               sql,
               url: postgresUrl,
               maxConnections: 1,
-            }]).countMessages(),
+            }]).countMessages("bot"),
           new TypeError(
             "PostgresRepositoryOptions.sql cannot be combined with PostgresRepositoryOptions.url or PostgresRepositoryOptions.maxConnections.",
           ),
@@ -242,7 +242,7 @@ if (postgresUrl == null) {
         }]) as PostgresRepository;
         await waitForMacrotask();
         await assert.rejects(
-          () => repo.countMessages(),
+          () => repo.countMessages("bot"),
           error,
         );
         await waitForMacrotask();
@@ -300,7 +300,7 @@ if (postgresUrl == null) {
                               arrivals < 2 &&
                               query.includes("SELECT follower_id") &&
                               query.includes("FOR UPDATE") &&
-                              parameters?.[0] === followId.href
+                              parameters?.[1] === followId.href
                             ) {
                               arrivals++;
                               if (arrivals === 2) releaseBarrier();
@@ -329,12 +329,12 @@ if (postgresUrl == null) {
         const repoB = new PostgresRepository({ sql: wrapSql(sqlB), schema });
 
         await Promise.all([
-          repoA.addFollower(followId, followerA),
-          repoB.addFollower(followId, followerB),
+          repoA.addFollower("bot", followId, followerA),
+          repoB.addFollower("bot", followId, followerB),
         ]);
 
-        const followers = await Array.fromAsync(repoA.getFollowers());
-        assert.deepStrictEqual(await repoA.countFollowers(), 1);
+        const followers = await Array.fromAsync(repoA.getFollowers("bot"));
+        assert.deepStrictEqual(await repoA.countFollowers("bot"), 1);
         assert.deepStrictEqual(followers.length, 1);
         const remainingFollowerId = followers[0]?.id?.href;
         assert.ok(
@@ -342,11 +342,11 @@ if (postgresUrl == null) {
             remainingFollowerId === followerB.id!.href,
         );
         assert.deepStrictEqual(
-          await repoA.hasFollower(followerA.id!),
+          await repoA.hasFollower("bot", followerA.id!),
           remainingFollowerId === followerA.id!.href,
         );
         assert.deepStrictEqual(
-          await repoA.hasFollower(followerB.id!),
+          await repoA.hasFollower("bot", followerB.id!),
           remainingFollowerId === followerB.id!.href,
         );
       } finally {
@@ -398,7 +398,7 @@ if (postgresUrl == null) {
                           );
                           if (
                             query.includes("pg_advisory_xact_lock") &&
-                            parameters?.[1] === `${schema}:${followId.href}`
+                            parameters?.[1] === `${schema}:bot:${followId.href}`
                           ) {
                             resolveLockAcquired();
                             await barrier;
@@ -420,9 +420,13 @@ if (postgresUrl == null) {
         const repoA = new PostgresRepository({ sql: wrappedSql, schema });
         const repoB = new PostgresRepository({ sql: sqlB, schema });
 
-        const addPromise = repoA.addFollower(followId, follower);
+        const addPromise = repoA.addFollower("bot", followId, follower);
         await lockAcquired;
-        const removePromise = repoB.removeFollower(followId, follower.id!);
+        const removePromise = repoB.removeFollower(
+          "bot",
+          followId,
+          follower.id!,
+        );
         await waitForMacrotask();
         releaseBarrier();
 
@@ -434,8 +438,11 @@ if (postgresUrl == null) {
           await removedFollower?.toJsonLd(),
           await follower.toJsonLd(),
         );
-        assert.deepStrictEqual(await repoA.countFollowers(), 0);
-        assert.deepStrictEqual(await repoA.hasFollower(follower.id!), false);
+        assert.deepStrictEqual(await repoA.countFollowers("bot"), 0);
+        assert.deepStrictEqual(
+          await repoA.hasFollower("bot", follower.id!),
+          false,
+        );
       } finally {
         await adminSql.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
         await Promise.all([sqlA.end(), sqlB.end(), adminSql.end()]);
@@ -493,7 +500,7 @@ if (postgresUrl == null) {
                               query.includes(
                                 `DELETE FROM "${schema}"."followers"`,
                               ) &&
-                              parameters?.[0] === oldFollower.id!.href
+                              parameters?.[1] === oldFollower.id!.href
                             ) {
                               arrivals++;
                               if (arrivals === 2) releaseBarrier();
@@ -523,23 +530,26 @@ if (postgresUrl == null) {
       try {
         await initializePostgresRepositorySchema(adminSql, schema);
         const setupRepo = new PostgresRepository({ sql: adminSql, schema });
-        await setupRepo.addFollower(followA, oldFollower);
-        await setupRepo.addFollower(followB, oldFollower);
+        await setupRepo.addFollower("bot", followA, oldFollower);
+        await setupRepo.addFollower("bot", followB, oldFollower);
 
         const repoA = new PostgresRepository({ sql: wrapSql(sqlA), schema });
         const repoB = new PostgresRepository({ sql: wrapSql(sqlB), schema });
         await Promise.all([
-          repoA.addFollower(followA, newFollowerA),
-          repoB.addFollower(followB, newFollowerB),
+          repoA.addFollower("bot", followA, newFollowerA),
+          repoB.addFollower("bot", followB, newFollowerB),
         ]);
 
         const followers = await Promise.all(
-          (await Array.fromAsync(repoA.getFollowers())).map((follower) =>
+          (await Array.fromAsync(repoA.getFollowers("bot"))).map((follower) =>
             follower.toJsonLd()
           ),
         );
-        assert.deepStrictEqual(await repoA.countFollowers(), 2);
-        assert.deepStrictEqual(await repoA.hasFollower(oldFollower.id!), false);
+        assert.deepStrictEqual(await repoA.countFollowers("bot"), 2);
+        assert.deepStrictEqual(
+          await repoA.hasFollower("bot", oldFollower.id!),
+          false,
+        );
         assert.deepStrictEqual(followers, [
           await newFollowerA.toJsonLd(),
           await newFollowerB.toJsonLd(),
@@ -599,7 +609,7 @@ if (postgresUrl == null) {
                               query.includes(
                                 `DELETE FROM "${schema}"."followers"`,
                               ) &&
-                              parameters?.[0] === oldFollower.id!.href
+                              parameters?.[1] === oldFollower.id!.href
                             ) {
                               resolveCleanupReady();
                               await Promise.race([
@@ -651,8 +661,8 @@ if (postgresUrl == null) {
                               query.includes(
                                 `INSERT INTO "${schema}"."follow_requests"`,
                               ) &&
-                              parameters?.[0] === followB.href &&
-                              parameters?.[1] === oldFollower.id!.href
+                              parameters?.[1] === followB.href &&
+                              parameters?.[2] === oldFollower.id!.href
                             ) {
                               resolveInsertedNewRequest();
                               await new Promise<void>((resolve) =>
@@ -674,7 +684,7 @@ if (postgresUrl == null) {
       try {
         await initializePostgresRepositorySchema(adminSql, schema);
         const setupRepo = new PostgresRepository({ sql: adminSql, schema });
-        await setupRepo.addFollower(followA, oldFollower);
+        await setupRepo.addFollower("bot", followA, oldFollower);
 
         const repoA = new PostgresRepository({
           sql: wrapCleanupSql(sqlA),
@@ -682,30 +692,37 @@ if (postgresUrl == null) {
         });
         const repoB = new PostgresRepository({ sql: wrapAddSql(sqlB), schema });
 
-        const reassignPromise = repoA.addFollower(followA, reassignedFollower);
+        const reassignPromise = repoA.addFollower(
+          "bot",
+          followA,
+          reassignedFollower,
+        );
         await cleanupReady;
-        const addPromise = repoB.addFollower(followB, oldFollower);
+        const addPromise = repoB.addFollower("bot", followB, oldFollower);
         await Promise.all([reassignPromise, addPromise]);
 
         const followers = await Promise.all(
-          (await Array.fromAsync(repoA.getFollowers())).map((follower) =>
+          (await Array.fromAsync(repoA.getFollowers("bot"))).map((follower) =>
             follower.toJsonLd()
           ),
         );
-        assert.deepStrictEqual(await repoA.countFollowers(), 2);
-        assert.ok(await repoA.hasFollower(oldFollower.id!));
-        assert.ok(await repoA.hasFollower(reassignedFollower.id!));
+        assert.deepStrictEqual(await repoA.countFollowers("bot"), 2);
+        assert.ok(await repoA.hasFollower("bot", oldFollower.id!));
+        assert.ok(await repoA.hasFollower("bot", reassignedFollower.id!));
         assert.deepStrictEqual(followers, [
           await oldFollower.toJsonLd(),
           await reassignedFollower.toJsonLd(),
         ]);
         assert.deepStrictEqual(
-          await (await repoA.removeFollower(followB, oldFollower.id!))
+          await (await repoA.removeFollower("bot", followB, oldFollower.id!))
             ?.toJsonLd(),
           await oldFollower.toJsonLd(),
         );
-        assert.deepStrictEqual(await repoA.countFollowers(), 1);
-        assert.deepStrictEqual(await repoA.hasFollower(oldFollower.id!), false);
+        assert.deepStrictEqual(await repoA.countFollowers("bot"), 1);
+        assert.deepStrictEqual(
+          await repoA.hasFollower("bot", oldFollower.id!),
+          false,
+        );
       } finally {
         await adminSql.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
         await Promise.all([sqlA.end(), sqlB.end(), adminSql.end()]);
@@ -717,9 +734,9 @@ if (postgresUrl == null) {
       try {
         const repo = harness.repository;
 
-        assert.deepStrictEqual(await repo.getKeyPairs(), undefined);
-        await repo.setKeyPairs(keyPairs);
-        assert.deepStrictEqual(await repo.getKeyPairs(), keyPairs);
+        assert.deepStrictEqual(await repo.getKeyPairs("bot"), undefined);
+        await repo.setKeyPairs("bot", keyPairs);
+        assert.deepStrictEqual(await repo.getKeyPairs("bot"), keyPairs);
 
         const messageA = new Create({
           id: new URL(
@@ -781,13 +798,23 @@ if (postgresUrl == null) {
           updated: Temporal.Instant.from("2025-01-02T12:00:00Z"),
         });
 
-        assert.deepStrictEqual(await repo.countMessages(), 0);
-        await repo.addMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0", messageA);
-        await repo.addMessage("0194244f-d800-7873-8993-ef71ccd47306", messageB);
-        assert.deepStrictEqual(await repo.countMessages(), 2);
+        assert.deepStrictEqual(await repo.countMessages("bot"), 0);
+        await repo.addMessage(
+          "bot",
+          "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+          messageA,
+        );
+        await repo.addMessage(
+          "bot",
+          "0194244f-d800-7873-8993-ef71ccd47306",
+          messageB,
+        );
+        assert.deepStrictEqual(await repo.countMessages("bot"), 2);
         assert.deepStrictEqual(
           await Promise.all(
-            (await Array.fromAsync(repo.getMessages({ order: "oldest" }))).map((
+            (await Array.fromAsync(
+              repo.getMessages("bot", { order: "oldest" }),
+            )).map((
               message,
             ) => message.toJsonLd()),
           ),
@@ -796,7 +823,7 @@ if (postgresUrl == null) {
         assert.deepStrictEqual(
           await Promise.all(
             (await Array.fromAsync(
-              repo.getMessages({
+              repo.getMessages("bot", {
                 since: Temporal.Instant.from("2025-01-02T00:00:00Z"),
               }),
             )).map((message) => message.toJsonLd()),
@@ -805,6 +832,7 @@ if (postgresUrl == null) {
         );
         assert.ok(
           await repo.updateMessage(
+            "bot",
             "0194244f-d800-7873-8993-ef71ccd47306",
             async (message) =>
               message.clone({
@@ -814,18 +842,22 @@ if (postgresUrl == null) {
           ),
         );
         assert.deepStrictEqual(
-          await (await repo.getMessage("0194244f-d800-7873-8993-ef71ccd47306"))
+          await (await repo.getMessage(
+            "bot",
+            "0194244f-d800-7873-8993-ef71ccd47306",
+          ))
             ?.toJsonLd(),
           await messageB2.toJsonLd(),
         );
         assert.deepStrictEqual(
           await (await repo.removeMessage(
+            "bot",
             "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
           ))
             ?.toJsonLd(),
           await messageA.toJsonLd(),
         );
-        assert.deepStrictEqual(await repo.countMessages(), 1);
+        assert.deepStrictEqual(await repo.countMessages("bot"), 1);
 
         const followerA = new Person({
           id: new URL("https://example.com/ap/actor/alice"),
@@ -842,58 +874,67 @@ if (postgresUrl == null) {
           "https://example.com/ap/follow/a3d4cc4f-af93-4a9f-a7b3-0b7c0fe4901d",
         );
 
-        await repo.addFollower(followA, followerA);
-        await repo.addFollower(followB, followerB);
-        assert.ok(await repo.hasFollower(followerA.id!));
-        assert.deepStrictEqual(await repo.countFollowers(), 2);
+        await repo.addFollower("bot", followA, followerA);
+        await repo.addFollower("bot", followB, followerB);
+        assert.ok(await repo.hasFollower("bot", followerA.id!));
+        assert.deepStrictEqual(await repo.countFollowers("bot"), 2);
         assert.deepStrictEqual(
           await Promise.all(
-            (await Array.fromAsync(repo.getFollowers({ offset: 1 }))).map((
-              follower,
-            ) => follower.toJsonLd()),
+            (await Array.fromAsync(repo.getFollowers("bot", { offset: 1 })))
+              .map((
+                follower,
+              ) => follower.toJsonLd()),
           ),
           [await followerB.toJsonLd()],
         );
         assert.deepStrictEqual(
-          await repo.removeFollower(followA, followerB.id!),
+          await repo.removeFollower("bot", followA, followerB.id!),
           undefined,
         );
         assert.deepStrictEqual(
-          await (await repo.removeFollower(followA, followerA.id!))?.toJsonLd(),
+          await (await repo.removeFollower("bot", followA, followerA.id!))
+            ?.toJsonLd(),
           await followerA.toJsonLd(),
         );
-        assert.deepStrictEqual(await repo.countFollowers(), 1);
+        assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
 
         const followA2 = new URL(
           "https://example.com/ap/follow/6eedf12f-32aa-4f1d-b6ca-d5bf34c4d149",
         );
-        await repo.addFollower(followA, followerA);
-        await repo.addFollower(followA2, followerA);
-        assert.deepStrictEqual(await repo.countFollowers(), 2);
-        assert.ok(await repo.hasFollower(followerA.id!));
+        await repo.addFollower("bot", followA, followerA);
+        await repo.addFollower("bot", followA2, followerA);
+        assert.deepStrictEqual(await repo.countFollowers("bot"), 2);
+        assert.ok(await repo.hasFollower("bot", followerA.id!));
         assert.deepStrictEqual(
-          await (await repo.removeFollower(followA, followerA.id!))?.toJsonLd(),
-          await followerA.toJsonLd(),
-        );
-        assert.ok(await repo.hasFollower(followerA.id!));
-        assert.deepStrictEqual(await repo.countFollowers(), 2);
-        assert.deepStrictEqual(
-          await (await repo.removeFollower(followA2, followerA.id!))
+          await (await repo.removeFollower("bot", followA, followerA.id!))
             ?.toJsonLd(),
           await followerA.toJsonLd(),
         );
-        assert.deepStrictEqual(await repo.countFollowers(), 1);
-        assert.deepStrictEqual(await repo.hasFollower(followerA.id!), false);
+        assert.ok(await repo.hasFollower("bot", followerA.id!));
+        assert.deepStrictEqual(await repo.countFollowers("bot"), 2);
+        assert.deepStrictEqual(
+          await (await repo.removeFollower("bot", followA2, followerA.id!))
+            ?.toJsonLd(),
+          await followerA.toJsonLd(),
+        );
+        assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+        assert.deepStrictEqual(
+          await repo.hasFollower("bot", followerA.id!),
+          false,
+        );
 
-        await repo.addFollower(followA, followerA);
-        assert.deepStrictEqual(await repo.countFollowers(), 2);
-        await repo.addFollower(followA, followerB);
-        assert.deepStrictEqual(await repo.countFollowers(), 1);
-        assert.deepStrictEqual(await repo.hasFollower(followerA.id!), false);
-        assert.ok(await repo.hasFollower(followerB.id!));
+        await repo.addFollower("bot", followA, followerA);
+        assert.deepStrictEqual(await repo.countFollowers("bot"), 2);
+        await repo.addFollower("bot", followA, followerB);
+        assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+        assert.deepStrictEqual(
+          await repo.hasFollower("bot", followerA.id!),
+          false,
+        );
+        assert.ok(await repo.hasFollower("bot", followerB.id!));
         assert.deepStrictEqual(
           await Promise.all(
-            (await Array.fromAsync(repo.getFollowers())).map((follower) =>
+            (await Array.fromAsync(repo.getFollowers("bot"))).map((follower) =>
               follower.toJsonLd()
             ),
           ),
@@ -908,40 +949,51 @@ if (postgresUrl == null) {
           object: new URL("https://example.com/ap/actor/john"),
         });
         await repo.addSentFollow(
+          "bot",
           "03a395a2-353a-4894-afdb-2cab31a7b004",
           sentFollow,
         );
         assert.deepStrictEqual(
           await (await repo.getSentFollow(
+            "bot",
             "03a395a2-353a-4894-afdb-2cab31a7b004",
           ))
             ?.toJsonLd(),
           await sentFollow.toJsonLd(),
         );
-        await repo.removeSentFollow("03a395a2-353a-4894-afdb-2cab31a7b004");
+        await repo.removeSentFollow(
+          "bot",
+          "03a395a2-353a-4894-afdb-2cab31a7b004",
+        );
         assert.deepStrictEqual(
-          await repo.getSentFollow("03a395a2-353a-4894-afdb-2cab31a7b004"),
+          await repo.getSentFollow(
+            "bot",
+            "03a395a2-353a-4894-afdb-2cab31a7b004",
+          ),
           undefined,
         );
 
         const followeeId = new URL("https://example.com/ap/actor/john");
-        await repo.addFollowee(followeeId, sentFollow);
+        await repo.addFollowee("bot", followeeId, sentFollow);
         assert.deepStrictEqual(
-          await (await repo.getFollowee(followeeId))?.toJsonLd(),
+          await (await repo.getFollowee("bot", followeeId))?.toJsonLd(),
           await sentFollow.toJsonLd(),
         );
-        await repo.removeFollowee(followeeId);
-        assert.deepStrictEqual(await repo.getFollowee(followeeId), undefined);
+        await repo.removeFollowee("bot", followeeId);
+        assert.deepStrictEqual(
+          await repo.getFollowee("bot", followeeId),
+          undefined,
+        );
 
         const messageId = "01945678-1234-7890-abcd-ef0123456789";
         const voter1 = new URL("https://example.com/ap/actor/alice");
         const voter2 = new URL("https://example.com/ap/actor/bob");
-        await repo.vote(messageId, voter1, "option1");
-        await repo.vote(messageId, voter1, "option1");
-        await repo.vote(messageId, voter1, "option2");
-        await repo.vote(messageId, voter2, "option1");
-        assert.deepStrictEqual(await repo.countVoters(messageId), 2);
-        assert.deepStrictEqual(await repo.countVotes(messageId), {
+        await repo.vote("bot", messageId, voter1, "option1");
+        await repo.vote("bot", messageId, voter1, "option1");
+        await repo.vote("bot", messageId, voter1, "option2");
+        await repo.vote("bot", messageId, voter2, "option1");
+        assert.deepStrictEqual(await repo.countVoters("bot", messageId), 2);
+        assert.deepStrictEqual(await repo.countVotes("bot", messageId), {
           "option1": 2,
           "option2": 1,
         });
@@ -952,8 +1004,8 @@ if (postgresUrl == null) {
           schema: harness.schema,
           maxConnections: 1,
         });
-        assert.deepStrictEqual(await repo2.getKeyPairs(), keyPairs);
-        assert.deepStrictEqual(await repo2.countMessages(), 1);
+        assert.deepStrictEqual(await repo2.getKeyPairs("bot"), keyPairs);
+        assert.deepStrictEqual(await repo2.countMessages("bot"), 1);
         await repo2.close();
       } finally {
         await harness.cleanup();
@@ -965,7 +1017,7 @@ if (postgresUrl == null) {
       const sql = createSql(postgresUrl);
       try {
         const repo = new PostgresRepository({ sql, schema });
-        await repo.countMessages();
+        await repo.countMessages("bot");
         await repo.close();
 
         const result = await sql`SELECT 1 AS value`;

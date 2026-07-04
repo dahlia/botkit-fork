@@ -73,9 +73,9 @@ describe("SqliteRepository", () => {
   test("key pairs", async () => {
     const repo = createSqliteRepository();
     try {
-      assert.deepStrictEqual(await repo.getKeyPairs(), undefined);
-      await repo.setKeyPairs(keyPairs);
-      assert.deepStrictEqual(await repo.getKeyPairs(), keyPairs);
+      assert.deepStrictEqual(await repo.getKeyPairs("bot"), undefined);
+      await repo.setKeyPairs("bot", keyPairs);
+      assert.deepStrictEqual(await repo.getKeyPairs("bot"), keyPairs);
     } finally {
       repo.close();
     }
@@ -84,9 +84,9 @@ describe("SqliteRepository", () => {
   test("messages basic operations", async () => {
     const repo = createSqliteRepository();
     try {
-      assert.deepStrictEqual(await repo.countMessages(), 0);
+      assert.deepStrictEqual(await repo.countMessages("bot"), 0);
       assert.deepStrictEqual(
-        await repo.getMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0"),
+        await repo.getMessage("bot", "01941f29-7c00-7fe8-ab0a-7b593990a3c0"),
         undefined,
       );
 
@@ -110,10 +110,15 @@ describe("SqliteRepository", () => {
         published: Temporal.Instant.from("2025-01-01T00:00:00Z"),
       });
 
-      await repo.addMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0", message);
-      assert.deepStrictEqual(await repo.countMessages(), 1);
+      await repo.addMessage(
+        "bot",
+        "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+        message,
+      );
+      assert.deepStrictEqual(await repo.countMessages("bot"), 1);
 
       const retrieved = await repo.getMessage(
+        "bot",
         "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
       );
       assert.deepStrictEqual(
@@ -122,13 +127,14 @@ describe("SqliteRepository", () => {
       );
 
       const removed = await repo.removeMessage(
+        "bot",
         "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
       );
       assert.deepStrictEqual(
         await removed?.toJsonLd(),
         await message.toJsonLd(),
       );
-      assert.deepStrictEqual(await repo.countMessages(), 0);
+      assert.deepStrictEqual(await repo.countMessages("bot"), 0);
     } finally {
       repo.close();
     }
@@ -145,23 +151,29 @@ describe("SqliteRepository", () => {
         "https://example.com/ap/follow/be2da56a-0ea3-4a6a-9dff-2a1837be67e0",
       );
 
-      assert.deepStrictEqual(await repo.countFollowers(), 0);
-      assert.deepStrictEqual(await repo.hasFollower(follower.id!), false);
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 0);
+      assert.deepStrictEqual(
+        await repo.hasFollower("bot", follower.id!),
+        false,
+      );
 
-      await repo.addFollower(followRequestId, follower);
-      assert.deepStrictEqual(await repo.countFollowers(), 1);
-      assert.ok(await repo.hasFollower(follower.id!));
+      await repo.addFollower("bot", followRequestId, follower);
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+      assert.ok(await repo.hasFollower("bot", follower.id!));
 
-      const followers = await Array.fromAsync(repo.getFollowers());
+      const followers = await Array.fromAsync(repo.getFollowers("bot"));
       assert.deepStrictEqual(followers.length, 1);
       assert.deepStrictEqual(
         await followers[0].toJsonLd(),
         await follower.toJsonLd(),
       );
 
-      await repo.removeFollower(followRequestId, follower.id!);
-      assert.deepStrictEqual(await repo.countFollowers(), 0);
-      assert.deepStrictEqual(await repo.hasFollower(follower.id!), false);
+      await repo.removeFollower("bot", followRequestId, follower.id!);
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 0);
+      assert.deepStrictEqual(
+        await repo.hasFollower("bot", follower.id!),
+        false,
+      );
     } finally {
       repo.close();
     }
@@ -175,34 +187,34 @@ describe("SqliteRepository", () => {
       const voter2 = new URL("https://example.com/ap/actor/bob");
 
       // Initially, no votes exist
-      assert.deepStrictEqual(await repo.countVoters(messageId), 0);
-      assert.deepStrictEqual(await repo.countVotes(messageId), {});
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId), 0);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId), {});
 
       // Single voter, single option
-      await repo.vote(messageId, voter1, "option1");
-      assert.deepStrictEqual(await repo.countVoters(messageId), 1);
-      assert.deepStrictEqual(await repo.countVotes(messageId), {
+      await repo.vote("bot", messageId, voter1, "option1");
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId), 1);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId), {
         "option1": 1,
       });
 
       // Same voter votes for same option again (should be ignored)
-      await repo.vote(messageId, voter1, "option1");
-      assert.deepStrictEqual(await repo.countVoters(messageId), 1);
-      assert.deepStrictEqual(await repo.countVotes(messageId), {
+      await repo.vote("bot", messageId, voter1, "option1");
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId), 1);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId), {
         "option1": 1,
       });
 
       // Different voter votes for same option
-      await repo.vote(messageId, voter2, "option1");
-      assert.deepStrictEqual(await repo.countVoters(messageId), 2);
-      assert.deepStrictEqual(await repo.countVotes(messageId), {
+      await repo.vote("bot", messageId, voter2, "option1");
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId), 2);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId), {
         "option1": 2,
       });
 
       // Same voter votes for different option (multiple choice)
-      await repo.vote(messageId, voter1, "option2");
-      assert.deepStrictEqual(await repo.countVoters(messageId), 2);
-      assert.deepStrictEqual(await repo.countVotes(messageId), {
+      await repo.vote("bot", messageId, voter1, "option2");
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId), 2);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId), {
         "option1": 2,
         "option2": 1,
       });
@@ -218,7 +230,7 @@ describe("SqliteRepository", () => {
     try {
       // Create and populate first repository
       const repo1 = createSqliteRepository({ path: dbPath });
-      await repo1.setKeyPairs(keyPairs);
+      await repo1.setKeyPairs("bot", keyPairs);
 
       const message = new Create({
         id: new URL(
@@ -240,17 +252,24 @@ describe("SqliteRepository", () => {
         published: Temporal.Instant.from("2025-01-01T00:00:00Z"),
       });
 
-      await repo1.addMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0", message);
+      await repo1.addMessage(
+        "bot",
+        "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+        message,
+      );
       repo1.close();
 
       // Open the same database file with a new repository instance
       const repo2 = createSqliteRepository({ path: dbPath });
       try {
         // Verify data persists
-        assert.deepStrictEqual(await repo2.getKeyPairs(), keyPairs);
-        assert.deepStrictEqual(await repo2.countMessages(), 1);
+        assert.deepStrictEqual(await repo2.getKeyPairs("bot"), keyPairs);
+        assert.deepStrictEqual(await repo2.countMessages("bot"), 1);
         assert.deepStrictEqual(
-          await (await repo2.getMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0"))
+          await (await repo2.getMessage(
+            "bot",
+            "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+          ))
             ?.toJsonLd(),
           await message.toJsonLd(),
         );

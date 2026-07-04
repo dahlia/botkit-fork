@@ -70,9 +70,11 @@ export {
   type Reaction,
 } from "./reaction.ts";
 export {
+  ActorScopedRepository,
   Announce,
   Create,
   KvRepository,
+  type KvRepositoryOptions,
   MemoryCachedRepository,
   MemoryRepository,
   type Repository,

@@ -163,7 +163,7 @@ importers:
   packages/botkit-postgres:
     dependencies:
       '@fedify/botkit':
-        specifier: ^0.4.0
+        specifier: 'workspace:'
         version: link:../botkit
       '@fedify/fedify':
         specifier: ^2.1.2

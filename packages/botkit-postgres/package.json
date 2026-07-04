@@ -43,7 +43,7 @@
     "README.md"
   ],
   "peerDependencies": {
-    "@fedify/botkit": "^0.4.0"
+    "@fedify/botkit": "workspace:"
   },
   "dependencies": {
     "@fedify/fedify": "^2.1.2",

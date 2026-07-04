@@ -61,7 +61,10 @@ test("SessionImpl.follow()", async (t) => {
     assert.deepStrictEqual(activity.actorId, ctx.getActorUri(bot.identifier));
     assert.deepStrictEqual(activity.objectId, actor.id);
     assert.deepStrictEqual(activity.toIds, [actor.id]);
-    const follow = await repository.getSentFollow(parsed.values.id as Uuid);
+    const follow = await repository.getSentFollow(
+      "bot",
+      parsed.values.id as Uuid,
+    );
     assert.ok(follow != null);
     assert.deepStrictEqual(
       await follow.toJsonLd({ format: "compact" }),
@@ -72,6 +75,7 @@ test("SessionImpl.follow()", async (t) => {
   await t.test("follow again", async () => {
     ctx.sentActivities = [];
     await repository.addFollowee(
+      "bot",
       new URL("https://example.com/ap/actor/alice"),
       new Follow({
         id: new URL(
@@ -134,6 +138,7 @@ test("SessionImpl.unfollow()", async (t) => {
 
   await t.test("unfollow", async () => {
     await repository.addFollowee(
+      "bot",
       new URL("https://example.com/ap/actor/alice"),
       new Follow({
         id: new URL(
@@ -163,6 +168,7 @@ test("SessionImpl.unfollow()", async (t) => {
     assert.deepStrictEqual(object.actorId, ctx.getActorUri(bot.identifier));
     assert.deepStrictEqual(
       await repository.getFollowee(
+        "bot",
         new URL("https://example.com/ap/actor/alice"),
       ),
       undefined,
@@ -229,6 +235,7 @@ describe("SessionImpl.follows()", () => {
       preferredUsername: "alice",
     });
     await repository.addFollowee(
+      "bot",
       new URL("https://example.com/ap/actor/alice"),
       new Follow({
         id: new URL(
@@ -788,10 +795,26 @@ test("SessionImpl.getOutbox()", async (t) => {
     }),
     published: Temporal.Instant.from("2025-01-04T00:00:00Z"),
   });
-  await repository.addMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0", messageA);
-  await repository.addMessage("0194244f-d800-7873-8993-ef71ccd47306", messageB);
-  await repository.addMessage("01942976-3400-7f34-872e-2cbf0f9eeac4", messageC);
-  await repository.addMessage("01942e9c-9000-7480-a553-7a6ce737ce14", messageD);
+  await repository.addMessage(
+    "bot",
+    "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+    messageA,
+  );
+  await repository.addMessage(
+    "bot",
+    "0194244f-d800-7873-8993-ef71ccd47306",
+    messageB,
+  );
+  await repository.addMessage(
+    "bot",
+    "01942976-3400-7f34-872e-2cbf0f9eeac4",
+    messageC,
+  );
+  await repository.addMessage(
+    "bot",
+    "01942e9c-9000-7480-a553-7a6ce737ce14",
+    messageD,
+  );
 
   await t.test("default", async () => {
     const outbox = session.getOutbox({ order: "oldest" });

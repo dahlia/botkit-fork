@@ -95,7 +95,11 @@ import type { Message, MessageClass, SharedMessage } from "./message.ts";
 import { app } from "./pages.tsx";
 import type { Vote } from "./poll.ts";
 import type { Like, Reaction } from "./reaction.ts";
-import { KvRepository, type Repository, type Uuid } from "./repository.ts";
+import {
+  type ActorScopedRepository,
+  KvRepository,
+  type Uuid,
+} from "./repository.ts";
 import { SessionImpl } from "./session-impl.ts";
 import type { Session } from "./session.ts";
 import type { Text } from "./text.ts";
@@ -118,7 +122,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
   #properties: { pairs: PropertyValue[]; tags: (Link | Object)[] } | null;
   readonly followerPolicy: "accept" | "reject" | "manual";
   readonly customEmojis: Record<string, CustomEmoji>;
-  readonly repository: Repository;
+  readonly repository: ActorScopedRepository;
   readonly software?: Software;
   readonly behindProxy: boolean;
   readonly pages: Required<PagesOptions>;
@@ -153,7 +157,8 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     this.#properties = null;
     this.followerPolicy = options.followerPolicy ?? "accept";
     this.customEmojis = {};
-    this.repository = options.repository ?? new KvRepository(options.kv);
+    this.repository = (options.repository ?? new KvRepository(options.kv))
+      .forIdentifier(this.identifier);
     this.software = options.software;
     this.pages = {
       color: "green",

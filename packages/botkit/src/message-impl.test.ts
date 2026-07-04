@@ -213,6 +213,7 @@ test("AuthorizedMessageImpl.delete()", async () => {
     true,
   );
   await repository.addMessage(
+    "bot",
     "c1c792ce-a0be-4685-b396-e59e5ef8c788",
     new Create({
       id: new URL(
@@ -225,7 +226,7 @@ test("AuthorizedMessageImpl.delete()", async () => {
     }),
   );
   await msg.delete();
-  assert.deepStrictEqual(await repository.countMessages(), 0);
+  assert.deepStrictEqual(await repository.countMessages("bot"), 0);
   assert.deepStrictEqual(ctx.sentActivities.length, 1);
   const { recipients, activity } = ctx.sentActivities[0];
   assert.deepStrictEqual(recipients, "followers");
@@ -265,8 +266,8 @@ test("MessageImpl.reply()", async () => {
     {},
   );
   const reply = await originalMsg.reply(text`Hello, John!`);
-  assert.deepStrictEqual(await repository.countMessages(), 1);
-  const [create] = await Array.fromAsync(repository.getMessages());
+  assert.deepStrictEqual(await repository.countMessages("bot"), 1);
+  const [create] = await Array.fromAsync(repository.getMessages("bot"));
   assert.ok(create != null);
   assert.deepStrictEqual(ctx.sentActivities.length, 2);
   const { recipients, activity } = ctx.sentActivities[0];
@@ -322,8 +323,8 @@ test("MessageImpl.share()", async (t) => {
   const sharedMsg = await originalMsg.share();
 
   await t.test("share()", async () => {
-    assert.deepStrictEqual(await repository.countMessages(), 1);
-    const [announce] = await Array.fromAsync(repository.getMessages());
+    assert.deepStrictEqual(await repository.countMessages("bot"), 1);
+    const [announce] = await Array.fromAsync(repository.getMessages("bot"));
     assert.ok(announce != null);
     assert.deepStrictEqual(ctx.sentActivities.length, 2);
     const { recipients, activity } = ctx.sentActivities[0];
@@ -368,7 +369,7 @@ test("MessageImpl.share()", async (t) => {
     ctx.sentActivities = [];
 
     await sharedMsg.unshare();
-    assert.deepStrictEqual(await repository.countMessages(), 0);
+    assert.deepStrictEqual(await repository.countMessages("bot"), 0);
     assert.deepStrictEqual(ctx.sentActivities.length, 2);
     const { recipients, activity } = ctx.sentActivities[0];
     assert.deepStrictEqual(recipients, "followers");
@@ -487,7 +488,7 @@ test("AuthorizedMessage.update()", async (t) => {
 
     await t.test(visibility, async () => {
       const msg = await session.publish(text`Hello, ${actorA}`, { visibility });
-      assert.deepStrictEqual(await repository.countMessages(), 1);
+      assert.deepStrictEqual(await repository.countMessages("bot"), 1);
       const originalRaw = msg.raw;
       ctx.sentActivities = [];
       const before = Temporal.Now.instant();
@@ -535,7 +536,7 @@ test("AuthorizedMessage.update()", async (t) => {
       assert.deepStrictEqual(tags[0].href, actorB.id);
       assert.deepStrictEqual(msg.raw.published, originalRaw.published);
       assert.deepStrictEqual(msg.raw.updated, msg.updated);
-      const [create] = await Array.fromAsync(repository.getMessages());
+      const [create] = await Array.fromAsync(repository.getMessages("bot"));
       assert.deepStrictEqual(
         await (await create.getObject())?.toJsonLd({ format: "compact" }),
         await msg.raw.toJsonLd({ format: "compact" }),
