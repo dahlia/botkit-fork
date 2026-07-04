@@ -14,6 +14,27 @@ can be used to interact with the database, but you can also create your own
 repositories to interact with other data sources.
 
 
+Bot-scoped storage
+------------------
+
+Since BotKit 0.5.0, a single repository stores the data of every bot hosted
+on an [instance](./instance.md): every `Repository` method takes the
+identifier of the owning bot actor as its first parameter, and data
+belonging to different identifiers are isolated from each other.  The
+`Repository.forIdentifier()` method returns an `ActorScopedRepository`,
+a view of the repository bound to one bot actor, which exposes the same
+operations without the `identifier` parameter.
+
+Custom `Repository` implementations written for BotKit 0.4 or earlier need
+to be updated to the new method signatures.  Besides the added parameter,
+two methods joined the interface: `~Repository.findFollowedBots()`,
+a reverse lookup answering which bots follow a given actor (used for routing
+incoming messages to the right bots), and the optional
+`~Repository.migrate()`, which adopts data stored by BotKit 0.4 or earlier
+for a bot actor identifier.  The built-in repositories migrate legacy data
+automatically when the bot is created through `createBot()`.
+
+
 `KvRepository`
 --------------
 

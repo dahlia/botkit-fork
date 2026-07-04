@@ -6,6 +6,103 @@ Version 0.5.0
 
 To be released.
 
+### @fedify/botkit
+
+ -  Added support for hosting multiple bots on a single instance.
+    [[#16], [#24]]
+
+    The new `createInstance()` function creates an *instance* that owns the
+    shared infrastructure (the key–value store, the message queue, the
+    repository, and HTTP handling), on which multiple bots can be hosted,
+    each with its own actor identity and event handlers.
+
+     -  Added `createInstance()` function.
+     -  Added `Instance` interface.
+     -  Added `InstanceWithVoidContextData` interface.
+     -  Added `CreateInstanceOptions` interface.
+     -  Added `Instance.createBot()` method, which creates a static bot from
+        an identifier and a `BotProfile`, or a dynamic `BotGroup` from
+        a `BotDispatcher` function that resolves bots on demand (e.g. one
+        bot per region, backed by a database).
+     -  Added `BotProfile` interface.
+     -  Added `BotDispatcher` type.
+     -  Added `BotGroup` interface.
+     -  Added `CreateBotGroupOptions` interface, whose `mapUsername` option
+        resolves WebFinger usernames to dynamic bot identifiers.
+     -  Added `BotEventHandlers` interface, which `Bot` and `BotGroup` both
+        extend.
+     -  Added `INSTANCE_ACTOR_IDENTIFIER` constant.  Multi-bot instances
+        expose an instance actor under this reserved identifier, whose key
+        signs shared-inbox related requests.
+     -  Added `@fedify/botkit/instance` module.
+
+    Activities delivered to the shared inbox are routed to the bots they are
+    relevant to: the followed or unfollowed bot, the owner of the liked or
+    replied-to message, mentioned bots, addressed bots, and bots following
+    the author.  Multi-bot instances serve a bot list at the web root and
+    each bot's pages under `/@{username}`.
+
+    The existing `createBot()` function keeps working for single-bot
+    deployments and preserves their behavior, including the web pages served
+    at the root.
+
+ -  The `Repository` interface now stores data for multiple bot actors:
+    every method takes the identifier of the owning bot actor as its first
+    parameter, and data belonging to different identifiers are isolated from
+    each other.  This is a breaking change for custom `Repository`
+    implementations.  [[#16], [#24]]
+
+     -  Added `identifier` parameter to all `Repository` methods.
+     -  Added `Repository.findFollowedBots()` method, a reverse lookup
+        answering which bots follow a given actor.
+     -  Added optional `Repository.migrate()` method for adopting data
+        stored by BotKit 0.4 or earlier.
+     -  Added `Repository.forIdentifier()` method and `ActorScopedRepository`
+        class, a view of a repository bound to a single bot actor.
+     -  `KvRepository` now stores data under bot-scoped keys.  Its second
+        constructor parameter is now a `KvRepositoryOptions` object with
+        a single `prefix` option, replacing the removed
+        `KvStoreRepositoryPrefixes` interface.
+     -  `createBot()` migrates data stored by BotKit 0.4 or earlier to the
+        bot-scoped layout on startup.  Categories without an index are
+        migrated lazily on first access.
+
+ -  Local object URIs now carry the identifier of the owning bot actor,
+    e.g. `/ap/actor/{identifier}/note/{id}` instead of `/ap/note/{id}`.
+    URIs in the old format are still recognized in incoming activities and
+    are permanently redirected to their canonical URIs when dereferenced,
+    so links stored by remote servers keep working after an upgrade.
+    [[#16], [#24]]
+
+ -  The `Session.bot` property is now typed as `ReadonlyBot`, a read-only
+    view of the bot's identity and profile, instead of `Bot`.  This is
+    a breaking change for code that reached the full `Bot` through
+    a session; such code should hold on to the `Bot` returned by
+    `createBot()` instead.  [[#16], [#24]]
+
+     -  Added `ReadonlyBot` interface.
+
+[#16]: https://github.com/fedify-dev/botkit/issues/16
+[#24]: https://github.com/fedify-dev/botkit/pull/24
+
+### @fedify/botkit-sqlite
+
+ -  All tables now have a `bot_id` column and composite primary keys, so
+    a single database stores the data of multiple bots.  Opening a database
+    created by version 0.4 or earlier rebuilds the affected tables in place,
+    and `SqliteRepository.migrate()` assigns the carried-over rows to a bot
+    actor identifier; `createBot()` calls it automatically on startup.
+    [[#16], [#24]]
+
+### @fedify/botkit-postgres
+
+ -  All tables now have a `bot_id` column and composite primary keys, so
+    a single schema stores the data of multiple bots.  Initializing a schema
+    created by version 0.4 upgrades it in place, and
+    `PostgresRepository.migrate()` assigns the carried-over rows to a bot
+    actor identifier; `createBot()` calls it automatically on startup.
+    [[#16], [#24]]
+
 
 Version 0.4.3
 -------------

@@ -17,6 +17,11 @@ BotKit also exposes the bot actor's standard ActivityPub collections.  The
 JSON-LD responses of the `outbox` and `followers` collections include the
 [FEP-5711] inverse properties `outboxOf` and `followersOf`.
 
+> [!TIP]
+> A bot created by `createBot()` occupies its whole server.  Since BotKit
+> 0.5.0, a single server can also host multiple bots; see the
+> [*Instance* concept document](./instance.md).
+
 [FEP-5711]: https://w3id.org/fep/5711
 
 
