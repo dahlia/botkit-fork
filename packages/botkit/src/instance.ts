@@ -23,6 +23,7 @@ import type { Application, Image, Service } from "@fedify/vocab";
 import type { Bot, PagesOptions } from "./bot.ts";
 import type { CustomEmoji, DeferredCustomEmoji } from "./emoji.ts";
 import { InstanceImpl } from "./instance-impl.ts";
+export { INSTANCE_ACTOR_IDENTIFIER } from "./instance-impl.ts";
 import type { Repository } from "./repository.ts";
 import type { Text } from "./text.ts";
 

@@ -37,6 +37,7 @@ export {
   createInstance,
   type CreateInstanceOptions,
   type Instance,
+  INSTANCE_ACTOR_IDENTIFIER,
   type InstanceWithVoidContextData,
 } from "./instance.ts";
 export {

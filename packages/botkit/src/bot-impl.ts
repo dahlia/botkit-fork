@@ -212,6 +212,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       // A dedicated instance hosts the single bot that predates the
       // multi-bot upgrade, so legacy object URIs belong to it:
       legacyObjectUris: { identifier: this.identifier },
+      compatMode: true,
     });
     this.repository = this.instance.repository.forIdentifier(this.identifier);
     this.instance.addBot(this);

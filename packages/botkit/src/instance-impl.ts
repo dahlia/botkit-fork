@@ -17,6 +17,7 @@ import {
   type Context,
   createFederation,
   type Federation,
+  generateCryptoKeyPair,
   type KvStore,
   type MessageQueue,
   type NodeInfo,
@@ -25,12 +26,15 @@ import {
 import {
   Accept,
   type Activity,
+  type Actor,
   Announce,
+  Application,
   Article,
   ChatMessage,
   Create,
   Delete,
   Emoji as APEmoji,
+  Endpoints,
   Follow,
   Image,
   Like as RawLike,
@@ -59,11 +63,28 @@ import type { Session } from "./session.ts";
 import { rewriteLegacyObjectPath } from "./uri.ts";
 
 /**
+ * The reserved identifier of the instance actor: an internal
+ * `Application` actor that an {@link Instance} uses for signing
+ * shared-inbox related requests on behalf of the whole instance.
+ * Bots cannot take this identifier.
+ * @since 0.5.0
+ */
+export const INSTANCE_ACTOR_IDENTIFIER = "_instance";
+
+/**
  * Options for creating an {@link InstanceImpl}.
  * @internal
  */
 export interface InstanceImplOptions extends CreateInstanceOptions {
   collectionWindow?: number;
+
+  /**
+   * Whether the instance was created through the single-bot
+   * `createBot()` compatibility path.  A compatible instance keeps
+   * the pre-0.5 behavior: the sole bot's key signs shared-inbox
+   * requests and no instance actor is exposed.
+   */
+  compatMode?: boolean;
 }
 
 /**
@@ -94,6 +115,12 @@ export class InstanceImpl<TContextData>
    */
   readonly legacyObjectUrisIdentifier?: string;
 
+  /**
+   * Whether the instance was created through the single-bot
+   * `createBot()` compatibility path.
+   */
+  readonly compatMode: boolean;
+
   readonly #bots: Map<string, BotImpl<TContextData>> = new Map();
 
   constructor(options: InstanceImplOptions) {
@@ -109,6 +136,7 @@ export class InstanceImpl<TContextData>
     };
     this.collectionWindow = options.collectionWindow ?? 50;
     this.legacyObjectUrisIdentifier = options.legacyObjectUris?.identifier;
+    this.compatMode = options.compatMode ?? false;
     this.federation = createFederation<TContextData>({
       kv: options.kv,
       queue: options.queue,
@@ -123,13 +151,22 @@ export class InstanceImpl<TContextData>
     this.federation
       .setActorDispatcher(
         "/ap/actor/{identifier}",
-        (ctx, identifier) =>
-          this.getBot(identifier)?.dispatchActor(ctx, identifier) ?? null,
+        (ctx, identifier) => {
+          if (!this.compatMode && identifier === INSTANCE_ACTOR_IDENTIFIER) {
+            return this.#dispatchInstanceActor(ctx);
+          }
+          return this.getBot(identifier)?.dispatchActor(ctx, identifier) ??
+            null;
+        },
       )
       .mapHandle((ctx, username) => this.mapHandle(ctx, username))
-      .setKeyPairsDispatcher((ctx, identifier) =>
-        this.getBot(identifier)?.dispatchActorKeyPairs(ctx, identifier) ?? []
-      );
+      .setKeyPairsDispatcher((ctx, identifier) => {
+        if (!this.compatMode && identifier === INSTANCE_ACTOR_IDENTIFIER) {
+          return this.#dispatchInstanceActorKeyPairs();
+        }
+        return this.getBot(identifier)
+          ?.dispatchActorKeyPairs(ctx, identifier) ?? [];
+      });
     this.federation
       .setFollowersDispatcher(
         "/ap/actor/{identifier}/followers",
@@ -282,6 +319,11 @@ export class InstanceImpl<TContextData>
    *                     already exists on the instance.
    */
   addBot(bot: BotImpl<TContextData>): void {
+    if (!this.compatMode && bot.identifier === INSTANCE_ACTOR_IDENTIFIER) {
+      throw new TypeError(
+        `The identifier is reserved for the instance actor: ${bot.identifier}`,
+      );
+    }
     if (this.#bots.has(bot.identifier)) {
       throw new TypeError(
         `A bot with the identifier already exists: ${bot.identifier}`,
@@ -311,6 +353,13 @@ export class InstanceImpl<TContextData>
    */
   get bots(): Iterable<BotImpl<TContextData>> {
     return this.#bots.values();
+  }
+
+  /**
+   * The number of bots hosted on the instance.
+   */
+  get botCount(): number {
+    return this.#bots.size;
   }
 
   #firstBot(): BotImpl<TContextData> | undefined {
@@ -364,14 +413,50 @@ export class InstanceImpl<TContextData>
   }
 
   dispatchSharedKey(_ctx: Context<TContextData>): { identifier: string } {
-    const bot = this.#firstBot();
-    if (bot == null) {
-      throw new TypeError(
-        "The instance has no bots; the shared inbox key cannot be " +
-          "dispatched.",
-      );
+    if (this.compatMode) {
+      const bot = this.#firstBot();
+      if (bot == null) {
+        throw new TypeError(
+          "The instance has no bots; the shared inbox key cannot be " +
+            "dispatched.",
+        );
+      }
+      return { identifier: bot.identifier };
     }
-    return { identifier: bot.identifier };
+    return { identifier: INSTANCE_ACTOR_IDENTIFIER };
+  }
+
+  async #dispatchInstanceActor(
+    ctx: Context<TContextData>,
+  ): Promise<Actor> {
+    const keyPairs = await ctx.getActorKeyPairs(INSTANCE_ACTOR_IDENTIFIER);
+    return new Application({
+      id: ctx.getActorUri(INSTANCE_ACTOR_IDENTIFIER),
+      preferredUsername: INSTANCE_ACTOR_IDENTIFIER,
+      name: "Instance actor",
+      summary: "An internal actor the instance uses for signing requests " +
+        "on behalf of the whole instance.",
+      inbox: ctx.getInboxUri(INSTANCE_ACTOR_IDENTIFIER),
+      endpoints: new Endpoints({
+        sharedInbox: ctx.getInboxUri(),
+      }),
+      publicKey: keyPairs[0].cryptographicKey,
+      assertionMethods: keyPairs.map((pair) => pair.multikey),
+      discoverable: false,
+    });
+  }
+
+  async #dispatchInstanceActorKeyPairs(): Promise<CryptoKeyPair[]> {
+    let keyPairs = await this.repository.getKeyPairs(
+      INSTANCE_ACTOR_IDENTIFIER,
+    );
+    if (keyPairs == null) {
+      const rsa = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
+      const ed25519 = await generateCryptoKeyPair("Ed25519");
+      keyPairs = [rsa, ed25519];
+      await this.repository.setKeyPairs(INSTANCE_ACTOR_IDENTIFIER, keyPairs);
+    }
+    return keyPairs;
   }
 
   dispatchNodeInfo(_ctx: Context<TContextData>): NodeInfo {
@@ -383,9 +468,9 @@ export class InstanceImpl<TContextData>
       },
       usage: {
         users: {
-          total: 1,
-          activeMonth: 1, // FIXME
-          activeHalfyear: 1, // FIXME
+          total: this.botCount,
+          activeMonth: this.botCount, // FIXME
+          activeHalfyear: this.botCount, // FIXME
         },
         localPosts: 0, // FIXME
         localComments: 0,
