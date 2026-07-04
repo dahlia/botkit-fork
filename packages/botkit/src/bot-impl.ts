@@ -100,6 +100,7 @@ import {
   KvRepository,
   type Uuid,
 } from "./repository.ts";
+import { parseLocalUri } from "./uri.ts";
 import { SessionImpl } from "./session-impl.ts";
 import type { Session } from "./session.ts";
 import type { Text } from "./text.ts";
@@ -128,6 +129,14 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
   readonly pages: Required<PagesOptions>;
   readonly collectionWindow: number;
   readonly federation: Federation<TContextData>;
+
+  /**
+   * The identifier of the bot actor that owns local objects whose URIs are
+   * in the legacy (pre-0.5) format, which did not carry the identifier.
+   * Legacy URIs can only occur in deployments that hosted a single bot
+   * before the upgrade, so they are attributed to that bot.
+   */
+  readonly legacyObjectUrisIdentifier?: string;
 
   onFollow?: FollowEventHandler<TContextData>;
   onUnfollow?: UnfollowEventHandler<TContextData>;
@@ -174,6 +183,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     });
     this.behindProxy = options.behindProxy ?? false;
     this.collectionWindow = options.collectionWindow ?? 50;
+    this.legacyObjectUrisIdentifier = this.identifier;
     this.initialize();
   }
 
@@ -202,38 +212,50 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     this.federation
       .setObjectDispatcher(
         Follow,
-        "/ap/follow/{id}",
+        "/ap/actor/{identifier}/follow/{id}",
         this.dispatchFollow.bind(this),
       )
       .authorize(this.authorizeFollow.bind(this));
     this.federation.setObjectDispatcher(
       Create,
-      "/ap/create/{id}",
+      "/ap/actor/{identifier}/create/{id}",
       this.dispatchCreate.bind(this),
     );
     this.federation.setObjectDispatcher(
       Article,
-      "/ap/article/{id}",
-      (ctx, values) => this.dispatchMessage(Article, ctx, values.id),
+      "/ap/actor/{identifier}/article/{id}",
+      (ctx, values) =>
+        values.identifier === this.identifier
+          ? this.dispatchMessage(Article, ctx, values.id)
+          : null,
     );
     this.federation.setObjectDispatcher(
       ChatMessage,
-      "/ap/chat-message/{id}",
-      (ctx, values) => this.dispatchMessage(ChatMessage, ctx, values.id),
+      "/ap/actor/{identifier}/chat-message/{id}",
+      (ctx, values) =>
+        values.identifier === this.identifier
+          ? this.dispatchMessage(ChatMessage, ctx, values.id)
+          : null,
     );
     this.federation.setObjectDispatcher(
       Note,
-      "/ap/note/{id}",
-      (ctx, values) => this.dispatchMessage(Note, ctx, values.id),
+      "/ap/actor/{identifier}/note/{id}",
+      (ctx, values) =>
+        values.identifier === this.identifier
+          ? this.dispatchMessage(Note, ctx, values.id)
+          : null,
     );
     this.federation.setObjectDispatcher(
       Question,
-      "/ap/question/{id}",
-      (ctx, values) => this.dispatchMessage(Question, ctx, values.id),
+      "/ap/actor/{identifier}/question/{id}",
+      (ctx, values) =>
+        values.identifier === this.identifier
+          ? this.dispatchMessage(Question, ctx, values.id)
+          : null,
     );
     this.federation.setObjectDispatcher(
       Announce,
-      "/ap/announce/{id}",
+      "/ap/actor/{identifier}/announce/{id}",
       this.dispatchAnnounce.bind(this),
     );
     this.federation.setObjectDispatcher(
@@ -489,8 +511,9 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
 
   async dispatchFollow(
     _ctx: RequestContext<TContextData>,
-    values: { id: string },
+    values: { identifier: string; id: string },
   ): Promise<Follow | null> {
+    if (values.identifier !== this.identifier) return null;
     const id = values.id as Uuid;
     const follow = await this.repository.getSentFollow(id);
     return follow ?? null;
@@ -498,8 +521,9 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
 
   async authorizeFollow(
     ctx: RequestContext<TContextData>,
-    values: { id: string },
+    values: { identifier: string; id: string },
   ): Promise<boolean> {
+    if (values.identifier !== this.identifier) return false;
     const signedKeyOwner = await ctx.getSignedKeyOwner();
     if (signedKeyOwner == null || signedKeyOwner.id == null) return false;
     const id = values.id as Uuid;
@@ -511,8 +535,9 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
 
   async dispatchCreate(
     ctx: RequestContext<TContextData>,
-    values: { id: string },
+    values: { identifier: string; id: string },
   ): Promise<Create | null> {
+    if (values.identifier !== this.identifier) return null;
     const activity = await this.repository.getMessage(values.id as Uuid);
     if (!(activity instanceof Create)) return null;
     const isVisible = await this.getPermissionChecker(ctx);
@@ -539,8 +564,9 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
 
   async dispatchAnnounce(
     ctx: RequestContext<TContextData>,
-    values: { id: string },
+    values: { identifier: string; id: string },
   ): Promise<Announce | null> {
+    if (values.identifier !== this.identifier) return null;
     const activity = await this.repository.getMessage(values.id as Uuid);
     if (!(activity instanceof Announce)) return null;
     const isVisible = await this.getPermissionChecker(ctx);
@@ -625,8 +651,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     ctx: InboxContext<TContextData>,
     accept: Accept,
   ): Promise<void> {
-    const parsedObj = ctx.parseUri(accept.objectId);
-    if (parsedObj?.type !== "object" || parsedObj.class !== Follow) return;
+    const parsedObj = parseLocalUri(
+      ctx,
+      accept.objectId,
+      this.legacyObjectUrisIdentifier,
+    );
+    if (
+      parsedObj?.type !== "object" || parsedObj.class !== Follow ||
+      parsedObj.values.identifier !== this.identifier
+    ) {
+      return;
+    }
     const follow = await this.repository.getSentFollow(
       parsedObj.values.id as Uuid,
     );
@@ -649,8 +684,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     ctx: InboxContext<TContextData>,
     reject: Reject,
   ): Promise<void> {
-    const parsedObj = ctx.parseUri(reject.objectId);
-    if (parsedObj?.type !== "object" || parsedObj.class !== Follow) return;
+    const parsedObj = parseLocalUri(
+      ctx,
+      reject.objectId,
+      this.legacyObjectUrisIdentifier,
+    );
+    if (
+      parsedObj?.type !== "object" || parsedObj.class !== Follow ||
+      parsedObj.values.identifier !== this.identifier
+    ) {
+      return;
+    }
     const id = parsedObj.values.id as Uuid;
     const follow = await this.repository.getSentFollow(id);
     if (follow == null) return;
@@ -686,12 +730,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       if (messageCache != null) return messageCache;
       return messageCache = await createMessage(object, session, {});
     };
-    const replyTarget = ctx.parseUri(object.replyTargetId);
+    const replyTarget = parseLocalUri(
+      ctx,
+      object.replyTargetId,
+      this.legacyObjectUrisIdentifier,
+    );
     if (
       this.onVote != null &&
       object instanceof Note && replyTarget?.type === "object" &&
       // @ts-ignore: replyTarget.class satisfies (typeof messageClasses)[number]
       messageClasses.includes(replyTarget.class) &&
+      replyTarget.values.identifier === this.identifier &&
       object.name != null
     ) {
       if (
@@ -815,7 +864,8 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       this.onReply != null &&
       replyTarget?.type === "object" &&
       // @ts-ignore: replyTarget.class satisfies (typeof messageClasses)[number]
-      messageClasses.includes(replyTarget.class)
+      messageClasses.includes(replyTarget.class) &&
+      replyTarget.values.identifier === this.identifier
     ) {
       const message = await getMessage();
       if (
@@ -838,12 +888,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       }
     }
     if (quoteUrl == null) quoteUrl = object.quoteUrl;
-    const quoteTarget = ctx.parseUri(quoteUrl);
+    const quoteTarget = parseLocalUri(
+      ctx,
+      quoteUrl,
+      this.legacyObjectUrisIdentifier,
+    );
     if (
       this.onQuote != null &&
       quoteTarget?.type === "object" &&
       // @ts-ignore: quoteTarget.class satisfies (typeof messageClasses)[number]
-      messageClasses.includes(quoteTarget.class)
+      messageClasses.includes(quoteTarget.class) &&
+      quoteTarget.values.identifier === this.identifier
     ) {
       const message = await getMessage();
       if (
@@ -883,12 +938,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       this.onSharedMessage == null || announce.id == null ||
       announce.actorId == null
     ) return;
-    const objectUri = ctx.parseUri(announce.objectId);
+    const objectUri = parseLocalUri(
+      ctx,
+      announce.objectId,
+      this.legacyObjectUrisIdentifier,
+    );
     let object: Object | null = null;
     if (
       objectUri?.type === "object" &&
       // deno-lint-ignore no-explicit-any
-      messageClasses.includes(objectUri.class as any)
+      messageClasses.includes(objectUri.class as any) &&
+      objectUri.values.identifier === this.identifier
     ) {
       const msg = await this.repository.getMessage(objectUri.values.id as Uuid);
       if (msg instanceof Create) object = await msg.getObject(ctx);
@@ -919,12 +979,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     { session: Session<TContextData>; like: Like<TContextData> } | undefined
   > {
     if (like.id == null || like.actorId == null) return undefined;
-    const objectUri = ctx.parseUri(like.objectId);
+    const objectUri = parseLocalUri(
+      ctx,
+      like.objectId,
+      this.legacyObjectUrisIdentifier,
+    );
     let object: Object | null = null;
     if (
       objectUri?.type === "object" &&
       // deno-lint-ignore no-explicit-any
-      messageClasses.includes(objectUri.class as any)
+      messageClasses.includes(objectUri.class as any) &&
+      objectUri.values.identifier === this.identifier
     ) {
       const msg = await this.repository.getMessage(objectUri.values.id as Uuid);
       if (msg instanceof Create) object = await msg.getObject(ctx);
@@ -995,12 +1060,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       }
     }
     if (emoji == null) return undefined;
-    const objectUri = ctx.parseUri(react.objectId);
+    const objectUri = parseLocalUri(
+      ctx,
+      react.objectId,
+      this.legacyObjectUrisIdentifier,
+    );
     let object: Object | null = null;
     if (
       objectUri?.type === "object" &&
       // deno-lint-ignore no-explicit-any
-      messageClasses.includes(objectUri.class as any)
+      messageClasses.includes(objectUri.class as any) &&
+      objectUri.values.identifier === this.identifier
     ) {
       const msg = await this.repository.getMessage(objectUri.values.id as Uuid);
       if (msg instanceof Create) object = await msg.getObject(ctx);

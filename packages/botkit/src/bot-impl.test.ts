@@ -762,7 +762,10 @@ test("BotImpl.dispatchFollow()", async () => {
     undefined,
   );
   assert.deepStrictEqual(
-    await bot.dispatchFollow(ctx, { id: crypto.randomUUID() }),
+    await bot.dispatchFollow(ctx, {
+      identifier: "bot",
+      id: crypto.randomUUID(),
+    }),
     null,
   );
 
@@ -779,6 +782,7 @@ test("BotImpl.dispatchFollow()", async () => {
     }),
   );
   const follow = await bot.dispatchFollow(ctx, {
+    identifier: "bot",
     id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a",
   });
   assert.ok(follow instanceof Follow);
@@ -838,14 +842,14 @@ test("BotImpl.authorizeFollow()", async () => {
   assert.ok(
     await bot.authorizeFollow(
       ctx,
-      { id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a" },
+      { identifier: "bot", id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a" },
     ),
   );
   setSignedKeyOwner(await new SessionImpl(bot, ctx).getActor());
   assert.ok(
     await bot.authorizeFollow(
       ctx,
-      { id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a" },
+      { identifier: "bot", id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a" },
     ),
   );
   setSignedKeyOwner(
@@ -854,7 +858,7 @@ test("BotImpl.authorizeFollow()", async () => {
   assert.deepStrictEqual(
     await bot.authorizeFollow(
       ctx,
-      { id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a" },
+      { identifier: "bot", id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a" },
     ),
     false,
   );
@@ -864,7 +868,7 @@ test("BotImpl.authorizeFollow()", async () => {
   assert.deepStrictEqual(
     await bot.authorizeFollow(
       ctx,
-      { id: crypto.randomUUID() },
+      { identifier: "bot", id: crypto.randomUUID() },
     ),
     false,
   );
@@ -882,7 +886,7 @@ test("BotImpl.dispatchCreate()", async () => {
     undefined,
   );
   assert.deepStrictEqual(
-    await bot.dispatchCreate(ctx, { id: "non-existent" }),
+    await bot.dispatchCreate(ctx, { identifier: "bot", id: "non-existent" }),
     null,
   );
 
@@ -906,6 +910,7 @@ test("BotImpl.dispatchCreate()", async () => {
     }),
   );
   const create = await bot.dispatchCreate(ctx, {
+    identifier: "bot",
     id: "78acb1ea-4ac6-46b7-bcd4-3a8965d8126e",
   });
   assert.ok(create instanceof Create);
@@ -925,6 +930,7 @@ test("BotImpl.dispatchCreate()", async () => {
   ctx2.getSignedKeyOwner = () => Promise.resolve(actor);
   assert.deepStrictEqual(
     await bot.dispatchCreate(ctx2, {
+      identifier: "bot",
       id: "78acb1ea-4ac6-46b7-bcd4-3a8965d8126e",
     }),
     create,
@@ -949,11 +955,13 @@ test("BotImpl.dispatchCreate()", async () => {
   );
   assert.deepStrictEqual(
     await bot.dispatchCreate(ctx, {
+      identifier: "bot",
       id: "8386a4c7-06f8-409f-ad72-2bba43e83363",
     }),
     null,
   );
   const create2 = await bot.dispatchCreate(ctx2, {
+    identifier: "bot",
     id: "8386a4c7-06f8-409f-ad72-2bba43e83363",
   });
   assert.ok(create2 instanceof Create);
@@ -979,6 +987,7 @@ test("BotImpl.dispatchCreate()", async () => {
   );
   assert.deepStrictEqual(
     await bot.dispatchCreate(ctx, {
+      identifier: "bot",
       id: "ce8081ac-f238-484b-9a70-5d8a4b66d829",
     }),
     null,
@@ -1128,7 +1137,7 @@ test("BotImpl.dispatchAnnounce()", async () => {
     undefined,
   );
   assert.deepStrictEqual(
-    await bot.dispatchAnnounce(ctx, { id: "non-existent" }),
+    await bot.dispatchAnnounce(ctx, { identifier: "bot", id: "non-existent" }),
     null,
   );
 
@@ -1146,6 +1155,7 @@ test("BotImpl.dispatchAnnounce()", async () => {
     }),
   );
   const announce = await bot.dispatchAnnounce(ctx, {
+    identifier: "bot",
     id: "ce8081ac-f238-484b-9a70-5d8a4b66d829",
   });
   assert.ok(announce instanceof Announce);
@@ -1177,6 +1187,7 @@ test("BotImpl.dispatchAnnounce()", async () => {
   );
   assert.deepStrictEqual(
     await bot.dispatchAnnounce(ctx, {
+      identifier: "bot",
       id: "78acb1ea-4ac6-46b7-bcd4-3a8965d8126e",
     }),
     null,
@@ -1196,6 +1207,7 @@ test("BotImpl.dispatchAnnounce()", async () => {
   );
   assert.deepStrictEqual(
     await bot.dispatchAnnounce(ctx, {
+      identifier: "bot",
       id: "d4a7ef9b-682c-4de9-b23c-87747d6725cb",
     }),
     null,
@@ -1209,6 +1221,7 @@ test("BotImpl.dispatchAnnounce()", async () => {
   });
   ctx2.getSignedKeyOwner = () => Promise.resolve(actor);
   const announce2 = await bot.dispatchAnnounce(ctx2, {
+    identifier: "bot",
     id: "d4a7ef9b-682c-4de9-b23c-87747d6725cb",
   });
   assert.ok(announce2 instanceof Announce);
@@ -2053,7 +2066,7 @@ test("BotImpl.onAnnounced()", async () => {
     to: PUBLIC_COLLECTION,
     cc: new URL("https://example.com/ap/actor/bot/followers"),
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2086,7 +2099,7 @@ test("BotImpl.onLiked()", async () => {
     id: new URL("https://example.com/ap/actor/bot/like/1"),
     actor: new URL("https://example.com/ap/actor/bot"),
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2118,7 +2131,7 @@ test("BotImpl.onUnliked()", async () => {
     id: new URL("https://example.com/ap/actor/bot/like/1"),
     actor: new URL("https://example.com/ap/actor/bot"),
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2166,7 +2179,7 @@ test("BotImpl.onReacted()", async () => {
     actor: new URL("https://example.com/ap/actor/bot"),
     name: ":heart:",
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2205,7 +2218,7 @@ test("BotImpl.onReacted()", async () => {
     actor: new URL("https://example.com/ap/actor/bot"),
     name: ":thumbsup:",
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2254,7 +2267,7 @@ test("BotImpl.onUnreacted()", async () => {
     actor: new URL("https://example.com/ap/actor/bot"),
     name: ":heart:",
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2299,7 +2312,7 @@ test("BotImpl.onUnreacted()", async () => {
     actor: new URL("https://example.com/ap/actor/bot"),
     name: ":thumbsup:",
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),

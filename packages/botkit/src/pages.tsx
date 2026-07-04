@@ -304,7 +304,7 @@ app.get("/message/:id", async (c) => {
   if (message == null || !isMessageObject(message)) return c.notFound();
   const activityLink = ctx.getObjectUri<MessageClass>(
     getMessageClass(message),
-    { id },
+    { identifier: bot.identifier, id },
   );
   const feedLink = new URL("/feed.xml", url);
   let title = message.name;
