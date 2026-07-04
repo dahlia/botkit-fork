@@ -50,6 +50,10 @@
       "types": "./dist/follow.d.ts",
       "import": "./dist/follow.js"
     },
+    "./instance": {
+      "types": "./dist/instance.d.ts",
+      "import": "./dist/instance.js"
+    },
     "./message": {
       "types": "./dist/message.d.ts",
       "import": "./dist/message.js"
