@@ -1917,4 +1917,17 @@ export class MemoryCachedRepository implements Repository {
   forIdentifier(identifier: string): ActorScopedRepository {
     return new ActorScopedRepository(this, identifier);
   }
+
+  /**
+   * Migrates data stored by BotKit 0.4 or earlier in the underlying
+   * repository, so that it belongs to the given identifier.  The cache is
+   * not involved: it starts empty and only ever holds values read after
+   * the migration.
+   * @param identifier The identifier of the bot actor that adopts the
+   *                   legacy data.
+   * @since 0.5.0
+   */
+  async migrate(identifier: string): Promise<void> {
+    await this.underlying.migrate?.(identifier);
+  }
 }

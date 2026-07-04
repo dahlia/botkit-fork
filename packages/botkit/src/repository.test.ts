@@ -1397,6 +1397,26 @@ describe("KvRepository.migrate()", () => {
     assert.deepStrictEqual(await repo.countFollowers("bot"), 0);
   });
 
+  test("forwards migration through MemoryCachedRepository", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new MemoryCachedRepository(new KvRepository(kv));
+
+    await repo.migrate?.("bot");
+
+    assert.deepStrictEqual(await repo.getKeyPairs("bot"), keyPairs);
+    assert.deepStrictEqual(await repo.countMessages("bot"), 1);
+    assert.ok(await repo.hasFollower("bot", seed.followerId));
+    // The lazy fallback of the underlying repository applies through
+    // the cache as well:
+    assert.deepStrictEqual(
+      await (await repo.getSentFollow("bot", seed.sentFollowId))?.toJsonLd({
+        format: "compact",
+      }),
+      seed.sentFollowJson,
+    );
+  });
+
   test("does not fall back before migrate() is called", async () => {
     const kv = new MemoryKvStore();
     const seed = await seedLegacyData(kv);
