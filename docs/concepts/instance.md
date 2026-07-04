@@ -303,10 +303,14 @@ The instance actor
 ------------------
 
 A multi-bot instance has no single obvious actor whose key should sign
-shared-inbox related requests, so it exposes an *instance actor* under the
-reserved `INSTANCE_ACTOR_IDENTIFIER` (`_instance`) identifier: an internal,
-non-discoverable `Application` actor, similar to Mastodon's instance actor.
-Bots cannot take the reserved identifier.
+shared-inbox related requests, so it exposes an *instance actor*: an
+internal, non-discoverable `Application` actor, similar to Mastodon's
+instance actor.  It lives under a reserved identifier, which defaults to
+`DEFAULT_INSTANCE_ACTOR_IDENTIFIER` (`__botkit_instance__`) and can be
+overridden through the `~CreateInstanceOptions.instanceActorIdentifier`
+option.  Bots cannot take the reserved identifier, whether they are static
+or resolved by a dispatcher.  Like bot identifiers, it is used for the
+actor URI, so it *should not* be changed after the instance is federated.
 
 Instances created through the single-bot `createBot()` function keep the
 pre-0.5 behavior: the sole bot's key signs shared-inbox requests and no

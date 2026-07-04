@@ -19,7 +19,7 @@ import assert from "node:assert";
 import { describe, test } from "node:test";
 import {
   createInstance,
-  INSTANCE_ACTOR_IDENTIFIER,
+  DEFAULT_INSTANCE_ACTOR_IDENTIFIER,
   type InstanceWithVoidContextData,
 } from "./instance.ts";
 import { MemoryRepository, type Uuid } from "./repository.ts";
@@ -136,7 +136,7 @@ describe("instance actor", () => {
     instance.createBot("alpha", { username: "alphabot" });
     const actor = await fetchJson(
       instance,
-      `https://example.com/ap/actor/${INSTANCE_ACTOR_IDENTIFIER}`,
+      `https://example.com/ap/actor/${DEFAULT_INSTANCE_ACTOR_IDENTIFIER}`,
     );
     assert.deepStrictEqual(actor.type, "Application");
     assert.ok(actor.publicKey != null);
@@ -155,17 +155,57 @@ describe("instance actor", () => {
     }).impl;
     const ctx = impl.federation.createContext(new URL("https://example.com/"));
     assert.deepStrictEqual(impl.dispatchSharedKey(ctx), {
-      identifier: INSTANCE_ACTOR_IDENTIFIER,
+      identifier: DEFAULT_INSTANCE_ACTOR_IDENTIFIER,
     });
   });
 
-  test("cannot be taken by a bot", () => {
+  test("cannot be taken by a bot", async () => {
     const instance = createInstance<void>({ kv: new MemoryKvStore() });
     assert.throws(
       () =>
-        instance.createBot(INSTANCE_ACTOR_IDENTIFIER, { username: "sneaky" }),
+        instance.createBot(DEFAULT_INSTANCE_ACTOR_IDENTIFIER, {
+          username: "sneaky",
+        }),
       TypeError,
     );
+
+    // Dynamic dispatchers cannot take the reserved identifier either:
+    instance.createBot((_ctx, identifier) => ({ username: identifier }));
+    const response = await instance.fetch(
+      new Request(
+        `https://example.com/ap/actor/${DEFAULT_INSTANCE_ACTOR_IDENTIFIER}`,
+        { headers: { Accept: "application/activity+json" } },
+      ),
+    );
+    assert.deepStrictEqual(response.status, 200);
+    const actor = await response.json();
+    assert.deepStrictEqual(actor.type, "Application");
+  });
+
+  test("can be renamed through instanceActorIdentifier", async () => {
+    const instance = createInstance<void>({
+      kv: new MemoryKvStore(),
+      instanceActorIdentifier: "fetcher",
+    });
+    instance.createBot("alpha", { username: "alphabot" });
+
+    const actor = await fetchJson(
+      instance,
+      "https://example.com/ap/actor/fetcher",
+    );
+    assert.deepStrictEqual(actor.type, "Application");
+    assert.deepStrictEqual(actor.preferredUsername, "fetcher");
+
+    // The custom identifier is the reserved one now:
+    assert.throws(
+      () => instance.createBot("fetcher", { username: "other" }),
+      TypeError,
+    );
+    // ...and the default identifier is free for bots:
+    const bot = instance.createBot(DEFAULT_INSTANCE_ACTOR_IDENTIFIER, {
+      username: "underscores",
+    });
+    assert.deepStrictEqual(bot.identifier, DEFAULT_INSTANCE_ACTOR_IDENTIFIER);
   });
 });
 

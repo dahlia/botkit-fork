@@ -39,8 +39,8 @@ export {
   type CreateBotGroupOptions,
   createInstance,
   type CreateInstanceOptions,
+  DEFAULT_INSTANCE_ACTOR_IDENTIFIER,
   type Instance,
-  INSTANCE_ACTOR_IDENTIFIER,
   type InstanceWithVoidContextData,
 } from "./instance.ts";
 export {

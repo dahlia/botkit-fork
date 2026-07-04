@@ -31,9 +31,10 @@ To be released.
         resolves WebFinger usernames to dynamic bot identifiers.
      -  Added `BotEventHandlers` interface, which `Bot` and `BotGroup` both
         extend.
-     -  Added `INSTANCE_ACTOR_IDENTIFIER` constant.  Multi-bot instances
-        expose an instance actor under this reserved identifier, whose key
-        signs shared-inbox related requests.
+     -  Added `DEFAULT_INSTANCE_ACTOR_IDENTIFIER` constant.  Multi-bot
+        instances expose an instance actor under a reserved identifier,
+        whose key signs shared-inbox related requests; it can be overridden
+        through the `CreateInstanceOptions.instanceActorIdentifier` option.
      -  Added `@fedify/botkit/instance` module.
 
     Activities delivered to the shared inbox are routed to the bots they are

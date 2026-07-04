@@ -24,7 +24,7 @@ import type { Application, Image, Service } from "@fedify/vocab";
 import type { Bot, BotEventHandlers, PagesOptions } from "./bot.ts";
 import type { CustomEmoji, DeferredCustomEmoji } from "./emoji.ts";
 import { InstanceImpl } from "./instance-impl.ts";
-export { INSTANCE_ACTOR_IDENTIFIER } from "./instance-impl.ts";
+export { DEFAULT_INSTANCE_ACTOR_IDENTIFIER } from "./instance-impl.ts";
 import type { Repository } from "./repository.ts";
 import type { Session } from "./session.ts";
 import type { Text } from "./text.ts";
@@ -324,6 +324,16 @@ export interface CreateInstanceOptions {
    * options will be used.
    */
   readonly pages?: PagesOptions;
+
+  /**
+   * The identifier of the instance actor: an internal `Application` actor
+   * the instance uses for signing shared-inbox related requests.  Override
+   * it when the default identifier collides with a bot you want to host.
+   * Since it is used for the actor URI, it *should not* be changed after
+   * the instance is federated.
+   * @default `"__botkit_instance__"`
+   */
+  readonly instanceActorIdentifier?: string;
 
   /**
    * Configures the recognition of local object URIs in the legacy (pre-0.5)

@@ -70,13 +70,14 @@ import type { Session } from "./session.ts";
 import { parseLocalUri, rewriteLegacyObjectPath } from "./uri.ts";
 
 /**
- * The reserved identifier of the instance actor: an internal
- * `Application` actor that an {@link Instance} uses for signing
- * shared-inbox related requests on behalf of the whole instance.
- * Bots cannot take this identifier.
+ * The default identifier of the instance actor: an internal `Application`
+ * actor that an {@link Instance} uses for signing shared-inbox related
+ * requests on behalf of the whole instance.  It can be overridden through
+ * the {@link CreateInstanceOptions.instanceActorIdentifier} option; either
+ * way, bots cannot take the effective identifier.
  * @since 0.5.0
  */
-export const INSTANCE_ACTOR_IDENTIFIER = "_instance";
+export const DEFAULT_INSTANCE_ACTOR_IDENTIFIER = "__botkit_instance__";
 
 /**
  * Options for creating an {@link InstanceImpl}.
@@ -128,6 +129,11 @@ export class InstanceImpl<TContextData>
    */
   readonly compatMode: boolean;
 
+  /**
+   * The reserved identifier of the instance actor.
+   */
+  readonly instanceActorIdentifier: string;
+
   readonly #bots: Map<string, BotImpl<TContextData>> = new Map();
   readonly #groups: BotGroupImpl<TContextData>[] = [];
 
@@ -156,6 +162,11 @@ export class InstanceImpl<TContextData>
     this.collectionWindow = options.collectionWindow ?? 50;
     this.legacyObjectUrisIdentifier = options.legacyObjectUris?.identifier;
     this.compatMode = options.compatMode ?? false;
+    this.instanceActorIdentifier = options.instanceActorIdentifier ??
+      DEFAULT_INSTANCE_ACTOR_IDENTIFIER;
+    if (this.instanceActorIdentifier === "") {
+      throw new TypeError("The instance actor identifier cannot be empty.");
+    }
     this.federation = createFederation<TContextData>({
       kv: options.kv,
       queue: options.queue,
@@ -171,7 +182,9 @@ export class InstanceImpl<TContextData>
       .setActorDispatcher(
         "/ap/actor/{identifier}",
         async (ctx, identifier) => {
-          if (!this.compatMode && identifier === INSTANCE_ACTOR_IDENTIFIER) {
+          if (
+            !this.compatMode && identifier === this.instanceActorIdentifier
+          ) {
             return await this.#dispatchInstanceActor(ctx);
           }
           const bot = await this.resolveBot(ctx, identifier);
@@ -180,7 +193,9 @@ export class InstanceImpl<TContextData>
       )
       .mapHandle((ctx, username) => this.mapHandle(ctx, username))
       .setKeyPairsDispatcher(async (ctx, identifier) => {
-        if (!this.compatMode && identifier === INSTANCE_ACTOR_IDENTIFIER) {
+        if (
+          !this.compatMode && identifier === this.instanceActorIdentifier
+        ) {
           return await this.#dispatchInstanceActorKeyPairs();
         }
         const bot = await this.resolveBot(ctx, identifier);
@@ -315,7 +330,9 @@ export class InstanceImpl<TContextData>
    *                     already exists on the instance.
    */
   addBot(bot: BotImpl<TContextData>): void {
-    if (!this.compatMode && bot.identifier === INSTANCE_ACTOR_IDENTIFIER) {
+    if (
+      !this.compatMode && bot.identifier === this.instanceActorIdentifier
+    ) {
       throw new TypeError(
         `The identifier is reserved for the instance actor: ${bot.identifier}`,
       );
@@ -356,6 +373,12 @@ export class InstanceImpl<TContextData>
     ctx: Context<TContextData>,
     identifier: string,
   ): Promise<BotImpl<TContextData> | null> {
+    // The instance actor's identifier is reserved; no bot, static or
+    // dynamic, resolves under it.  (addBot() already rejects static bots
+    // with the reserved identifier; this keeps the invariant local.)
+    if (!this.compatMode && identifier === this.instanceActorIdentifier) {
+      return null;
+    }
     const staticBot = this.#bots.get(identifier);
     if (staticBot != null) return staticBot;
     if (this.#groups.length < 1) return null;
@@ -735,20 +758,20 @@ export class InstanceImpl<TContextData>
       }
       return { identifier: bot.identifier };
     }
-    return { identifier: INSTANCE_ACTOR_IDENTIFIER };
+    return { identifier: this.instanceActorIdentifier };
   }
 
   async #dispatchInstanceActor(
     ctx: Context<TContextData>,
   ): Promise<Actor> {
-    const keyPairs = await ctx.getActorKeyPairs(INSTANCE_ACTOR_IDENTIFIER);
+    const keyPairs = await ctx.getActorKeyPairs(this.instanceActorIdentifier);
     return new Application({
-      id: ctx.getActorUri(INSTANCE_ACTOR_IDENTIFIER),
-      preferredUsername: INSTANCE_ACTOR_IDENTIFIER,
+      id: ctx.getActorUri(this.instanceActorIdentifier),
+      preferredUsername: this.instanceActorIdentifier,
       name: "Instance actor",
       summary: "An internal actor the instance uses for signing requests " +
         "on behalf of the whole instance.",
-      inbox: ctx.getInboxUri(INSTANCE_ACTOR_IDENTIFIER),
+      inbox: ctx.getInboxUri(this.instanceActorIdentifier),
       endpoints: new Endpoints({
         sharedInbox: ctx.getInboxUri(),
       }),
@@ -760,13 +783,16 @@ export class InstanceImpl<TContextData>
 
   async #dispatchInstanceActorKeyPairs(): Promise<CryptoKeyPair[]> {
     let keyPairs = await this.repository.getKeyPairs(
-      INSTANCE_ACTOR_IDENTIFIER,
+      this.instanceActorIdentifier,
     );
     if (keyPairs == null) {
       const rsa = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
       const ed25519 = await generateCryptoKeyPair("Ed25519");
       keyPairs = [rsa, ed25519];
-      await this.repository.setKeyPairs(INSTANCE_ACTOR_IDENTIFIER, keyPairs);
+      await this.repository.setKeyPairs(
+        this.instanceActorIdentifier,
+        keyPairs,
+      );
     }
     return keyPairs;
   }
