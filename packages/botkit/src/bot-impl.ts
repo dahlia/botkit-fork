@@ -88,7 +88,14 @@ import {
 import type { Message, MessageClass, SharedMessage } from "./message.ts";
 import type { Vote } from "./poll.ts";
 import type { Like, Reaction } from "./reaction.ts";
-import type { ActorScopedRepository, Uuid } from "./repository.ts";
+import {
+  ActorScopedRepository,
+  KvRepository,
+  type Repository,
+  type RepositoryGetFollowersOptions,
+  type RepositoryGetMessagesOptions,
+  type Uuid,
+} from "./repository.ts";
 import { parseLocalUri } from "./uri.ts";
 import { SessionImpl } from "./session-impl.ts";
 import type { Session } from "./session.ts";
@@ -190,7 +197,13 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     this.followerPolicy = options.followerPolicy ?? "accept";
     this.instance = options.instance ?? new InstanceImpl({
       kv: options.kv,
-      repository: options.repository,
+      // The single-bot deployment may carry data from BotKit 0.4 or
+      // earlier; adopt it for this bot before the first repository
+      // operation:
+      repository: new MigrationGatedRepository(
+        options.repository ?? new KvRepository(options.kv),
+        this.identifier,
+      ),
       queue: options.queue,
       software: options.software,
       behindProxy: options.behindProxy,
@@ -1200,4 +1213,213 @@ export function wrapBotImpl<TContextData>(
     },
   } satisfies Bot<TContextData> & { impl: BotImpl<TContextData> };
   return wrapper;
+}
+
+/**
+ * A repository decorator that adopts legacy (pre-0.5) data for a bot actor
+ * before the first repository operation.  The migration is kicked off at
+ * construction time and every operation awaits its completion, so data
+ * stored by BotKit 0.4 or earlier is visible from the start.
+ * @internal
+ */
+export class MigrationGatedRepository implements Repository {
+  readonly #repository: Repository;
+  readonly #migration: Promise<void>;
+
+  constructor(repository: Repository, identifier: string) {
+    this.#repository = repository;
+    this.#migration = repository.migrate?.(identifier) ?? Promise.resolve();
+    // The rejection is re-thrown by the first awaiting operation; this
+    // no-op handler only prevents an unhandled rejection warning:
+    this.#migration.catch(() => {});
+  }
+
+  async setKeyPairs(
+    identifier: string,
+    keyPairs: CryptoKeyPair[],
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.setKeyPairs(identifier, keyPairs);
+  }
+
+  async getKeyPairs(identifier: string): Promise<CryptoKeyPair[] | undefined> {
+    await this.#migration;
+    return await this.#repository.getKeyPairs(identifier);
+  }
+
+  async addMessage(
+    identifier: string,
+    id: Uuid,
+    activity: Create | Announce,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.addMessage(identifier, id, activity);
+  }
+
+  async updateMessage(
+    identifier: string,
+    id: Uuid,
+    updater: (
+      existing: Create | Announce,
+    ) => Create | Announce | undefined | Promise<Create | Announce | undefined>,
+  ): Promise<boolean> {
+    await this.#migration;
+    return await this.#repository.updateMessage(identifier, id, updater);
+  }
+
+  async removeMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
+    await this.#migration;
+    return await this.#repository.removeMessage(identifier, id);
+  }
+
+  async *getMessages(
+    identifier: string,
+    options?: RepositoryGetMessagesOptions,
+  ): AsyncIterable<Create | Announce> {
+    await this.#migration;
+    yield* this.#repository.getMessages(identifier, options);
+  }
+
+  async getMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
+    await this.#migration;
+    return await this.#repository.getMessage(identifier, id);
+  }
+
+  async countMessages(identifier: string): Promise<number> {
+    await this.#migration;
+    return await this.#repository.countMessages(identifier);
+  }
+
+  async addFollower(
+    identifier: string,
+    followId: URL,
+    follower: Actor,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.addFollower(identifier, followId, follower);
+  }
+
+  async removeFollower(
+    identifier: string,
+    followId: URL,
+    followerId: URL,
+  ): Promise<Actor | undefined> {
+    await this.#migration;
+    return await this.#repository.removeFollower(
+      identifier,
+      followId,
+      followerId,
+    );
+  }
+
+  async hasFollower(identifier: string, followerId: URL): Promise<boolean> {
+    await this.#migration;
+    return await this.#repository.hasFollower(identifier, followerId);
+  }
+
+  async *getFollowers(
+    identifier: string,
+    options?: RepositoryGetFollowersOptions,
+  ): AsyncIterable<Actor> {
+    await this.#migration;
+    yield* this.#repository.getFollowers(identifier, options);
+  }
+
+  async countFollowers(identifier: string): Promise<number> {
+    await this.#migration;
+    return await this.#repository.countFollowers(identifier);
+  }
+
+  async addSentFollow(
+    identifier: string,
+    id: Uuid,
+    follow: Follow,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.addSentFollow(identifier, id, follow);
+  }
+
+  async removeSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
+    await this.#migration;
+    return await this.#repository.removeSentFollow(identifier, id);
+  }
+
+  async getSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
+    await this.#migration;
+    return await this.#repository.getSentFollow(identifier, id);
+  }
+
+  async addFollowee(
+    identifier: string,
+    followeeId: URL,
+    follow: Follow,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.addFollowee(identifier, followeeId, follow);
+  }
+
+  async removeFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
+    await this.#migration;
+    return await this.#repository.removeFollowee(identifier, followeeId);
+  }
+
+  async getFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
+    await this.#migration;
+    return await this.#repository.getFollowee(identifier, followeeId);
+  }
+
+  async *findFollowedBots(followeeId: URL): AsyncIterable<string> {
+    await this.#migration;
+    yield* this.#repository.findFollowedBots(followeeId);
+  }
+
+  async vote(
+    identifier: string,
+    messageId: Uuid,
+    voterId: URL,
+    option: string,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.vote(identifier, messageId, voterId, option);
+  }
+
+  async countVoters(identifier: string, messageId: Uuid): Promise<number> {
+    await this.#migration;
+    return await this.#repository.countVoters(identifier, messageId);
+  }
+
+  async countVotes(
+    identifier: string,
+    messageId: Uuid,
+  ): Promise<Readonly<Record<string, number>>> {
+    await this.#migration;
+    return await this.#repository.countVotes(identifier, messageId);
+  }
+
+  forIdentifier(identifier: string): ActorScopedRepository {
+    return new ActorScopedRepository(this, identifier);
+  }
+
+  async migrate(identifier: string): Promise<void> {
+    await this.#migration;
+    await this.#repository.migrate?.(identifier);
+  }
 }
