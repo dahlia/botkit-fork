@@ -21,7 +21,7 @@ import type {
 } from "@fedify/fedify/federation";
 import type { Software } from "@fedify/fedify/nodeinfo";
 import type { Application, Image, Service } from "@fedify/vocab";
-import { BotImpl } from "./bot-impl.ts";
+import { BotImpl, wrapBotImpl } from "./bot-impl.ts";
 import type { CustomEmoji, DeferredCustomEmoji } from "./emoji.ts";
 import type {
   AcceptEventHandler,
@@ -437,114 +437,6 @@ export function createBot<TContextData = void>(
   options: CreateBotOptions<TContextData>,
 ): TContextData extends void ? BotWithVoidContextData : Bot<TContextData> {
   const bot = new BotImpl<TContextData>(options);
-  // Since `deno serve` does not recognize a class instance having fetch(),
-  // we wrap a BotImpl instance with a plain object.
-  // See also https://github.com/denoland/deno/issues/24062
-  const wrapper = {
-    impl: bot,
-    get federation() {
-      return bot.federation;
-    },
-    get identifier() {
-      return bot.identifier;
-    },
-    getSession(a, b?) {
-      // @ts-ignore: BotImpl.getSession() implements Bot.getSession()
-      return bot.getSession(a, b);
-    },
-    fetch(request, contextData) {
-      return bot.fetch(request, contextData);
-    },
-    addCustomEmojis<TEmojiName extends string>(
-      emojis: Readonly<Record<TEmojiName, CustomEmoji>>,
-    ): Readonly<Record<TEmojiName, DeferredCustomEmoji<TContextData>>> {
-      return bot.addCustomEmojis(emojis);
-    },
-    get onFollow() {
-      return bot.onFollow;
-    },
-    set onFollow(value) {
-      bot.onFollow = value;
-    },
-    get onUnfollow() {
-      return bot.onUnfollow;
-    },
-    set onUnfollow(value) {
-      bot.onUnfollow = value;
-    },
-    get onAcceptFollow() {
-      return bot.onAcceptFollow;
-    },
-    set onAcceptFollow(value) {
-      bot.onAcceptFollow = value;
-    },
-    get onRejectFollow() {
-      return bot.onRejectFollow;
-    },
-    set onRejectFollow(value) {
-      bot.onRejectFollow = value;
-    },
-    get onMention() {
-      return bot.onMention;
-    },
-    set onMention(value) {
-      bot.onMention = value;
-    },
-    get onReply() {
-      return bot.onReply;
-    },
-    set onReply(value) {
-      bot.onReply = value;
-    },
-    get onQuote() {
-      return bot.onQuote;
-    },
-    set onQuote(value) {
-      bot.onQuote = value;
-    },
-    get onMessage() {
-      return bot.onMessage;
-    },
-    set onMessage(value) {
-      bot.onMessage = value;
-    },
-    get onSharedMessage() {
-      return bot.onSharedMessage;
-    },
-    set onSharedMessage(value) {
-      bot.onSharedMessage = value;
-    },
-    get onLike() {
-      return bot.onLike;
-    },
-    set onLike(value) {
-      bot.onLike = value;
-    },
-    get onUnlike() {
-      return bot.onUnlike;
-    },
-    set onUnlike(value) {
-      bot.onUnlike = value;
-    },
-    get onReact() {
-      return bot.onReact;
-    },
-    set onReact(value) {
-      bot.onReact = value;
-    },
-    get onUnreact() {
-      return bot.onUnreact;
-    },
-    set onUnreact(value) {
-      bot.onUnreact = value;
-    },
-    get onVote() {
-      return bot.onVote;
-    },
-    set onVote(value) {
-      bot.onVote = value;
-    },
-  } satisfies Bot<TContextData> & { impl: BotImpl<TContextData> };
   // @ts-ignore: the wrapper implements BotWithVoidContextData
-  return wrapper;
+  return wrapBotImpl(bot);
 }

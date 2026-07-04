@@ -33,6 +33,13 @@ export {
   type Software,
 } from "./bot.ts";
 export {
+  type BotProfile,
+  createInstance,
+  type CreateInstanceOptions,
+  type Instance,
+  type InstanceWithVoidContextData,
+} from "./instance.ts";
+export {
   type CustomEmoji,
   type DeferredCustomEmoji,
   type Emoji,
