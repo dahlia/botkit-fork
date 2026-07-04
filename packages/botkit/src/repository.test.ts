@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import { MemoryKvStore } from "@fedify/fedify/federation";
-import { importJwk } from "@fedify/fedify/sig";
+import { exportJwk, importJwk } from "@fedify/fedify/sig";
 import { Create, Follow, Note, Person, PUBLIC_COLLECTION } from "@fedify/vocab";
 import assert from "node:assert";
 import { describe, test } from "node:test";
@@ -1158,3 +1158,252 @@ for (const name in factories) {
     });
   });
 }
+
+describe("KvRepository.migrate()", () => {
+  async function seedLegacyData(kv: MemoryKvStore): Promise<{
+    messageId: Uuid;
+    messageJson: unknown;
+    followerId: URL;
+    followRequestId: URL;
+    followeeId: URL;
+    followeeFollowJson: unknown;
+    sentFollowId: Uuid;
+    sentFollowJson: unknown;
+  }> {
+    // Simulates the key layout of BotKit 0.4 and earlier, which was not
+    // scoped by bot identifiers.
+    const messageId: Uuid = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+    const message = createNote(messageId, "bot");
+    const messageJson = await message.toJsonLd({ format: "compact" });
+    await kv.set(["_botkit", "messages"], [messageId]);
+    await kv.set(["_botkit", "messages", messageId], messageJson);
+
+    const keyPairsData = [];
+    for (const pair of keyPairs) {
+      keyPairsData.push({
+        private: await exportJwk(pair.privateKey),
+        public: await exportJwk(pair.publicKey),
+      });
+    }
+    await kv.set(["_botkit", "keyPairs"], keyPairsData);
+
+    const follower = new Person({
+      id: new URL("https://example.com/ap/actor/john"),
+      preferredUsername: "john",
+    });
+    const followRequestId = new URL(
+      "https://example.com/ap/follow/be2da56a-0ea3-4a6a-9dff-2a1837be67e0",
+    );
+    await kv.set(["_botkit", "followers"], [follower.id!.href]);
+    await kv.set(
+      ["_botkit", "followers", follower.id!.href],
+      await follower.toJsonLd({ format: "compact" }),
+    );
+    await kv.set(
+      ["_botkit", "followRequests", followRequestId.href],
+      follower.id!.href,
+    );
+
+    const followeeId = new URL("https://example.com/ap/actor/jane");
+    const followeeFollow = new Follow({
+      id: new URL(
+        "https://example.com/ap/follow/03a395a2-353a-4894-afdb-2cab31a7b004",
+      ),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: followeeId,
+    });
+    const followeeFollowJson = await followeeFollow.toJsonLd({
+      format: "compact",
+    });
+    await kv.set(["_botkit", "followees", followeeId.href], followeeFollowJson);
+
+    const sentFollowId: Uuid = "e35ff5d8-ede9-4f5e-9b83-4bfcd4c9a69c";
+    const sentFollow = new Follow({
+      id: new URL(`https://example.com/ap/follow/${sentFollowId}`),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: new URL("https://example.com/ap/actor/joe"),
+    });
+    const sentFollowJson = await sentFollow.toJsonLd({ format: "compact" });
+    await kv.set(["_botkit", "follows", sentFollowId], sentFollowJson);
+
+    // Poll votes for the message:
+    await kv.set(["_botkit", "polls", messageId], ["option1", "option2"]);
+    await kv.set(["_botkit", "polls", messageId, "option1"], [
+      "https://example.com/ap/actor/alice",
+      "https://example.com/ap/actor/bob",
+    ]);
+    await kv.set(["_botkit", "polls", messageId, "option2"], [
+      "https://example.com/ap/actor/alice",
+    ]);
+
+    return {
+      messageId,
+      messageJson,
+      followerId: follower.id!,
+      followRequestId,
+      followeeId,
+      followeeFollowJson,
+      sentFollowId,
+      sentFollowJson,
+    };
+  }
+
+  test("adopts legacy unscoped data", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+
+    await repo.migrate("bot");
+
+    assert.deepStrictEqual(await repo.getKeyPairs("bot"), keyPairs);
+    assert.deepStrictEqual(await repo.countMessages("bot"), 1);
+    assert.deepStrictEqual(
+      await (await repo.getMessage("bot", seed.messageId))?.toJsonLd({
+        format: "compact",
+      }),
+      seed.messageJson,
+    );
+    assert.deepStrictEqual(
+      (await Array.fromAsync(repo.getMessages("bot"))).length,
+      1,
+    );
+    assert.ok(await repo.hasFollower("bot", seed.followerId));
+    assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+    assert.deepStrictEqual(await repo.countVoters("bot", seed.messageId), 2);
+    assert.deepStrictEqual(await repo.countVotes("bot", seed.messageId), {
+      option1: 2,
+      option2: 1,
+    });
+
+    // Data must belong to the migrated identifier only:
+    assert.deepStrictEqual(await repo.getKeyPairs("other"), undefined);
+    assert.deepStrictEqual(await repo.countMessages("other"), 0);
+
+    // Legacy keys are kept (copy, not move), so a partially failed run can
+    // be retried without data loss:
+    assert.ok(await kv.get(["_botkit", "messages", seed.messageId]) != null);
+  });
+
+  test("is idempotent", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+
+    await repo.migrate("bot");
+    await repo.migrate("bot");
+
+    assert.deepStrictEqual(await repo.countMessages("bot"), 1);
+    assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+
+    // A migrated message that is removed afterwards must not reappear:
+    await repo.removeMessage("bot", seed.messageId);
+    await repo.migrate("bot");
+    assert.deepStrictEqual(await repo.countMessages("bot"), 0);
+  });
+
+  test("does nothing without legacy data", async () => {
+    const kv = new MemoryKvStore();
+    const repo = new KvRepository(kv);
+    await repo.migrate("bot");
+    assert.deepStrictEqual(await repo.countMessages("bot"), 0);
+    assert.deepStrictEqual(await repo.getKeyPairs("bot"), undefined);
+  });
+
+  test("does not clobber scoped data written before migration", async () => {
+    const kv = new MemoryKvStore();
+    await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+    await repo.setKeyPairs("bot", keyPairs.slice(0, 1));
+    await repo.migrate("bot");
+    assert.deepStrictEqual(await repo.getKeyPairs("bot"), [keyPairs[0]]);
+  });
+
+  test("falls back to legacy keys for sent follows", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+    await repo.migrate("bot");
+
+    // Sent follows are keyed by UUID and have no index list, so they are
+    // migrated lazily on first access:
+    const follow = await repo.getSentFollow("bot", seed.sentFollowId);
+    assert.deepStrictEqual(
+      await follow?.toJsonLd({ format: "compact" }),
+      seed.sentFollowJson,
+    );
+    // The record is moved to the scoped key:
+    assert.deepStrictEqual(
+      await kv.get(["_botkit", "follows", seed.sentFollowId]),
+      undefined,
+    );
+    assert.deepStrictEqual(
+      await (await repo.getSentFollow("bot", seed.sentFollowId))?.toJsonLd({
+        format: "compact",
+      }),
+      seed.sentFollowJson,
+    );
+
+    // The fallback applies only to the migrated identifier:
+    const kv2 = new MemoryKvStore();
+    const seed2 = await seedLegacyData(kv2);
+    const repo2 = new KvRepository(kv2);
+    await repo2.migrate("bot");
+    assert.deepStrictEqual(
+      await repo2.getSentFollow("other", seed2.sentFollowId),
+      undefined,
+    );
+  });
+
+  test("falls back to legacy keys for followees", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+    await repo.migrate("bot");
+
+    const follow = await repo.getFollowee("bot", seed.followeeId);
+    assert.deepStrictEqual(
+      await follow?.toJsonLd({ format: "compact" }),
+      seed.followeeFollowJson,
+    );
+    // The record is moved to the scoped key and indexed for reverse lookup:
+    assert.deepStrictEqual(
+      await kv.get(["_botkit", "followees", seed.followeeId.href]),
+      undefined,
+    );
+    assert.deepStrictEqual(
+      await Array.fromAsync(repo.findFollowedBots(seed.followeeId)),
+      ["bot"],
+    );
+  });
+
+  test("falls back to legacy keys for follow requests", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+    await repo.migrate("bot");
+
+    // removeFollower() consults the follow request record, which is keyed by
+    // URL and migrated lazily:
+    const removed = await repo.removeFollower(
+      "bot",
+      seed.followRequestId,
+      seed.followerId,
+    );
+    assert.ok(removed != null);
+    assert.deepStrictEqual(
+      await repo.hasFollower("bot", seed.followerId),
+      false,
+    );
+    assert.deepStrictEqual(await repo.countFollowers("bot"), 0);
+  });
+
+  test("does not fall back before migrate() is called", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+    assert.deepStrictEqual(
+      await repo.getSentFollow("bot", seed.sentFollowId),
+      undefined,
+    );
+  });
+});

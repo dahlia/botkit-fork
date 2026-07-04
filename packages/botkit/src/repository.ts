@@ -686,12 +686,155 @@ export class KvRepository implements Repository {
     this.prefix = options.prefix ?? ["_botkit"];
   }
 
+  /**
+   * The identifier for which legacy (pre-0.5) unscoped keys are consulted as
+   * a fallback.  Armed by {@link KvRepository.migrate}.
+   */
+  #legacyFallbackIdentifier?: string;
+
   #key(identifier: string, ...rest: readonly string[]): KvKey {
     return [...this.prefix, "bots", identifier, ...rest];
   }
 
+  #legacyKey(...rest: readonly [string, ...string[]]): KvKey {
+    return [...this.prefix, ...rest];
+  }
+
   #followeeIndexKey(followeeId: URL): KvKey {
     return [...this.prefix, "index", "followees", followeeId.href];
+  }
+
+  /**
+   * Reads a record stored under the legacy (pre-0.5) unscoped key layout and
+   * moves it to the scoped location, if the given identifier has adopted the
+   * legacy data via {@link KvRepository.migrate}.
+   * @param identifier The identifier of the bot actor to move the record to.
+   * @param path The key path of the record, relative to both the legacy
+   *             prefix and the scoped prefix.
+   * @returns The moved record, or `undefined` if it does not exist.
+   */
+  async #moveLegacyRecord<T>(
+    identifier: string,
+    path: readonly [string, ...string[]],
+  ): Promise<T | undefined> {
+    if (identifier !== this.#legacyFallbackIdentifier) return undefined;
+    const legacyKey = this.#legacyKey(...path);
+    const value = await this.kv.get<T>(legacyKey);
+    if (value == null) return undefined;
+    await this.kv.set(this.#key(identifier, ...path), value);
+    await this.kv.delete(legacyKey);
+    logger.debug(
+      "Lazily migrated the legacy record {path} to bot {identifier}.",
+      { path, identifier },
+    );
+    return value;
+  }
+
+  /**
+   * Migrates data stored by BotKit 0.4 or earlier, which was not scoped by
+   * bot actor identifiers, so that it belongs to the given identifier.
+   *
+   * Categories that are enumerable (key pairs, messages, poll votes, and
+   * followers) are copied eagerly; the legacy keys are kept so that
+   * a partially failed run can be retried without data loss.  Categories
+   * keyed by URLs or UUIDs without an index (sent follows, followees, and
+   * follow requests) are migrated lazily: after this method is called,
+   * a lookup that misses the scoped key falls back to the legacy key and
+   * moves the record over.
+   *
+   * Calling this method again after a successful migration is a no-op,
+   * except that it re-arms the lazy fallback for the given identifier.
+   * @param identifier The identifier of the bot actor that adopts the legacy
+   *                   data.
+   * @since 0.5.0
+   */
+  async migrate(identifier: string): Promise<void> {
+    this.#legacyFallbackIdentifier = identifier;
+    const markerKey: KvKey = [...this.prefix, "migrated", identifier];
+    if (await this.kv.get(markerKey) != null) return;
+    logger.info(
+      "Migrating legacy repository data to bot {identifier}...",
+      { identifier },
+    );
+
+    // Key pairs:
+    const legacyKeyPairs = await this.kv.get(this.#legacyKey("keyPairs"));
+    if (legacyKeyPairs != null) {
+      const scopedKey = this.#key(identifier, "keyPairs");
+      if (await this.kv.get(scopedKey) == null) {
+        await this.kv.set(scopedKey, legacyKeyPairs);
+      }
+    }
+
+    // Messages and their poll votes:
+    const legacyMessageIds =
+      await this.kv.get<string[]>(this.#legacyKey("messages")) ?? [];
+    for (const id of legacyMessageIds) {
+      const messageKey = this.#key(identifier, "messages", id);
+      if (await this.kv.get(messageKey) == null) {
+        const json = await this.kv.get(this.#legacyKey("messages", id));
+        if (json != null) await this.kv.set(messageKey, json);
+      }
+      const options = await this.kv.get<string[]>(
+        this.#legacyKey("polls", id),
+      );
+      if (options != null) {
+        const scopedOptionsKey = this.#key(identifier, "polls", id);
+        if (await this.kv.get(scopedOptionsKey) == null) {
+          for (const option of options) {
+            const voters = await this.kv.get(
+              this.#legacyKey("polls", id, option),
+            );
+            if (voters != null) {
+              await this.kv.set(
+                this.#key(identifier, "polls", id, option),
+                voters,
+              );
+            }
+          }
+          await this.kv.set(scopedOptionsKey, options);
+        }
+      }
+    }
+    if (legacyMessageIds.length > 0) {
+      const listKey = this.#key(identifier, "messages");
+      const set = new Set([
+        ...(await this.kv.get<string[]>(listKey) ?? []),
+        ...legacyMessageIds,
+      ]);
+      const list = [...set];
+      list.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+      await this.kv.set(listKey, list);
+    }
+
+    // Followers:
+    const legacyFollowerIds =
+      await this.kv.get<string[]>(this.#legacyKey("followers")) ?? [];
+    for (const followerId of legacyFollowerIds) {
+      const followerKey = this.#key(identifier, "followers", followerId);
+      if (await this.kv.get(followerKey) == null) {
+        const json = await this.kv.get(
+          this.#legacyKey("followers", followerId),
+        );
+        if (json != null) await this.kv.set(followerKey, json);
+      }
+    }
+    if (legacyFollowerIds.length > 0) {
+      const listKey = this.#key(identifier, "followers");
+      const merged = await this.kv.get<string[]>(listKey) ?? [];
+      for (const followerId of legacyFollowerIds) {
+        if (!merged.includes(followerId)) merged.push(followerId);
+      }
+      await this.kv.set(listKey, merged);
+    }
+
+    // The marker is written last so that an interrupted migration is
+    // retried on the next run:
+    await this.kv.set(markerKey, true);
+    logger.info(
+      "Finished migrating legacy repository data to bot {identifier}.",
+      { identifier },
+    );
   }
 
   async setKeyPairs(
@@ -899,7 +1042,11 @@ export class KvRepository implements Repository {
       "followRequests",
       followRequestId.href,
     );
-    const followerId = await this.kv.get<string>(followRequestKey);
+    const followerId = await this.kv.get<string>(followRequestKey) ??
+      await this.#moveLegacyRecord<string>(
+        identifier,
+        ["followRequests", followRequestId.href],
+      );
     if (followerId == null) return undefined;
     const followerKey = this.#key(identifier, "followers", followerId);
     if (followerId !== actorId.href) return undefined;
@@ -986,7 +1133,9 @@ export class KvRepository implements Repository {
     identifier: string,
     id: Uuid,
   ): Promise<Follow | undefined> {
-    const followJson = await this.kv.get(this.#key(identifier, "follows", id));
+    const followJson =
+      await this.kv.get(this.#key(identifier, "follows", id)) ??
+        await this.#moveLegacyRecord(identifier, ["follows", id]);
     if (followJson == null) return undefined;
     try {
       return await Follow.fromJsonLd(followJson);
@@ -1028,10 +1177,22 @@ export class KvRepository implements Repository {
     identifier: string,
     followeeId: URL,
   ): Promise<Follow | undefined> {
-    const json = await this.kv.get(
+    let json = await this.kv.get(
       this.#key(identifier, "followees", followeeId.href),
     );
-    if (json == null) return undefined;
+    if (json == null) {
+      json = await this.#moveLegacyRecord(
+        identifier,
+        ["followees", followeeId.href],
+      );
+      if (json == null) return undefined;
+      // The moved record also needs to appear in the reverse lookup index:
+      await this.#addToFolloweeIndex(identifier, followeeId);
+    } else if (identifier === this.#legacyFallbackIdentifier) {
+      // A previous lazy migration may have moved the record but failed
+      // before indexing it; re-assert the index so that retries repair it:
+      await this.#addToFolloweeIndex(identifier, followeeId);
+    }
     try {
       return await Follow.fromJsonLd(json);
     } catch {
