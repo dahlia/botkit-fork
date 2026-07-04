@@ -1014,8 +1014,7 @@ export class InstanceImpl<TContextData>
       return await app.fetch(request, { bot, contextData });
     }
     return await multiApp.fetch(request, {
-      // deno-lint-ignore no-explicit-any
-      instance: this as InstanceImpl<any>,
+      instance: this as InstanceImpl<unknown>,
       contextData,
     });
   }
