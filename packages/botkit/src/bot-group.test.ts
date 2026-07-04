@@ -120,6 +120,32 @@ describe("dynamic bots", () => {
     assert.ok(!probed.includes("second"));
   });
 
+  test("fall through to the next dispatcher on null", async () => {
+    const { instance } = createInstance();
+    const probed: string[] = [];
+    instance.createBot((_ctx, identifier) => {
+      probed.push("first");
+      return identifier === "somebody-else" ? { username: "first-bot" } : null;
+    });
+    instance.createBot((_ctx, identifier) => {
+      probed.push("second");
+      return regionProfile(identifier);
+    });
+    const response = await instance.fetch(
+      new Request("https://example.com/ap/actor/region_kr", {
+        headers: { Accept: "application/activity+json" },
+      }),
+      undefined,
+    );
+    assert.deepStrictEqual(response.status, 200);
+    const actor = await response.json();
+    assert.deepStrictEqual(actor.preferredUsername, "region_kr");
+    // The first dispatcher was probed, returned null, and the resolution
+    // fell through to the second:
+    assert.ok(probed.includes("first"));
+    assert.ok(probed.includes("second"));
+  });
+
   test("read event handlers live from the group", async () => {
     const { instance } = createInstance();
     const group = instance.createBot(

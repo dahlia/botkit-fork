@@ -159,7 +159,9 @@ and the first resolution of a bot don't matter.
 
 Static bots take precedence over dynamic ones, and when multiple groups are
 registered, their dispatchers are probed in the order the groups were
-created.
+created: a dispatcher that returns `null` passes the identifier on to the
+next group, and an identifier no dispatcher recognizes does not resolve at
+all.
 
 ### Usernames of dynamic bots
 
