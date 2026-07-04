@@ -90,7 +90,234 @@ export class SqliteRepository implements Repository, Disposable {
     this.db.close();
   }
 
+  private tableExists(table: string): boolean {
+    const stmt = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type = 'table' AND name = ?
+    `);
+    const row = stmt.get(table) as { count: number };
+    return row.count > 0;
+  }
+
+  private hasBotIdColumn(table: string): boolean {
+    const stmt = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM pragma_table_info(?)
+      WHERE name = 'bot_id'
+    `);
+    const row = stmt.get(table) as { count: number };
+    return row.count > 0;
+  }
+
+  /**
+   * Rebuilds tables created by \@fedify/botkit-sqlite 0.4 or earlier, which
+   * had no `bot_id` column, into the bot-scoped schema.  Existing rows get
+   * the empty-string bot ID; use {@link SqliteRepository.migrate} to assign
+   * them to a bot actor identifier.
+   */
+  private rebuildLegacyTables(): void {
+    const tables = [
+      "key_pairs",
+      "messages",
+      "followers",
+      "follow_requests",
+      "sent_follows",
+      "followees",
+      "poll_votes",
+    ].filter((table) => this.tableExists(table) && !this.hasBotIdColumn(table));
+    if (tables.length < 1) return;
+    logger.info(
+      "Rebuilding legacy tables without a bot_id column: {tables}.",
+      { tables },
+    );
+    // The marker lets migrate() distinguish rows carried over from a legacy
+    // database (bot_id = '') from data legitimately stored under an
+    // empty-string identifier:
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS botkit_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+    // SQLite cannot add a column to a composite primary key, so the tables
+    // are rebuilt (create new, copy, drop, rename) in a single transaction.
+    // Foreign key enforcement is turned off during the rebuild since
+    // follow_requests references followers.
+    this.db.exec("PRAGMA foreign_keys = OFF;");
+    this.db.exec("BEGIN TRANSACTION");
+    try {
+      if (tables.includes("key_pairs")) {
+        // The primary key does not change; adding the column suffices:
+        this.db.exec(`
+          ALTER TABLE key_pairs ADD COLUMN bot_id TEXT NOT NULL DEFAULT ''
+        `);
+      }
+      if (tables.includes("messages")) {
+        this.db.exec(`
+          CREATE TABLE messages_new (
+            bot_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            activity_json TEXT NOT NULL,
+            published INTEGER,
+            PRIMARY KEY (bot_id, id)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO messages_new (bot_id, id, activity_json, published)
+          SELECT '', id, activity_json, published FROM messages
+        `);
+        this.db.exec("DROP TABLE messages");
+        this.db.exec("ALTER TABLE messages_new RENAME TO messages");
+      }
+      if (tables.includes("followers")) {
+        this.db.exec(`
+          CREATE TABLE followers_new (
+            bot_id TEXT NOT NULL,
+            follower_id TEXT NOT NULL,
+            actor_json TEXT NOT NULL,
+            PRIMARY KEY (bot_id, follower_id)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO followers_new (bot_id, follower_id, actor_json)
+          SELECT '', follower_id, actor_json FROM followers
+        `);
+        this.db.exec("DROP TABLE followers");
+        this.db.exec("ALTER TABLE followers_new RENAME TO followers");
+      }
+      if (tables.includes("follow_requests")) {
+        this.db.exec(`
+          CREATE TABLE follow_requests_new (
+            bot_id TEXT NOT NULL,
+            follow_request_id TEXT NOT NULL,
+            follower_id TEXT NOT NULL,
+            PRIMARY KEY (bot_id, follow_request_id),
+            FOREIGN KEY (bot_id, follower_id)
+              REFERENCES followers(bot_id, follower_id)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO follow_requests_new
+            (bot_id, follow_request_id, follower_id)
+          SELECT '', follow_request_id, follower_id FROM follow_requests
+        `);
+        this.db.exec("DROP TABLE follow_requests");
+        this.db.exec(
+          "ALTER TABLE follow_requests_new RENAME TO follow_requests",
+        );
+      }
+      if (tables.includes("sent_follows")) {
+        this.db.exec(`
+          CREATE TABLE sent_follows_new (
+            bot_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            follow_json TEXT NOT NULL,
+            PRIMARY KEY (bot_id, id)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO sent_follows_new (bot_id, id, follow_json)
+          SELECT '', id, follow_json FROM sent_follows
+        `);
+        this.db.exec("DROP TABLE sent_follows");
+        this.db.exec("ALTER TABLE sent_follows_new RENAME TO sent_follows");
+      }
+      if (tables.includes("followees")) {
+        this.db.exec(`
+          CREATE TABLE followees_new (
+            bot_id TEXT NOT NULL,
+            followee_id TEXT NOT NULL,
+            follow_json TEXT NOT NULL,
+            PRIMARY KEY (bot_id, followee_id)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO followees_new (bot_id, followee_id, follow_json)
+          SELECT '', followee_id, follow_json FROM followees
+        `);
+        this.db.exec("DROP TABLE followees");
+        this.db.exec("ALTER TABLE followees_new RENAME TO followees");
+      }
+      if (tables.includes("poll_votes")) {
+        this.db.exec(`
+          CREATE TABLE poll_votes_new (
+            bot_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            voter_id TEXT NOT NULL,
+            option TEXT NOT NULL,
+            PRIMARY KEY (bot_id, message_id, voter_id, option)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO poll_votes_new (bot_id, message_id, voter_id, option)
+          SELECT '', message_id, voter_id, option FROM poll_votes
+        `);
+        this.db.exec("DROP TABLE poll_votes");
+        this.db.exec("ALTER TABLE poll_votes_new RENAME TO poll_votes");
+      }
+      this.db.exec(`
+        INSERT OR REPLACE INTO botkit_metadata (key, value)
+        VALUES ('legacy_data', '1')
+      `);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      this.db.exec("PRAGMA foreign_keys = ON;");
+      throw error;
+    }
+    this.db.exec("PRAGMA foreign_keys = ON;");
+    logger.info("Finished rebuilding legacy tables.");
+  }
+
+  /**
+   * Migrates data stored by \@fedify/botkit-sqlite 0.4 or earlier, which was
+   * not scoped by bot actor identifiers, so that it belongs to the given
+   * identifier.  Rows carried over from a legacy database have the
+   * empty-string bot ID; this method assigns them to the identifier in
+   * a single transaction.  It only acts when the database was actually
+   * rebuilt from a legacy schema, so data legitimately stored under an
+   * empty-string identifier is never touched, and calling it again is
+   * a no-op.
+   * @param identifier The identifier of the bot actor that adopts the legacy
+   *                   data.
+   * @since 0.5.0
+   */
+  migrate(identifier: string): Promise<void> {
+    if (!this.tableExists("botkit_metadata")) return Promise.resolve();
+    const marker = this.db.prepare(
+      "SELECT value FROM botkit_metadata WHERE key = 'legacy_data'",
+    ).get() as { value: string } | undefined;
+    if (marker == null) return Promise.resolve();
+    this.db.exec("BEGIN TRANSACTION");
+    // Updating followers and follow_requests rows in tandem temporarily
+    // breaks the foreign key between them; defer the check to the commit:
+    this.db.exec("PRAGMA defer_foreign_keys = ON");
+    try {
+      for (
+        const table of [
+          "key_pairs",
+          "messages",
+          "followers",
+          "follow_requests",
+          "sent_follows",
+          "followees",
+          "poll_votes",
+        ]
+      ) {
+        this.db.prepare(`UPDATE ${table} SET bot_id = ? WHERE bot_id = ''`)
+          .run(identifier);
+      }
+      this.db.exec("DELETE FROM botkit_metadata WHERE key = 'legacy_data'");
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return Promise.resolve();
+  }
+
   private initializeTables(): void {
+    this.rebuildLegacyTables();
+
     // Key pairs table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS key_pairs (

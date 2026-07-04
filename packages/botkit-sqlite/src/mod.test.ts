@@ -18,11 +18,12 @@ import {
   type SqliteRepositoryOptions,
 } from "@fedify/botkit-sqlite";
 import { importJwk } from "@fedify/fedify/sig";
-import { Create, Note, Person, PUBLIC_COLLECTION } from "@fedify/vocab";
+import { Create, Follow, Note, Person, PUBLIC_COLLECTION } from "@fedify/vocab";
 import assert from "node:assert";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, test } from "node:test";
 
 if (!("Temporal" in globalThis)) {
@@ -279,6 +280,381 @@ describe("SqliteRepository", () => {
     } finally {
       // Clean up temp directory
       await rm(tempDir, { recursive: true });
+    }
+  });
+});
+
+describe("SqliteRepository multitenancy", () => {
+  test("isolates data by bot identifier", async () => {
+    const repo = createSqliteRepository();
+    try {
+      const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0" as const;
+      const message = new Create({
+        id: new URL(
+          `https://example.com/ap/actor/botA/create/${messageId}`,
+        ),
+        actor: new URL("https://example.com/ap/actor/botA"),
+        object: new Note({
+          id: new URL(`https://example.com/ap/actor/botA/note/${messageId}`),
+          content: "Hello, world!",
+        }),
+      });
+      await repo.addMessage("botA", messageId, message);
+      assert.deepStrictEqual(
+        await repo.getMessage("botB", messageId),
+        undefined,
+      );
+      assert.deepStrictEqual(await repo.countMessages("botB"), 0);
+      assert.deepStrictEqual(await repo.countMessages("botA"), 1);
+      assert.deepStrictEqual(
+        await repo.removeMessage("botB", messageId),
+        undefined,
+      );
+      assert.deepStrictEqual(await repo.countMessages("botA"), 1);
+
+      const follower = new Person({
+        id: new URL("https://example.com/ap/actor/john"),
+        preferredUsername: "john",
+      });
+      const followId = new URL(
+        "https://example.com/ap/follow/be2da56a-0ea3-4a6a-9dff-2a1837be67e0",
+      );
+      await repo.addFollower("botA", followId, follower);
+      assert.deepStrictEqual(
+        await repo.hasFollower("botB", follower.id!),
+        false,
+      );
+      assert.ok(await repo.hasFollower("botA", follower.id!));
+      assert.deepStrictEqual(
+        await repo.removeFollower("botB", followId, follower.id!),
+        undefined,
+      );
+      assert.ok(await repo.hasFollower("botA", follower.id!));
+
+      await repo.setKeyPairs("botA", keyPairs);
+      assert.deepStrictEqual(await repo.getKeyPairs("botB"), undefined);
+      assert.deepStrictEqual(await repo.getKeyPairs("botA"), keyPairs);
+
+      await repo.vote("botA", messageId, follower.id!, "option1");
+      assert.deepStrictEqual(await repo.countVoters("botB", messageId), 0);
+      assert.deepStrictEqual(await repo.countVoters("botA", messageId), 1);
+    } finally {
+      repo.close();
+    }
+  });
+
+  test("findFollowedBots()", async () => {
+    const repo = createSqliteRepository();
+    try {
+      const followeeId = new URL("https://example.com/ap/actor/john");
+      const followA = new Follow({
+        id: new URL(
+          "https://example.com/ap/actor/botA/follow/03a395a2-353a-4894-afdb-2cab31a7b004",
+        ),
+        actor: new URL("https://example.com/ap/actor/botA"),
+        object: followeeId,
+      });
+      const followB = new Follow({
+        id: new URL(
+          "https://example.com/ap/actor/botB/follow/e35ff5d8-ede9-4f5e-9b83-4bfcd4c9a69c",
+        ),
+        actor: new URL("https://example.com/ap/actor/botB"),
+        object: followeeId,
+      });
+      assert.deepStrictEqual(
+        await Array.fromAsync(repo.findFollowedBots(followeeId)),
+        [],
+      );
+      await repo.addFollowee("botA", followeeId, followA);
+      await repo.addFollowee("botB", followeeId, followB);
+      assert.deepStrictEqual(
+        await Array.fromAsync(repo.findFollowedBots(followeeId)),
+        ["botA", "botB"],
+      );
+      await repo.removeFollowee("botA", followeeId);
+      assert.deepStrictEqual(
+        await Array.fromAsync(repo.findFollowedBots(followeeId)),
+        ["botB"],
+      );
+    } finally {
+      repo.close();
+    }
+  });
+});
+
+describe("SqliteRepository legacy schema migration", () => {
+  function createLegacyDatabase(path: string): void {
+    // The schema used by @fedify/botkit-sqlite 0.4 and earlier:
+    const db = new DatabaseSync(path);
+    db.exec("PRAGMA foreign_keys = ON;");
+    db.exec(`
+      CREATE TABLE key_pairs (
+        id INTEGER PRIMARY KEY,
+        private_key_jwk TEXT NOT NULL,
+        public_key_jwk TEXT NOT NULL
+      )
+    `);
+    db.exec(`
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        activity_json TEXT NOT NULL,
+        published INTEGER
+      )
+    `);
+    db.exec(
+      "CREATE INDEX idx_messages_published ON messages(published)",
+    );
+    db.exec(`
+      CREATE TABLE followers (
+        follower_id TEXT PRIMARY KEY,
+        actor_json TEXT NOT NULL
+      )
+    `);
+    db.exec(`
+      CREATE TABLE follow_requests (
+        follow_request_id TEXT PRIMARY KEY,
+        follower_id TEXT NOT NULL,
+        FOREIGN KEY (follower_id) REFERENCES followers(follower_id)
+      )
+    `);
+    db.exec(`
+      CREATE TABLE sent_follows (
+        id TEXT PRIMARY KEY,
+        follow_json TEXT NOT NULL
+      )
+    `);
+    db.exec(`
+      CREATE TABLE followees (
+        followee_id TEXT PRIMARY KEY,
+        follow_json TEXT NOT NULL
+      )
+    `);
+    db.exec(`
+      CREATE TABLE poll_votes (
+        message_id TEXT NOT NULL,
+        voter_id TEXT NOT NULL,
+        option TEXT NOT NULL,
+        PRIMARY KEY (message_id, voter_id, option)
+      )
+    `);
+    db.close();
+  }
+
+  async function seedLegacyDatabase(path: string): Promise<{
+    messageId: string;
+    followerId: string;
+    followRequestId: string;
+    followeeId: string;
+    sentFollowId: string;
+  }> {
+    const db = new DatabaseSync(path);
+    const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+    const message = new Create({
+      id: new URL(`https://example.com/ap/create/${messageId}`),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: new Note({
+        id: new URL(`https://example.com/ap/note/${messageId}`),
+        content: "Hello, world!",
+        published: Temporal.Instant.from("2025-01-01T00:00:00Z"),
+      }),
+      published: Temporal.Instant.from("2025-01-01T00:00:00Z"),
+    });
+    db.prepare(
+      "INSERT INTO messages (id, activity_json, published) VALUES (?, ?, ?)",
+    ).run(
+      messageId,
+      JSON.stringify(await message.toJsonLd({ format: "compact" })),
+      Temporal.Instant.from("2025-01-01T00:00:00Z").epochMilliseconds,
+    );
+
+    const follower = new Person({
+      id: new URL("https://example.com/ap/actor/john"),
+      preferredUsername: "john",
+    });
+    const followRequestId =
+      "https://example.com/ap/follow/be2da56a-0ea3-4a6a-9dff-2a1837be67e0";
+    db.prepare(
+      "INSERT INTO followers (follower_id, actor_json) VALUES (?, ?)",
+    ).run(
+      follower.id!.href,
+      JSON.stringify(await follower.toJsonLd({ format: "compact" })),
+    );
+    db.prepare(
+      "INSERT INTO follow_requests (follow_request_id, follower_id) VALUES (?, ?)",
+    ).run(followRequestId, follower.id!.href);
+
+    const followeeId = "https://example.com/ap/actor/jane";
+    const followeeFollow = new Follow({
+      id: new URL(
+        "https://example.com/ap/follow/03a395a2-353a-4894-afdb-2cab31a7b004",
+      ),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: new URL(followeeId),
+    });
+    db.prepare(
+      "INSERT INTO followees (followee_id, follow_json) VALUES (?, ?)",
+    ).run(
+      followeeId,
+      JSON.stringify(await followeeFollow.toJsonLd({ format: "compact" })),
+    );
+
+    const sentFollowId = "e35ff5d8-ede9-4f5e-9b83-4bfcd4c9a69c";
+    const sentFollow = new Follow({
+      id: new URL(`https://example.com/ap/follow/${sentFollowId}`),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: new URL("https://example.com/ap/actor/joe"),
+    });
+    db.prepare(
+      "INSERT INTO sent_follows (id, follow_json) VALUES (?, ?)",
+    ).run(
+      sentFollowId,
+      JSON.stringify(await sentFollow.toJsonLd({ format: "compact" })),
+    );
+
+    db.prepare(
+      "INSERT INTO poll_votes (message_id, voter_id, option) VALUES (?, ?, ?)",
+    ).run(messageId, "https://example.com/ap/actor/alice", "option1");
+
+    db.close();
+    return {
+      messageId,
+      followerId: follower.id!.href,
+      followRequestId,
+      followeeId,
+      sentFollowId,
+    };
+  }
+
+  test("rebuilds a legacy database and adopts its data", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "botkit-sqlite-test-"));
+    try {
+      const path = join(dir, "legacy.db");
+      createLegacyDatabase(path);
+      const seed = await seedLegacyDatabase(path);
+
+      // Opening a legacy database rebuilds the schema with bot_id columns;
+      // existing rows get the empty-string bot ID:
+      const repo = new SqliteRepository({ path });
+      try {
+        assert.deepStrictEqual(await repo.countMessages("bot"), 0);
+
+        // migrate() assigns the legacy rows to the given identifier:
+        await repo.migrate("bot");
+        assert.deepStrictEqual(await repo.countMessages("bot"), 1);
+        assert.ok(
+          await repo.getMessage(
+            "bot",
+            seed
+              .messageId as `${string}-${string}-${string}-${string}-${string}`,
+          ) != null,
+        );
+        assert.ok(await repo.hasFollower("bot", new URL(seed.followerId)));
+        assert.ok(
+          await repo.getFollowee("bot", new URL(seed.followeeId)) != null,
+        );
+        assert.ok(
+          await repo.getSentFollow(
+            "bot",
+            seed
+              .sentFollowId as `${string}-${string}-${string}-${string}-${string}`,
+          ) != null,
+        );
+        assert.deepStrictEqual(
+          await repo.countVoters(
+            "bot",
+            seed
+              .messageId as `${string}-${string}-${string}-${string}-${string}`,
+          ),
+          1,
+        );
+        assert.deepStrictEqual(
+          await Array.fromAsync(
+            repo.findFollowedBots(new URL(seed.followeeId)),
+          ),
+          ["bot"],
+        );
+
+        // removeFollower() exercises the migrated follow_requests rows:
+        const removed = await repo.removeFollower(
+          "bot",
+          new URL(seed.followRequestId),
+          new URL(seed.followerId),
+        );
+        assert.ok(removed != null);
+
+        // migrate() is idempotent:
+        await repo.migrate("bot");
+        assert.deepStrictEqual(await repo.countMessages("bot"), 1);
+      } finally {
+        repo.close();
+      }
+
+      // Reopening the migrated database works without another rebuild:
+      const repo2 = new SqliteRepository({ path });
+      try {
+        assert.deepStrictEqual(await repo2.countMessages("bot"), 1);
+      } finally {
+        repo2.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not touch fresh databases", async () => {
+    const repo = createSqliteRepository();
+    try {
+      await repo.migrate("bot");
+      assert.deepStrictEqual(await repo.countMessages("bot"), 0);
+    } finally {
+      repo.close();
+    }
+  });
+});
+
+describe("SqliteRepository.migrate() with empty-string identifiers", () => {
+  test("does not reassign data stored under an empty identifier", async () => {
+    const repo = createSqliteRepository();
+    try {
+      // A fresh 0.5 database has no legacy marker, so data stored under
+      // the empty-string identifier must never be adopted by migrate():
+      await repo.setKeyPairs("", keyPairs);
+      await repo.migrate("bot");
+      assert.deepStrictEqual(await repo.getKeyPairs(""), keyPairs);
+      assert.deepStrictEqual(await repo.getKeyPairs("bot"), undefined);
+    } finally {
+      repo.close();
+    }
+  });
+
+  test("adopts legacy rows only once", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "botkit-sqlite-test-"));
+    try {
+      const path = join(dir, "legacy.db");
+      const db = new DatabaseSync(path);
+      db.exec(`
+        CREATE TABLE key_pairs (
+          id INTEGER PRIMARY KEY,
+          private_key_jwk TEXT NOT NULL,
+          public_key_jwk TEXT NOT NULL
+        )
+      `);
+      db.close();
+
+      const repo = new SqliteRepository({ path });
+      try {
+        await repo.migrate("bot");
+        // After adoption, rows written under the empty-string identifier
+        // stay put even if migrate() is called again:
+        await repo.setKeyPairs("", keyPairs);
+        await repo.migrate("bot2");
+        assert.deepStrictEqual(await repo.getKeyPairs(""), keyPairs);
+        assert.deepStrictEqual(await repo.getKeyPairs("bot2"), undefined);
+      } finally {
+        repo.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });
