@@ -54,6 +54,12 @@ import {
   Update,
 } from "@fedify/vocab";
 import type { Bot, CreateBotOptions, PagesOptions } from "./bot.ts";
+import type {
+  BotDispatcher,
+  BotGroup,
+  BotProfile,
+  CreateBotGroupOptions,
+} from "./instance.ts";
 import {
   type CustomEmoji,
   type DeferredCustomEmoji,
@@ -111,7 +117,34 @@ export interface BotImplOptions<TContextData>
    * of BotKit 0.4 and earlier.
    */
   instance?: InstanceImpl<TContextData>;
+
+  /**
+   * Whether the bot is a transient view of a dynamically resolved bot,
+   * which is not registered on the instance.
+   */
+  transient?: boolean;
 }
+
+/**
+ * The names of the event handler properties of {@link BotEventHandlers}.
+ * @internal
+ */
+export const botEventHandlerNames = [
+  "onFollow",
+  "onUnfollow",
+  "onAcceptFollow",
+  "onRejectFollow",
+  "onMention",
+  "onReply",
+  "onQuote",
+  "onMessage",
+  "onSharedMessage",
+  "onLike",
+  "onUnlike",
+  "onReact",
+  "onUnreact",
+  "onVote",
+] as const;
 
 export class BotImpl<TContextData> implements Bot<TContextData> {
   readonly identifier: string;
@@ -215,7 +248,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       compatMode: true,
     });
     this.repository = this.instance.repository.forIdentifier(this.identifier);
-    this.instance.addBot(this);
+    if (!options.transient) this.instance.addBot(this);
   }
 
   async getActorSummary(
@@ -1422,5 +1455,105 @@ export class MigrationGatedRepository implements Repository {
   async migrate(identifier: string): Promise<void> {
     await this.#migration;
     await this.#repository.migrate?.(identifier);
+  }
+}
+
+/**
+ * The internal implementation of a {@link BotGroup}: a registry of event
+ * handlers shared by every bot its dispatcher resolves.
+ * @internal
+ */
+export class BotGroupImpl<TContextData> implements BotGroup<TContextData> {
+  readonly instance: InstanceImpl<TContextData>;
+  readonly dispatcher: BotDispatcher<TContextData>;
+  readonly mapUsername?: (
+    ctx: Context<TContextData>,
+    username: string,
+  ) => string | null | Promise<string | null>;
+
+  onFollow?: FollowEventHandler<TContextData>;
+  onUnfollow?: UnfollowEventHandler<TContextData>;
+  onAcceptFollow?: AcceptEventHandler<TContextData>;
+  onRejectFollow?: RejectEventHandler<TContextData>;
+  onMention?: MentionEventHandler<TContextData>;
+  onReply?: ReplyEventHandler<TContextData>;
+  onQuote?: QuoteEventHandler<TContextData>;
+  onMessage?: MessageEventHandler<TContextData>;
+  onSharedMessage?: SharedMessageEventHandler<TContextData>;
+  onLike?: LikeEventHandler<TContextData>;
+  onUnlike?: UnlikeEventHandler<TContextData>;
+  onReact?: ReactionEventHandler<TContextData>;
+  onUnreact?: UndoneReactionEventHandler<TContextData>;
+  onVote?: VoteEventHandler<TContextData>;
+
+  constructor(
+    instance: InstanceImpl<TContextData>,
+    dispatcher: BotDispatcher<TContextData>,
+    options: CreateBotGroupOptions<TContextData> = {},
+  ) {
+    this.instance = instance;
+    this.dispatcher = dispatcher;
+    this.mapUsername = options.mapUsername;
+  }
+
+  async getSession(
+    origin: string | URL,
+    identifier: string,
+    contextData?: TContextData,
+  ): Promise<Session<TContextData>> {
+    const ctx = this.instance.federation.createContext(
+      new URL(origin),
+      contextData!,
+    );
+    const bot = await this.instance.resolveBot(ctx, identifier);
+    if (bot == null || !(bot instanceof GroupBotImpl) || bot.group !== this) {
+      throw new TypeError(
+        `The group's dispatcher does not resolve the identifier: ${identifier}`,
+      );
+    }
+    return bot.getSession(ctx);
+  }
+}
+
+/**
+ * A transient per-bot view of a dynamically resolved bot.  It behaves like
+ * a regular {@link BotImpl}, except that its event handlers are read live
+ * from the owning {@link BotGroupImpl} at dispatch time, so handlers
+ * registered on the group after a bot was resolved still fire.  Views are
+ * not registered on the instance and live only as long as the resolution
+ * cache of the request that produced them.
+ * @internal
+ */
+export class GroupBotImpl<TContextData> extends BotImpl<TContextData> {
+  readonly group: BotGroupImpl<TContextData>;
+
+  constructor(
+    group: BotGroupImpl<TContextData>,
+    identifier: string,
+    profile: BotProfile<TContextData>,
+  ) {
+    super({
+      instance: group.instance,
+      transient: true,
+      identifier,
+      kv: group.instance.kv,
+      class: profile.class,
+      username: profile.username,
+      name: profile.name,
+      summary: profile.summary,
+      icon: profile.icon,
+      image: profile.image,
+      properties: profile.properties,
+      followerPolicy: profile.followerPolicy,
+    });
+    this.group = group;
+    for (const name of botEventHandlerNames) {
+      // Class fields would shadow prototype accessors, so the live views
+      // into the group's handlers are defined per instance:
+      globalThis.Object.defineProperty(this, name, {
+        get: () => group[name],
+        configurable: true,
+      });
+    }
   }
 }

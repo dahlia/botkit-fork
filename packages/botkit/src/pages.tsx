@@ -657,17 +657,15 @@ function withBot(
     const { instance, contextData } = c.env;
     const username = c.req.param("handle")?.slice(1);
     if (username == null) return c.notFound();
-    for (const bot of instance.bots) {
-      if (bot.username === username) {
-        return await page(
-          c,
-          bot,
-          contextData,
-          `/@${encodeURIComponent(username)}`,
-        );
-      }
-    }
-    return c.notFound();
+    const ctx = instance.federation.createContext(c.req.raw, contextData);
+    const bot = await instance.resolveBotByUsername(ctx, username);
+    if (bot == null) return c.notFound();
+    return await page(
+      c,
+      bot,
+      contextData,
+      `/@${encodeURIComponent(username)}`,
+    );
   };
 }
 

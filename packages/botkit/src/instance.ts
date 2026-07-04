@@ -14,17 +14,19 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import type {
+  Context,
   Federation,
   KvStore,
   MessageQueue,
 } from "@fedify/fedify/federation";
 import type { Software } from "@fedify/fedify/nodeinfo";
 import type { Application, Image, Service } from "@fedify/vocab";
-import type { Bot, PagesOptions } from "./bot.ts";
+import type { Bot, BotEventHandlers, PagesOptions } from "./bot.ts";
 import type { CustomEmoji, DeferredCustomEmoji } from "./emoji.ts";
 import { InstanceImpl } from "./instance-impl.ts";
 export { INSTANCE_ACTOR_IDENTIFIER } from "./instance-impl.ts";
 import type { Repository } from "./repository.ts";
+import type { Session } from "./session.ts";
 import type { Text } from "./text.ts";
 
 /**
@@ -94,6 +96,71 @@ export interface BotProfile<TContextData> {
 }
 
 /**
+ * A function that resolves the profile of a dynamically hosted bot from its
+ * identifier.  It is invoked whenever an identifier needs to be resolved,
+ * e.g. for dispatching an actor or routing an incoming activity, so it
+ * should be fast; look profiles up from a database rather than computing
+ * them expensively.
+ * @param ctx The Fedify context.
+ * @param identifier The identifier to resolve.
+ * @returns The profile of the bot, or `null` if the dispatcher does not
+ *          recognize the identifier.
+ * @since 0.5.0
+ */
+export type BotDispatcher<TContextData> = (
+  ctx: Context<TContextData>,
+  identifier: string,
+) => BotProfile<TContextData> | null | Promise<BotProfile<TContextData> | null>;
+
+/**
+ * Options for creating a dynamic {@link BotGroup}.
+ * @since 0.5.0
+ */
+export interface CreateBotGroupOptions<TContextData> {
+  /**
+   * Maps a WebFinger username to the identifier of a bot the group's
+   * dispatcher can resolve.  If omitted, usernames are assumed to equal
+   * identifiers.
+   * @param ctx The Fedify context.
+   * @param username The username to map.
+   * @returns The identifier of the bot, or `null` if the username does not
+   *          belong to this group.
+   */
+  mapUsername?(
+    ctx: Context<TContextData>,
+    username: string,
+  ): string | null | Promise<string | null>;
+}
+
+/**
+ * A group of dynamically hosted bots sharing the same event handlers.
+ * A group is created by passing a {@link BotDispatcher} to
+ * {@link Instance.createBot}; the dispatcher resolves individual bots
+ * on demand, and the handlers registered on the group are invoked for
+ * every bot it resolves.  Handlers can tell which bot they are running as
+ * through {@link Session.bot}.
+ * @since 0.5.0
+ */
+export interface BotGroup<TContextData> extends BotEventHandlers<TContextData> {
+  /**
+   * Gets a new session to control one of the group's bots for a specific
+   * origin and context data.
+   * @param origin The origin of the session.  Even if a URL with some path
+   *               or query is passed, only the origin part will be used.
+   * @param identifier The identifier of the bot to control.
+   * @param contextData The context data to pass to the federation.
+   * @returns The session for the bot.
+   * @throws {TypeError} If the group's dispatcher does not resolve
+   *                     the identifier.
+   */
+  getSession(
+    origin: string | URL,
+    identifier: string,
+    contextData?: TContextData,
+  ): Promise<Session<TContextData>>;
+}
+
+/**
  * A server instance that can host multiple bots.  An instance owns the
  * shared infrastructure—the key–value store, the message queue, the
  * repository, and HTTP handling—while each bot hosted on it has its own
@@ -135,6 +202,40 @@ export interface Instance<TContextData> {
     identifier: string,
     profile: BotProfile<TContextData>,
   ): Bot<TContextData>;
+
+  /**
+   * Creates a group of dynamic bots resolved on demand by a dispatcher
+   * function.  This suits scenarios like “one bot per region,” where
+   * thousands of potential bots are backed by a database rather than
+   * declared up front.
+   *
+   * @example
+   * ```typescript
+   * const weatherBots = instance.createBot(async (ctx, identifier) => {
+   *   // Return null for identifiers this dispatcher doesn't handle:
+   *   if (!identifier.startsWith("weather_")) return null;
+   *   const region = await db.getRegion(identifier.slice("weather_".length));
+   *   if (region == null) return null;
+   *   return { username: identifier, name: `${region.name} Weather Bot` };
+   * });
+   *
+   * weatherBots.onMention = async (session, message) => {
+   *   // session.bot tells which bot is being mentioned:
+   *   const region = session.bot.identifier.slice("weather_".length);
+   *   await message.reply(text`The weather in ${region} is sunny!`);
+   * };
+   * ```
+   *
+   * @param dispatcher A function resolving a bot profile from an
+   *                   identifier, or `null` for identifiers it does not
+   *                   recognize.
+   * @param options The options for the group.
+   * @returns The created bot group.
+   */
+  createBot(
+    dispatcher: BotDispatcher<TContextData>,
+    options?: CreateBotGroupOptions<TContextData>,
+  ): BotGroup<TContextData>;
 
   /**
    * The fetch API for handling HTTP requests.  You can pass this to an HTTP
@@ -265,6 +366,31 @@ export function createInstance<TContextData = void>(
 ): TContextData extends void ? InstanceWithVoidContextData
   : Instance<TContextData> {
   const instance = new InstanceImpl<TContextData>(options);
+  function createBotFn(
+    identifier: string,
+    profile: BotProfile<TContextData>,
+  ): Bot<TContextData>;
+  function createBotFn(
+    dispatcher: BotDispatcher<TContextData>,
+    options?: CreateBotGroupOptions<TContextData>,
+  ): BotGroup<TContextData>;
+  function createBotFn(
+    identifierOrDispatcher: string | BotDispatcher<TContextData>,
+    profileOrOptions?:
+      | BotProfile<TContextData>
+      | CreateBotGroupOptions<TContextData>,
+  ): Bot<TContextData> | BotGroup<TContextData> {
+    if (typeof identifierOrDispatcher === "string") {
+      return instance.createBot(
+        identifierOrDispatcher,
+        profileOrOptions as BotProfile<TContextData>,
+      );
+    }
+    return instance.createBot(
+      identifierOrDispatcher,
+      profileOrOptions as CreateBotGroupOptions<TContextData> | undefined,
+    );
+  }
   // Since `deno serve` does not recognize a class instance having fetch(),
   // we wrap an InstanceImpl instance with a plain object.
   // See also https://github.com/denoland/deno/issues/24062
@@ -273,12 +399,7 @@ export function createInstance<TContextData = void>(
     get federation(): Federation<TContextData> {
       return instance.federation;
     },
-    createBot(
-      identifier: string,
-      profile: BotProfile<TContextData>,
-    ): Bot<TContextData> {
-      return instance.createBot(identifier, profile);
-    },
+    createBot: createBotFn,
     fetch(request: Request, contextData: TContextData): Promise<Response> {
       return instance.fetch(request, contextData);
     },

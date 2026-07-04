@@ -53,10 +53,13 @@ import { getXForwardedRequest } from "x-forwarded-fetch";
 import metadata from "../deno.json" with { type: "json" };
 import { BotImpl } from "./bot-impl.ts";
 import type { Bot, PagesOptions } from "./bot.ts";
-import { wrapBotImpl } from "./bot-impl.ts";
+import { BotGroupImpl, GroupBotImpl, wrapBotImpl } from "./bot-impl.ts";
 import type { CustomEmoji, DeferredCustomEmoji } from "./emoji.ts";
 import type {
+  BotDispatcher,
+  BotGroup,
   BotProfile,
+  CreateBotGroupOptions,
   CreateInstanceOptions,
   Instance,
 } from "./instance.ts";
@@ -126,6 +129,18 @@ export class InstanceImpl<TContextData>
   readonly compatMode: boolean;
 
   readonly #bots: Map<string, BotImpl<TContextData>> = new Map();
+  readonly #groups: BotGroupImpl<TContextData>[] = [];
+
+  /**
+   * Memoizes dynamic bot resolution per Fedify context, which is stable
+   * for the duration of one HTTP dispatch or one queue-delivered inbox
+   * activity, so a dispatcher is invoked at most once per identifier per
+   * request.  Entries die with their context.
+   */
+  readonly #resolutionCache: WeakMap<
+    Context<TContextData>,
+    Map<string, BotImpl<TContextData> | null>
+  > = new WeakMap();
 
   constructor(options: InstanceImplOptions) {
     this.kv = options.kv;
@@ -155,98 +170,116 @@ export class InstanceImpl<TContextData>
     this.federation
       .setActorDispatcher(
         "/ap/actor/{identifier}",
-        (ctx, identifier) => {
+        async (ctx, identifier) => {
           if (!this.compatMode && identifier === INSTANCE_ACTOR_IDENTIFIER) {
-            return this.#dispatchInstanceActor(ctx);
+            return await this.#dispatchInstanceActor(ctx);
           }
-          return this.getBot(identifier)?.dispatchActor(ctx, identifier) ??
-            null;
+          const bot = await this.resolveBot(ctx, identifier);
+          return await bot?.dispatchActor(ctx, identifier) ?? null;
         },
       )
       .mapHandle((ctx, username) => this.mapHandle(ctx, username))
-      .setKeyPairsDispatcher((ctx, identifier) => {
+      .setKeyPairsDispatcher(async (ctx, identifier) => {
         if (!this.compatMode && identifier === INSTANCE_ACTOR_IDENTIFIER) {
-          return this.#dispatchInstanceActorKeyPairs();
+          return await this.#dispatchInstanceActorKeyPairs();
         }
-        return this.getBot(identifier)
-          ?.dispatchActorKeyPairs(ctx, identifier) ?? [];
+        const bot = await this.resolveBot(ctx, identifier);
+        return await bot?.dispatchActorKeyPairs(ctx, identifier) ?? [];
       });
     this.federation
       .setFollowersDispatcher(
         "/ap/actor/{identifier}/followers",
-        (ctx, identifier, cursor) =>
-          this.getBot(identifier)
-            ?.dispatchFollowers(ctx, identifier, cursor) ?? null,
+        async (ctx, identifier, cursor) => {
+          const bot = await this.resolveBot(ctx, identifier);
+          return await bot?.dispatchFollowers(ctx, identifier, cursor) ??
+            null;
+        },
       )
-      .setFirstCursor((ctx, identifier) =>
-        this.getBot(identifier)?.getFollowersFirstCursor(ctx, identifier) ??
-          null
-      )
-      .setCounter((ctx, identifier) =>
-        this.getBot(identifier)?.countFollowers(ctx, identifier) ?? null
-      );
+      .setFirstCursor(async (ctx, identifier) => {
+        const bot = await this.resolveBot(ctx, identifier);
+        return bot?.getFollowersFirstCursor(ctx, identifier) ?? null;
+      })
+      .setCounter(async (ctx, identifier) => {
+        const bot = await this.resolveBot(ctx, identifier);
+        return await bot?.countFollowers(ctx, identifier) ?? null;
+      });
     this.federation
       .setOutboxDispatcher(
         "/ap/actor/{identifier}/outbox",
-        (ctx, identifier, cursor) =>
-          this.getBot(identifier)?.dispatchOutbox(ctx, identifier, cursor) ??
-            null,
+        async (ctx, identifier, cursor) => {
+          const bot = await this.resolveBot(ctx, identifier);
+          return await bot?.dispatchOutbox(ctx, identifier, cursor) ?? null;
+        },
       )
-      .setFirstCursor((ctx, identifier) =>
-        this.getBot(identifier)?.getOutboxFirstCursor(ctx, identifier) ?? null
-      )
-      .setCounter((ctx, identifier) =>
-        this.getBot(identifier)?.countOutbox(ctx, identifier) ?? null
-      );
+      .setFirstCursor(async (ctx, identifier) => {
+        const bot = await this.resolveBot(ctx, identifier);
+        return bot?.getOutboxFirstCursor(ctx, identifier) ?? null;
+      })
+      .setCounter(async (ctx, identifier) => {
+        const bot = await this.resolveBot(ctx, identifier);
+        return await bot?.countOutbox(ctx, identifier) ?? null;
+      });
     this.federation
       .setObjectDispatcher(
         Follow,
         "/ap/actor/{identifier}/follow/{id}",
-        (ctx, values) =>
-          this.getBot(values.identifier)?.dispatchFollow(ctx, values) ?? null,
+        async (ctx, values) => {
+          const bot = await this.resolveBot(ctx, values.identifier);
+          return await bot?.dispatchFollow(ctx, values) ?? null;
+        },
       )
-      .authorize((ctx, values) =>
-        this.getBot(values.identifier)?.authorizeFollow(ctx, values) ?? false
-      );
+      .authorize(async (ctx, values) => {
+        const bot = await this.resolveBot(ctx, values.identifier);
+        return await bot?.authorizeFollow(ctx, values) ?? false;
+      });
     this.federation.setObjectDispatcher(
       Create,
       "/ap/actor/{identifier}/create/{id}",
-      (ctx, values) =>
-        this.getBot(values.identifier)?.dispatchCreate(ctx, values) ?? null,
+      async (ctx, values) => {
+        const bot = await this.resolveBot(ctx, values.identifier);
+        return await bot?.dispatchCreate(ctx, values) ?? null;
+      },
     );
     this.federation.setObjectDispatcher(
       Article,
       "/ap/actor/{identifier}/article/{id}",
-      (ctx, values) =>
-        this.getBot(values.identifier)
-          ?.dispatchMessage(Article, ctx, values.id) ?? null,
+      async (ctx, values) => {
+        const bot = await this.resolveBot(ctx, values.identifier);
+        return await bot?.dispatchMessage(Article, ctx, values.id) ?? null;
+      },
     );
     this.federation.setObjectDispatcher(
       ChatMessage,
       "/ap/actor/{identifier}/chat-message/{id}",
-      (ctx, values) =>
-        this.getBot(values.identifier)
-          ?.dispatchMessage(ChatMessage, ctx, values.id) ?? null,
+      async (ctx, values) => {
+        const bot = await this.resolveBot(ctx, values.identifier);
+        return await bot?.dispatchMessage(ChatMessage, ctx, values.id) ??
+          null;
+      },
     );
     this.federation.setObjectDispatcher(
       Note,
       "/ap/actor/{identifier}/note/{id}",
-      (ctx, values) =>
-        this.getBot(values.identifier)
-          ?.dispatchMessage(Note, ctx, values.id) ?? null,
+      async (ctx, values) => {
+        const bot = await this.resolveBot(ctx, values.identifier);
+        return await bot?.dispatchMessage(Note, ctx, values.id) ?? null;
+      },
     );
     this.federation.setObjectDispatcher(
       Question,
       "/ap/actor/{identifier}/question/{id}",
-      (ctx, values) =>
-        this.getBot(values.identifier)
-          ?.dispatchMessage(Question, ctx, values.id) ?? null,
+      async (ctx, values) => {
+        const bot = await this.resolveBot(ctx, values.identifier);
+        return await bot?.dispatchMessage(Question, ctx, values.id) ?? null;
+      },
     );
     this.federation.setObjectDispatcher(
       Announce,
       "/ap/actor/{identifier}/announce/{id}",
-      (ctx, values) =>
-        this.getBot(values.identifier)?.dispatchAnnounce(ctx, values) ?? null,
+      async (ctx, values) => {
+        const bot = await this.resolveBot(ctx, values.identifier);
+        return await bot?.dispatchAnnounce(ctx, values) ?? null;
+      },
     );
     this.federation.setObjectDispatcher(
       APEmoji,
@@ -312,6 +345,40 @@ export class InstanceImpl<TContextData>
   }
 
   /**
+   * Resolves a bot by its identifier: bots registered statically win, then
+   * the dynamic bot groups are probed in their registration order.
+   * Dynamic resolutions are memoized per context.
+   * @param ctx The Fedify context of the resolution.
+   * @param identifier The identifier of the bot to resolve.
+   * @returns The resolved bot, or `null` if no bot has the identifier.
+   */
+  async resolveBot(
+    ctx: Context<TContextData>,
+    identifier: string,
+  ): Promise<BotImpl<TContextData> | null> {
+    const staticBot = this.#bots.get(identifier);
+    if (staticBot != null) return staticBot;
+    if (this.#groups.length < 1) return null;
+    let cache = this.#resolutionCache.get(ctx);
+    if (cache == null) {
+      cache = new Map();
+      this.#resolutionCache.set(ctx, cache);
+    }
+    const cached = cache.get(identifier);
+    if (cached !== undefined) return cached;
+    let resolved: BotImpl<TContextData> | null = null;
+    for (const group of this.#groups) {
+      const profile = await group.dispatcher(ctx, identifier);
+      if (profile != null) {
+        resolved = new GroupBotImpl(group, identifier, profile);
+        break;
+      }
+    }
+    cache.set(identifier, resolved);
+    return resolved;
+  }
+
+  /**
    * Every bot hosted on the instance.
    */
   get bots(): Iterable<BotImpl<TContextData>> {
@@ -332,10 +399,33 @@ export class InstanceImpl<TContextData>
   createBot(
     identifier: string,
     profile: BotProfile<TContextData>,
-  ): Bot<TContextData> {
+  ): Bot<TContextData>;
+  createBot(
+    dispatcher: BotDispatcher<TContextData>,
+    options?: CreateBotGroupOptions<TContextData>,
+  ): BotGroup<TContextData>;
+  createBot(
+    identifierOrDispatcher: string | BotDispatcher<TContextData>,
+    profileOrOptions?:
+      | BotProfile<TContextData>
+      | CreateBotGroupOptions<TContextData>,
+  ): Bot<TContextData> | BotGroup<TContextData> {
+    if (typeof identifierOrDispatcher !== "string") {
+      const group = new BotGroupImpl(
+        this,
+        identifierOrDispatcher,
+        profileOrOptions as CreateBotGroupOptions<TContextData> | undefined,
+      );
+      this.#groups.push(group);
+      return group;
+    }
+    const profile = profileOrOptions as BotProfile<TContextData> | undefined;
+    if (profile == null || profile.username == null) {
+      throw new TypeError("The bot profile with a username is required.");
+    }
     const bot = new BotImpl<TContextData>({
       instance: this,
-      identifier,
+      identifier: identifierOrDispatcher,
       kv: this.kv,
       class: profile.class,
       username: profile.username,
@@ -349,12 +439,47 @@ export class InstanceImpl<TContextData>
     return wrapBotImpl(bot);
   }
 
-  mapHandle(
-    _ctx: Context<TContextData>,
+  /**
+   * Resolves a bot hosted on the instance by its username, including
+   * dynamically resolved bots.
+   * @param ctx The Fedify context of the resolution.
+   * @param username The username of the bot to resolve.
+   * @returns The resolved bot, or `null` if no bot has the username.
+   */
+  async resolveBotByUsername(
+    ctx: Context<TContextData>,
     username: string,
-  ): string | null {
+  ): Promise<BotImpl<TContextData> | null> {
+    const identifier = await this.mapHandle(ctx, username);
+    if (identifier == null) return null;
+    return await this.resolveBot(ctx, identifier);
+  }
+
+  async mapHandle(
+    ctx: Context<TContextData>,
+    username: string,
+  ): Promise<string | null> {
     for (const bot of this.#bots.values()) {
       if (bot.username === username) return bot.identifier;
+    }
+    for (const group of this.#groups) {
+      if (group.mapUsername == null) continue;
+      const identifier = await group.mapUsername(ctx, username);
+      if (identifier == null) continue;
+      // The mapping must resolve to a bot of the very group that mapped it;
+      // otherwise a group could hijack usernames of other bots:
+      const bot = await this.resolveBot(ctx, identifier);
+      if (bot instanceof GroupBotImpl && bot.group === group) {
+        return identifier;
+      }
+    }
+    // Unless a group maps usernames explicitly, usernames are assumed to
+    // equal identifiers.  The fallback applies only to dynamic groups
+    // without a mapUsername; a static bot's internal identifier is not
+    // a public username:
+    const bot = await this.resolveBot(ctx, username);
+    if (bot instanceof GroupBotImpl && bot.group.mapUsername == null) {
+      return username;
     }
     return null;
   }
@@ -390,13 +515,13 @@ export class InstanceImpl<TContextData>
   ): Promise<BotImpl<TContextData>[]> {
     if (this.compatMode) return [...this.#bots.values()];
     if (ctx.recipient != null) {
-      const bot = this.getBot(ctx.recipient);
+      const bot = await this.resolveBot(ctx, ctx.recipient);
       return bot == null ? [] : [bot];
     }
     const identifiers = new Set(await resolve());
     const bots: BotImpl<TContextData>[] = [];
     for (const identifier of identifiers) {
-      const bot = this.getBot(identifier);
+      const bot = await this.resolveBot(ctx, identifier);
       if (bot != null) bots.push(bot);
     }
     return bots;

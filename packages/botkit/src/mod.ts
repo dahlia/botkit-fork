@@ -33,7 +33,10 @@ export {
   type Software,
 } from "./bot.ts";
 export {
+  type BotDispatcher,
+  type BotGroup,
   type BotProfile,
+  type CreateBotGroupOptions,
   createInstance,
   type CreateInstanceOptions,
   type Instance,
