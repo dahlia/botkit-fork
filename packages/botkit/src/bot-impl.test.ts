@@ -3086,3 +3086,160 @@ test("BotImpl.onVote()", async (t) => {
 });
 
 // cSpell: ignore thumbsup
+
+test("BotImpl.fetch() redirects legacy object URIs", async (t) => {
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    username: "bot",
+  });
+
+  await t.test("redirects GET requests", async () => {
+    const response = await bot.fetch(
+      new Request(
+        "https://example.com/ap/follow/2ca58e2a-a34a-43e6-81af-c4f21ffed0c5",
+      ),
+      undefined,
+    );
+    assert.deepStrictEqual(response.status, 301);
+    assert.deepStrictEqual(
+      response.headers.get("Location"),
+      "https://example.com/ap/actor/bot/follow/2ca58e2a-a34a-43e6-81af-c4f21ffed0c5",
+    );
+  });
+
+  await t.test("redirects HEAD requests", async () => {
+    const response = await bot.fetch(
+      new Request("https://example.com/ap/note/123", { method: "HEAD" }),
+      undefined,
+    );
+    assert.deepStrictEqual(response.status, 301);
+    assert.deepStrictEqual(
+      response.headers.get("Location"),
+      "https://example.com/ap/actor/bot/note/123",
+    );
+  });
+
+  await t.test("preserves the query string", async () => {
+    const response = await bot.fetch(
+      new Request("https://example.com/ap/note/123?foo=bar"),
+      undefined,
+    );
+    assert.deepStrictEqual(response.status, 301);
+    assert.deepStrictEqual(
+      response.headers.get("Location"),
+      "https://example.com/ap/actor/bot/note/123?foo=bar",
+    );
+  });
+
+  await t.test("does not redirect POST requests", async () => {
+    const response = await bot.fetch(
+      new Request("https://example.com/ap/note/123", { method: "POST" }),
+      undefined,
+    );
+    assert.notDeepStrictEqual(response.status, 301);
+  });
+
+  await t.test("does not redirect canonical or unrelated paths", async () => {
+    const canonical = await bot.fetch(
+      new Request("https://example.com/ap/actor/bot/note/123"),
+      undefined,
+    );
+    assert.notDeepStrictEqual(canonical.status, 301);
+    const inbox = await bot.fetch(
+      new Request("https://example.com/ap/inbox"),
+      undefined,
+    );
+    assert.notDeepStrictEqual(inbox.status, 301);
+  });
+});
+
+test("BotImpl.onFollowAccepted() with canonical follow URIs", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const accepted: Actor[] = [];
+  bot.onAcceptFollow = (_, actor) => void (accepted.push(actor));
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  await repository.addSentFollow(
+    "bot",
+    "9d952a10-77e6-46bd-a48a-208b47e5e2bb",
+    new Follow({
+      id: new URL(
+        "https://example.com/ap/actor/bot/follow/9d952a10-77e6-46bd-a48a-208b47e5e2bb",
+      ),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: new Person({
+        id: new URL("https://example.com/ap/actor/john"),
+        preferredUsername: "john",
+      }),
+    }),
+  );
+  await bot.onFollowAccepted(
+    ctx,
+    new Accept({
+      actor: new URL("https://example.com/ap/actor/john"),
+      object: new URL(
+        "https://example.com/ap/actor/bot/follow/9d952a10-77e6-46bd-a48a-208b47e5e2bb",
+      ),
+    }),
+  );
+  assert.deepStrictEqual(accepted.length, 1);
+  assert.deepStrictEqual(
+    accepted[0].id,
+    new URL("https://example.com/ap/actor/john"),
+  );
+  assert.ok(
+    await repository.getFollowee(
+      "bot",
+      new URL("https://example.com/ap/actor/john"),
+    ) != null,
+  );
+});
+
+test("BotImpl.onLiked() with legacy message URIs", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const likes: Like<void>[] = [];
+  bot.onLike = (_, like) => void (likes.push(like));
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+  // The message is stored with a canonical URI, but a remote server that
+  // saw it before the upgrade may still refer to it by its legacy URI:
+  await repository.addMessage(
+    "bot",
+    messageId,
+    new Create({
+      id: new URL(
+        `https://example.com/ap/actor/bot/create/${messageId}`,
+      ),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      to: PUBLIC_COLLECTION,
+      object: new Note({
+        id: new URL(`https://example.com/ap/actor/bot/note/${messageId}`),
+        attribution: new URL("https://example.com/ap/actor/bot"),
+        to: PUBLIC_COLLECTION,
+        content: "Hello, world!",
+      }),
+    }),
+  );
+  await bot.onLiked(
+    ctx,
+    new RawLike({
+      id: new URL("https://remote.example/likes/1"),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: new URL(`https://example.com/ap/note/${messageId}`),
+    }),
+  );
+  assert.deepStrictEqual(likes.length, 1);
+  assert.deepStrictEqual(
+    likes[0].message.id,
+    new URL(`https://example.com/ap/actor/bot/note/${messageId}`),
+  );
+});

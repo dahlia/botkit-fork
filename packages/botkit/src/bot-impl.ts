@@ -100,7 +100,7 @@ import {
   KvRepository,
   type Uuid,
 } from "./repository.ts";
-import { parseLocalUri } from "./uri.ts";
+import { parseLocalUri, rewriteLegacyObjectPath } from "./uri.ts";
 import { SessionImpl } from "./session-impl.ts";
 import type { Session } from "./session.ts";
 import type { Text } from "./text.ts";
@@ -1213,6 +1213,25 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       request = await getXForwardedRequest(request);
     }
     const url = new URL(request.url);
+    if (
+      (request.method === "GET" || request.method === "HEAD") &&
+      this.legacyObjectUrisIdentifier != null
+    ) {
+      // Dereferenceable requests to object URIs in the legacy (pre-0.5)
+      // format are permanently redirected to their canonical URIs:
+      const rewrittenPath = rewriteLegacyObjectPath(
+        url.pathname,
+        this.legacyObjectUrisIdentifier,
+      );
+      if (rewrittenPath != null) {
+        const location = new URL(url.href);
+        location.pathname = rewrittenPath;
+        return new Response(null, {
+          status: 301,
+          headers: { Location: location.href },
+        });
+      }
+    }
     if (
       url.pathname.startsWith("/.well-known/") ||
       url.pathname.startsWith("/ap/") ||
