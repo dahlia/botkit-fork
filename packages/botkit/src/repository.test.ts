@@ -141,6 +141,28 @@ test("KvRepository uses expiring follower locks", async () => {
   assert.ok(kv.lockOptions.every((options) => options.ttl != null));
 });
 
+test("KvRepository deletes stale follower indexes", async () => {
+  const kv = new MemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/index-test"),
+    preferredUsername: "index-test",
+  });
+  const follow = new URL("https://example.com/ap/follow/index-test");
+  const indexKey: KvKey = [
+    "_botkit",
+    "followRequests",
+    "followers",
+    follower.id!.href,
+  ];
+
+  await repo.addFollower(follow, follower);
+  assert.deepStrictEqual(await kv.get(indexKey), [follow.href]);
+
+  await repo.removeFollower(follow, follower.id!);
+  assert.deepStrictEqual(await kv.get(indexKey), undefined);
+});
+
 for (const name in factories) {
   const factory = factories[name];
 

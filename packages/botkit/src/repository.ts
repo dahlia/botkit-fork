@@ -608,6 +608,7 @@ export class KvRepository implements Repository {
       list.filter((id) => id !== followerId),
     );
     await this.kv.delete([...this.prefixes.followers, followerId]);
+    await this.kv.delete(this.getFollowerFollowRequestsKey(followerId));
     return true;
   }
 
