@@ -342,8 +342,12 @@ export class InstanceImpl<TContextData>
         `A bot with the identifier already exists: ${bot.identifier}`,
       );
     }
+    // Fediverse usernames are looked up case-insensitively (WebFinger
+    // acct: resources and mentions vary in casing), so two usernames
+    // differing only in case would be indistinguishable:
+    const username = bot.username.toLowerCase();
     for (const existing of this.#bots.values()) {
-      if (existing.username === bot.username) {
+      if (existing.username.toLowerCase() === username) {
         throw new TypeError(
           `A bot with the username already exists: ${bot.username}`,
         );
@@ -482,8 +486,11 @@ export class InstanceImpl<TContextData>
     ctx: Context<TContextData>,
     username: string,
   ): Promise<string | null> {
+    // WebFinger lookups and profile page visits vary in casing, so static
+    // usernames are matched case-insensitively:
+    const normalized = username.toLowerCase();
     for (const bot of this.#bots.values()) {
-      if (bot.username === username) return bot.identifier;
+      if (bot.username.toLowerCase() === normalized) return bot.identifier;
     }
     for (const group of this.#groups) {
       if (group.mapUsername == null) continue;

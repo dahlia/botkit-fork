@@ -75,6 +75,29 @@ describe("createInstance()", () => {
     );
   });
 
+  test("rejects usernames that differ only in case", () => {
+    const instance = createInstance<void>({ kv: new MemoryKvStore() });
+    instance.createBot("bot", { username: "mybot" });
+    // Fediverse usernames are matched case-insensitively (WebFinger acct:
+    // lookups and mentions vary in casing), so two bots whose usernames
+    // differ only in case would be indistinguishable:
+    assert.throws(
+      () => instance.createBot("other", { username: "MyBot" }),
+      TypeError,
+    );
+  });
+
+  test("serves WebFinger regardless of the username casing", async () => {
+    const instance = createInstance<void>({ kv: new MemoryKvStore() });
+    instance.createBot("bot", { username: "mybot" });
+    const response = await instance.fetch(
+      new Request(
+        "https://example.com/.well-known/webfinger?resource=acct:MyBot@example.com",
+      ),
+    );
+    assert.deepStrictEqual(response.status, 200);
+  });
+
   test("registers event handlers through the returned bot", () => {
     const instance = createInstance<void>({ kv: new MemoryKvStore() });
     const bot = instance.createBot("bot", { username: "mybot" });
