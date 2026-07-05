@@ -24,6 +24,8 @@ import { Emoji, Hashtag, Image, Mention, Person, Service } from "@fedify/vocab";
 import assert from "node:assert";
 import { describe, test } from "node:test";
 import { BotImpl } from "./bot-impl.ts";
+import { InstanceImpl } from "./instance-impl.ts";
+import { MemoryRepository } from "./repository.ts";
 import type { BotWithVoidContextData } from "./bot.ts";
 import type { CustomEmoji, DeferredCustomEmoji } from "./emoji.ts";
 import type { Session } from "./session.ts";
@@ -543,6 +545,54 @@ test("hashtag()", async () => {
     new URL("https://example.com/tags/fediverse"),
   );
   assert.deepStrictEqual(t.getCachedObjects(), []);
+});
+
+test("hashtag() on a multi-bot instance", async () => {
+  const instance = new InstanceImpl<void>({
+    kv: new MemoryKvStore(),
+    repository: new MemoryRepository(),
+  });
+  const alpha = instance.createBot("alpha", { username: "alphabot" });
+  const session = alpha.getSession("https://example.com");
+  const t: Text<"inline", void> = hashtag("Fediverse");
+  // On a multi-bot instance the root /tags/ path is not served; hashtag
+  // links must point at the bot-scoped tag pages:
+  assert.deepStrictEqual(
+    (await Array.fromAsync(t.getHtml(session))).join(""),
+    '<a href="https://example.com/@alphabot/tags/fediverse" ' +
+      'class="mention hashtag" rel="tag" target="_blank">' +
+      "#<span>Fediverse</span></a>",
+  );
+  const tags = await Array.fromAsync(t.getTags(session));
+  assert.deepStrictEqual(tags.length, 1);
+  assert.ok(tags[0] instanceof Hashtag);
+  assert.deepStrictEqual(
+    tags[0].href,
+    new URL("https://example.com/@alphabot/tags/fediverse"),
+  );
+});
+
+test("markdown() hashtags on a multi-bot instance", async () => {
+  const instance = new InstanceImpl<void>({
+    kv: new MemoryKvStore(),
+    repository: new MemoryRepository(),
+  });
+  const alpha = instance.createBot("alpha", { username: "alphabot" });
+  const session = alpha.getSession("https://example.com");
+  const t: Text<"block", void> = markdown("I tag #Hashtag.");
+  assert.deepStrictEqual(
+    (await Array.fromAsync(t.getHtml(session))).join(""),
+    '<p>I tag <a  class="mention hashtag" rel="tag" target="_blank" ' +
+      'href="https://example.com/@alphabot/tags/hashtag">' +
+      "#<span>Hashtag</span></a>.</p>\n",
+  );
+  const tags = await Array.fromAsync(t.getTags(session));
+  assert.deepStrictEqual(tags.length, 1);
+  assert.ok(tags[0] instanceof Hashtag);
+  assert.deepStrictEqual(
+    tags[0].href,
+    new URL("https://example.com/@alphabot/tags/hashtag"),
+  );
 });
 
 test("em()", async () => {

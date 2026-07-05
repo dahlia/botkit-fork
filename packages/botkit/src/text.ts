@@ -32,6 +32,7 @@ import { encode } from "html-entities";
 import MarkdownIt from "markdown-it";
 import type { DeferredCustomEmoji } from "./emoji.ts";
 import type { Session } from "./session.ts";
+import { SessionImpl } from "./session-impl.ts";
 
 /**
  * A tree structure representing a text with formatting.  It does not only
@@ -454,6 +455,25 @@ export function mention<TContextData>(
 }
 
 /**
+ * The base URL (without a trailing slash) under which the hashtag pages of
+ * the session's bot live: the origin itself on a single-bot instance, and
+ * the bot's own web path (e.g. `https://host/@username`) on a multi-bot
+ * instance, where the root `/tags/` path is not served.
+ */
+function getHashtagPageBase<TContextData>(
+  session: Session<TContextData>,
+): string {
+  if (session instanceof SessionImpl) {
+    const url = session.bot.instance.getBotWebUrl(
+      session.bot,
+      session.context.origin,
+    );
+    return url.href.replace(/\/+$/, "");
+  }
+  return session.context.origin;
+}
+
+/**
  * A text tree that renders a hashtag.  You normally don't need to
  * instantiate this directly; use the {@link hashtag} function instead.
  * @typeParam TContextData The type of the context data.
@@ -472,7 +492,7 @@ export class HashtagText<TContextData> implements Text<"inline", TContextData> {
 
   async *getHtml(session: Session<TContextData>): AsyncIterable<string> {
     yield '<a href="';
-    yield encode(session.context.origin);
+    yield encode(getHashtagPageBase(session));
     yield "/tags/";
     yield encode(encodeURIComponent(this.#tag.toLowerCase()));
     yield '" class="mention hashtag" rel="tag" target="_blank">#<span>';
@@ -483,8 +503,9 @@ export class HashtagText<TContextData> implements Text<"inline", TContextData> {
   async *getTags(session: Session<TContextData>): AsyncIterable<Link | Object> {
     yield new Hashtag({
       href: new URL(
-        `/tags/${encodeURIComponent(this.#tag.toLowerCase())}`,
-        session.context.origin,
+        `${getHashtagPageBase(session)}/tags/${
+          encodeURIComponent(this.#tag.toLowerCase())
+        }`,
       ),
       name: `#${this.#tag.toLowerCase()}`,
     });
@@ -805,6 +826,7 @@ interface MarkdownEnv {
   mentions: string[];
   hashtags: string[];
   origin: string;
+  tagBase: string;
   actors?: Record<string, string | null>;
 }
 
@@ -850,6 +872,7 @@ export class MarkdownText<TContextData> implements Text<"block", TContextData> {
         mentions: [],
         hashtags: [],
         origin: "http://localhost",
+        tagBase: "http://localhost",
       };
       md.render(content, env);
       this.#mentions = env.mentions;
@@ -858,7 +881,7 @@ export class MarkdownText<TContextData> implements Text<"block", TContextData> {
       md.use(hashtagPlugin, {
         link(hashtag: string, env: MarkdownEnv) {
           const tag = hashtag.substring(1).toLowerCase();
-          return new URL(`/tags/${encodeURIComponent(tag)}`, env.origin).href;
+          return `${env.tagBase}/tags/${encodeURIComponent(tag)}`;
         },
         linkAttributes(_hashtag: string, _env: MarkdownEnv) {
           return {
@@ -876,6 +899,7 @@ export class MarkdownText<TContextData> implements Text<"block", TContextData> {
         mentions: [],
         hashtags: [],
         origin: "http://localhost",
+        tagBase: "http://localhost",
       };
       md.render(content, env);
       this.#hashtags = env.hashtags;
@@ -930,6 +954,7 @@ export class MarkdownText<TContextData> implements Text<"block", TContextData> {
       mentions: [],
       hashtags: [],
       origin: session.context.origin,
+      tagBase: getHashtagPageBase(session),
       actors,
     };
     yield this.#markdownIt.render(this.#content, env);
@@ -951,8 +976,7 @@ export class MarkdownText<TContextData> implements Text<"block", TContextData> {
         yield new Hashtag({
           name: `#${tag}`,
           href: new URL(
-            `/tags/${encodeURIComponent(tag)}`,
-            session.context.origin,
+            `${getHashtagPageBase(session)}/tags/${encodeURIComponent(tag)}`,
           ),
         });
       }
