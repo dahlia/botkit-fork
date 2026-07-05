@@ -30,6 +30,21 @@ export { Announce, Create } from "@fedify/vocab";
 
 const logger = getLogger(["botkit", "repository"]);
 const kvLockTtl = Temporal.Duration.from({ minutes: 5 });
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+interface KvLock {
+  readonly id: string;
+}
+
+function isKvLock(value: unknown): value is KvLock {
+  return typeof value === "object" && value != null && "id" in value &&
+    typeof value.id === "string";
+}
+
+function isLegacyKvLock(value: unknown): value is string {
+  return typeof value === "string" && !uuidPattern.test(value);
+}
 
 /**
  * A UUID (universally unique identifier).
@@ -705,30 +720,43 @@ export class KvRepository implements Repository {
     lockKey: KvKey,
     operation: () => Promise<T>,
   ): Promise<T> {
-    const lockId = crypto.randomUUID();
+    const lock: KvLock = { id: crypto.randomUUID() };
     if (this.kv.cas == null) {
       while (true) {
-        await this.kv.set(lockKey, lockId, { ttl: kvLockTtl });
-        if (await this.kv.get(lockKey) !== lockId) {
+        await this.kv.set(lockKey, lock, { ttl: kvLockTtl });
+        const currentLock = await this.kv.get(lockKey);
+        if (!isKvLock(currentLock) || currentLock.id !== lock.id) {
           await new Promise((resolve) => setTimeout(resolve, 0));
           continue;
         }
         try {
           return await operation();
         } finally {
-          if (await this.kv.get(lockKey) === lockId) {
+          const currentLock = await this.kv.get(lockKey);
+          if (isKvLock(currentLock) && currentLock.id === lock.id) {
             await this.kv.delete(lockKey);
           }
         }
       }
     }
-    while (!await this.kv.cas(lockKey, undefined, lockId, { ttl: kvLockTtl })) {
+    while (true) {
+      if (await this.kv.cas(lockKey, undefined, lock, { ttl: kvLockTtl })) {
+        break;
+      }
+      const currentLock = await this.kv.get(lockKey);
+      if (
+        isLegacyKvLock(currentLock) &&
+        await this.kv.cas(lockKey, currentLock, lock, { ttl: kvLockTtl })
+      ) {
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     try {
       return await operation();
     } finally {
-      if (await this.kv.get(lockKey) === lockId) {
+      const currentLock = await this.kv.get(lockKey);
+      if (isKvLock(currentLock) && currentLock.id === lock.id) {
         await this.kv.delete(lockKey);
       }
     }

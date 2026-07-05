@@ -163,6 +163,25 @@ test("KvRepository deletes stale follower indexes", async () => {
   assert.deepStrictEqual(await kv.get(indexKey), undefined);
 });
 
+test("KvRepository recovers legacy follower locks", async () => {
+  const kv = new MemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/legacy-lock"),
+    preferredUsername: "legacy-lock",
+  });
+  const lockKey: KvKey = ["_botkit", "followers", "lock"];
+
+  await kv.set(lockKey, follower.id!.href);
+  await repo.addFollower(
+    new URL("https://example.com/ap/follow/legacy-lock"),
+    follower,
+  );
+
+  assert.ok(await repo.hasFollower(follower.id!));
+  assert.deepStrictEqual(await kv.get(lockKey), undefined);
+});
+
 for (const name in factories) {
   const factory = factories[name];
 
