@@ -21,7 +21,7 @@ import type {
 } from "@fedify/fedify/federation";
 import type { Software } from "@fedify/fedify/nodeinfo";
 import type { Application, Image, Service } from "@fedify/vocab";
-import { BotImpl } from "./bot-impl.ts";
+import { BotImpl, wrapBotImpl } from "./bot-impl.ts";
 import type { CustomEmoji, DeferredCustomEmoji } from "./emoji.ts";
 import type {
   AcceptEventHandler,
@@ -46,65 +46,12 @@ export { type Software } from "@fedify/fedify/nodeinfo";
 export { Application, Image, Service } from "@fedify/vocab";
 
 /**
- * A bot that can interact with the ActivityPub network.
+ * The event handlers a bot can register.  Assigning a handler to one of
+ * these properties makes the bot react to the corresponding ActivityPub
+ * activity.
+ * @since 0.5.0
  */
-export interface Bot<TContextData> {
-  /**
-   * An internal Fedify federation instance.  Normally you don't need to access
-   * this directly.
-   */
-  readonly federation: Federation<TContextData>;
-
-  /**
-   * The internal identifier for the bot actor.  It is used for the actor URI.
-   */
-  readonly identifier: string;
-
-  /**
-   * Gets a new session to control the bot for a specific origin and context
-   * data.
-   * @param origin The origin of the session.  Even if a URL with some path or
-   *               query is passed, only the origin part will be used.
-   * @param contextData The context data to pass to the federation.
-   * @returns The session for the origin and context data.
-   */
-  getSession(
-    origin: string | URL,
-    contextData: TContextData,
-  ): Session<TContextData>;
-
-  /**
-   * Gets a new session to control bot for a specific Fedify context.
-   * @param context The Fedify context of the session.
-   * @returns The session for the Fedify context.
-   */
-  getSession(context: Context<TContextData>): Session<TContextData>;
-
-  /**
-   * The fetch API for handling HTTP requests.  You can pass this to an HTTP
-   * server (e.g., `Deno.serve()`, `Bun.serve()`) to handle incoming requests.
-   * @param request The request to handle.
-   * @param contextData The context data to pass to the federation.
-   * @returns The response to the request.
-   */
-  fetch(request: Request, contextData: TContextData): Promise<Response>;
-
-  /**
-   * Defines custom emojis for the bot.  The custom emojis are used for
-   * rendering the bot's profile and posts.  The custom emojis are defined
-   * by their names, and the names are used as the keys of the emojis.
-   * @param emojis The custom emojis to define.  The keys are the names of
-   *               the emojis, and the values are the custom emoji definitions.
-   * @returns The defined emojis.  The keys are the names of the emojis, and
-   *          the values are the emoji objects, which are used for passing
-   *          to the {@link customEmoji} function.
-   * @throws {TypeError} If any emoji name is invalid or duplicate.
-   * @since 0.2.0
-   */
-  addCustomEmojis<TEmojiName extends string>(
-    emojis: Readonly<Record<TEmojiName, CustomEmoji>>,
-  ): Readonly<Record<TEmojiName, DeferredCustomEmoji<TContextData>>>;
-
+export interface BotEventHandlers<TContextData> {
   /**
    * An event handler for a follow request to the bot.
    */
@@ -189,6 +136,111 @@ export interface Bot<TContextData> {
    * @since 0.3.0
    */
   onVote?: VoteEventHandler<TContextData>;
+}
+
+/**
+ * A read-only view of a bot actor's identity and profile.  It is exposed
+ * through {@link Session.bot} so that event handlers can tell which bot they
+ * are running as without being able to mutate the bot (e.g. reassign its
+ * event handlers).
+ * @since 0.5.0
+ */
+export interface ReadonlyBot {
+  /**
+   * The internal identifier for the bot actor.  It is used for the actor URI.
+   */
+  readonly identifier: string;
+
+  /**
+   * The username of the bot.  It is a part of the fediverse handle.
+   */
+  readonly username: string;
+
+  /**
+   * The display name of the bot.
+   */
+  readonly name?: string;
+
+  /**
+   * The type of the bot actor.  It is either `Service` or `Application`.
+   */
+  readonly class: typeof Service | typeof Application;
+
+  /**
+   * The avatar URL of the bot.
+   */
+  readonly icon?: URL | Image;
+
+  /**
+   * The header image URL of the bot.
+   */
+  readonly image?: URL | Image;
+
+  /**
+   * How the bot handles incoming follow requests.
+   */
+  readonly followerPolicy: "accept" | "reject" | "manual";
+}
+
+/**
+ * A bot that can interact with the ActivityPub network.
+ */
+export interface Bot<TContextData> extends BotEventHandlers<TContextData> {
+  /**
+   * An internal Fedify federation instance.  Normally you don't need to access
+   * this directly.
+   */
+  readonly federation: Federation<TContextData>;
+
+  /**
+   * The internal identifier for the bot actor.  It is used for the actor URI.
+   */
+  readonly identifier: string;
+
+  /**
+   * Gets a new session to control the bot for a specific origin and context
+   * data.
+   * @param origin The origin of the session.  Even if a URL with some path or
+   *               query is passed, only the origin part will be used.
+   * @param contextData The context data to pass to the federation.
+   * @returns The session for the origin and context data.
+   */
+  getSession(
+    origin: string | URL,
+    contextData: TContextData,
+  ): Session<TContextData>;
+
+  /**
+   * Gets a new session to control bot for a specific Fedify context.
+   * @param context The Fedify context of the session.
+   * @returns The session for the Fedify context.
+   */
+  getSession(context: Context<TContextData>): Session<TContextData>;
+
+  /**
+   * The fetch API for handling HTTP requests.  You can pass this to an HTTP
+   * server (e.g., `Deno.serve()`, `Bun.serve()`) to handle incoming requests.
+   * @param request The request to handle.
+   * @param contextData The context data to pass to the federation.
+   * @returns The response to the request.
+   */
+  fetch(request: Request, contextData: TContextData): Promise<Response>;
+
+  /**
+   * Defines custom emojis for the bot.  The custom emojis are used for
+   * rendering the bot's profile and posts.  The custom emojis are defined
+   * by their names, and the names are used as the keys of the emojis.
+   * @param emojis The custom emojis to define.  The keys are the names of
+   *               the emojis, and the values are the custom emoji definitions.
+   * @returns The defined emojis.  The keys are the names of the emojis, and
+   *          the values are the emoji objects, which are used for passing
+   *          to the {@link customEmoji} function.
+   * @throws {TypeError} If any emoji name is invalid or duplicate.
+   * @since 0.2.0
+   */
+  addCustomEmojis<TEmojiName extends string>(
+    emojis: Readonly<Record<TEmojiName, CustomEmoji>>,
+  ): Readonly<Record<TEmojiName, DeferredCustomEmoji<TContextData>>>;
 }
 
 /**
@@ -385,114 +437,6 @@ export function createBot<TContextData = void>(
   options: CreateBotOptions<TContextData>,
 ): TContextData extends void ? BotWithVoidContextData : Bot<TContextData> {
   const bot = new BotImpl<TContextData>(options);
-  // Since `deno serve` does not recognize a class instance having fetch(),
-  // we wrap a BotImpl instance with a plain object.
-  // See also https://github.com/denoland/deno/issues/24062
-  const wrapper = {
-    impl: bot,
-    get federation() {
-      return bot.federation;
-    },
-    get identifier() {
-      return bot.identifier;
-    },
-    getSession(a, b?) {
-      // @ts-ignore: BotImpl.getSession() implements Bot.getSession()
-      return bot.getSession(a, b);
-    },
-    fetch(request, contextData) {
-      return bot.fetch(request, contextData);
-    },
-    addCustomEmojis<TEmojiName extends string>(
-      emojis: Readonly<Record<TEmojiName, CustomEmoji>>,
-    ): Readonly<Record<TEmojiName, DeferredCustomEmoji<TContextData>>> {
-      return bot.addCustomEmojis(emojis);
-    },
-    get onFollow() {
-      return bot.onFollow;
-    },
-    set onFollow(value) {
-      bot.onFollow = value;
-    },
-    get onUnfollow() {
-      return bot.onUnfollow;
-    },
-    set onUnfollow(value) {
-      bot.onUnfollow = value;
-    },
-    get onAcceptFollow() {
-      return bot.onAcceptFollow;
-    },
-    set onAcceptFollow(value) {
-      bot.onAcceptFollow = value;
-    },
-    get onRejectFollow() {
-      return bot.onRejectFollow;
-    },
-    set onRejectFollow(value) {
-      bot.onRejectFollow = value;
-    },
-    get onMention() {
-      return bot.onMention;
-    },
-    set onMention(value) {
-      bot.onMention = value;
-    },
-    get onReply() {
-      return bot.onReply;
-    },
-    set onReply(value) {
-      bot.onReply = value;
-    },
-    get onQuote() {
-      return bot.onQuote;
-    },
-    set onQuote(value) {
-      bot.onQuote = value;
-    },
-    get onMessage() {
-      return bot.onMessage;
-    },
-    set onMessage(value) {
-      bot.onMessage = value;
-    },
-    get onSharedMessage() {
-      return bot.onSharedMessage;
-    },
-    set onSharedMessage(value) {
-      bot.onSharedMessage = value;
-    },
-    get onLike() {
-      return bot.onLike;
-    },
-    set onLike(value) {
-      bot.onLike = value;
-    },
-    get onUnlike() {
-      return bot.onUnlike;
-    },
-    set onUnlike(value) {
-      bot.onUnlike = value;
-    },
-    get onReact() {
-      return bot.onReact;
-    },
-    set onReact(value) {
-      bot.onReact = value;
-    },
-    get onUnreact() {
-      return bot.onUnreact;
-    },
-    set onUnreact(value) {
-      bot.onUnreact = value;
-    },
-    get onVote() {
-      return bot.onVote;
-    },
-    set onVote(value) {
-      bot.onVote = value;
-    },
-  } satisfies Bot<TContextData> & { impl: BotImpl<TContextData> };
   // @ts-ignore: the wrapper implements BotWithVoidContextData
-  return wrapper;
+  return wrapBotImpl(bot);
 }

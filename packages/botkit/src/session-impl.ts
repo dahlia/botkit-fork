@@ -123,7 +123,10 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
     }
     const id = uuidv7() as Uuid;
     const follow = new Follow({
-      id: this.context.getObjectUri(Follow, { id }),
+      id: this.context.getObjectUri(Follow, {
+        identifier: this.bot.identifier,
+        id,
+      }),
       actor: this.context.getActorUri(this.bot.identifier),
       object: actor.id,
       to: actor.id,
@@ -309,7 +312,10 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
       endTime = options.poll.endTime;
     }
     const msg = new cls({
-      id: this.context.getObjectUri<MessageClass>(cls, { id }),
+      id: this.context.getObjectUri<MessageClass>(cls, {
+        identifier: this.bot.identifier,
+        id,
+      }),
       contents: options.language == null
         ? [contentHtml]
         : [new LanguageString(contentHtml, options.language), contentHtml],
@@ -336,10 +342,17 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
         ? [PUBLIC_COLLECTION]
         : [],
       published: published.toTemporalInstant(),
-      url: new URL(`/message/${id}`, this.context.origin),
+      url: this.bot.instance.getMessageWebUrl(
+        this.bot,
+        id,
+        this.context.origin,
+      ),
     });
     const activity = new Create({
-      id: this.context.getObjectUri(Create, { id }),
+      id: this.context.getObjectUri(Create, {
+        identifier: this.bot.identifier,
+        id,
+      }),
       actors: msg.attributionIds,
       tos: msg.toIds,
       ccs: msg.ccIds,

@@ -13,16 +13,22 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import { MemoryKvStore } from "@fedify/fedify/federation";
-import { importJwk } from "@fedify/fedify/sig";
+import {
+  type KvStoreListEntry,
+  MemoryKvStore,
+} from "@fedify/fedify/federation";
+import { exportJwk, importJwk } from "@fedify/fedify/sig";
 import { Create, Follow, Note, Person, PUBLIC_COLLECTION } from "@fedify/vocab";
 import assert from "node:assert";
 import { describe, test } from "node:test";
 import {
+  type KvKey,
   KvRepository,
+  type KvStore,
   MemoryCachedRepository,
   MemoryRepository,
   type Repository,
+  type Uuid,
 } from "./repository.ts";
 
 function createKvRepository(): Repository {
@@ -104,30 +110,33 @@ for (const name in factories) {
     const repo = factory();
 
     test("key pairs", async () => {
-      assert.deepStrictEqual(await repo.getKeyPairs(), undefined);
-      await repo.setKeyPairs(keyPairs);
-      assert.deepStrictEqual(await repo.getKeyPairs(), keyPairs);
+      assert.deepStrictEqual(await repo.getKeyPairs("bot"), undefined);
+      await repo.setKeyPairs("bot", keyPairs);
+      assert.deepStrictEqual(await repo.getKeyPairs("bot"), keyPairs);
     });
 
     test("messages", async () => {
-      assert.deepStrictEqual(await repo.countMessages(), 0);
+      assert.deepStrictEqual(await repo.countMessages("bot"), 0);
       assert.deepStrictEqual(
-        await repo.getMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0"),
+        await repo.getMessage("bot", "01941f29-7c00-7fe8-ab0a-7b593990a3c0"),
         undefined,
       );
       assert.deepStrictEqual(
-        await repo.getMessage("0194244f-d800-7873-8993-ef71ccd47306"),
+        await repo.getMessage("bot", "0194244f-d800-7873-8993-ef71ccd47306"),
         undefined,
       );
       assert.deepStrictEqual(
-        await repo.getMessage("01942976-3400-7f34-872e-2cbf0f9eeac4"),
+        await repo.getMessage("bot", "01942976-3400-7f34-872e-2cbf0f9eeac4"),
         undefined,
       );
       assert.deepStrictEqual(
-        await repo.getMessage("01942e9c-9000-7480-a553-7a6ce737ce14"),
+        await repo.getMessage("bot", "01942e9c-9000-7480-a553-7a6ce737ce14"),
         undefined,
       );
-      assert.deepStrictEqual(await Array.fromAsync(repo.getMessages()), []);
+      assert.deepStrictEqual(
+        await Array.fromAsync(repo.getMessages("bot")),
+        [],
+      );
 
       const messageA = new Create({
         id: new URL(
@@ -227,93 +236,129 @@ for (const name in factories) {
         updated: Temporal.Instant.from("2025-01-03T12:00:00Z"),
       });
 
-      await repo.addMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0", messageA);
-      assert.deepStrictEqual(await repo.countMessages(), 1);
+      await repo.addMessage(
+        "bot",
+        "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+        messageA,
+      );
+      assert.deepStrictEqual(await repo.countMessages("bot"), 1);
       assert.deepStrictEqual(
-        await (await repo.getMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0"))
+        await (await repo.getMessage(
+          "bot",
+          "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+        ))
           ?.toJsonLd(),
         await messageA.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await repo.getMessage("0194244f-d800-7873-8993-ef71ccd47306"),
+        await repo.getMessage("bot", "0194244f-d800-7873-8993-ef71ccd47306"),
         undefined,
       );
       assert.deepStrictEqual(
-        await repo.getMessage("01942976-3400-7f34-872e-2cbf0f9eeac4"),
+        await repo.getMessage("bot", "01942976-3400-7f34-872e-2cbf0f9eeac4"),
         undefined,
       );
       assert.deepStrictEqual(
-        await repo.getMessage("01942e9c-9000-7480-a553-7a6ce737ce14"),
+        await repo.getMessage("bot", "01942e9c-9000-7480-a553-7a6ce737ce14"),
         undefined,
       );
       assert.deepStrictEqual(
         await Promise.all(
-          (await Array.fromAsync(repo.getMessages())).map((m) => m.toJsonLd()),
+          (await Array.fromAsync(repo.getMessages("bot"))).map((m) =>
+            m.toJsonLd()
+          ),
         ),
         [await messageA.toJsonLd()],
       );
 
-      await repo.addMessage("0194244f-d800-7873-8993-ef71ccd47306", messageB);
-      assert.deepStrictEqual(await repo.countMessages(), 2);
+      await repo.addMessage(
+        "bot",
+        "0194244f-d800-7873-8993-ef71ccd47306",
+        messageB,
+      );
+      assert.deepStrictEqual(await repo.countMessages("bot"), 2);
       assert.deepStrictEqual(
-        await (await repo.getMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0"))
+        await (await repo.getMessage(
+          "bot",
+          "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+        ))
           ?.toJsonLd(),
         await messageA.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("0194244f-d800-7873-8993-ef71ccd47306"))
+        await (await repo.getMessage(
+          "bot",
+          "0194244f-d800-7873-8993-ef71ccd47306",
+        ))
           ?.toJsonLd(),
         await messageB.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await repo.getMessage("01942976-3400-7f34-872e-2cbf0f9eeac4"),
+        await repo.getMessage("bot", "01942976-3400-7f34-872e-2cbf0f9eeac4"),
         undefined,
       );
       assert.deepStrictEqual(
-        await repo.getMessage("01942e9c-9000-7480-a553-7a6ce737ce14"),
+        await repo.getMessage("bot", "01942e9c-9000-7480-a553-7a6ce737ce14"),
         undefined,
       );
       assert.deepStrictEqual(
         await Promise.all(
-          (await Array.fromAsync(repo.getMessages())).map((m) => m.toJsonLd()),
+          (await Array.fromAsync(repo.getMessages("bot"))).map((m) =>
+            m.toJsonLd()
+          ),
         ),
         [await messageB.toJsonLd(), await messageA.toJsonLd()],
       );
       assert.deepStrictEqual(
         await Promise.all(
-          (await Array.fromAsync(repo.getMessages({ order: "oldest" }))).map((
-            m,
-          ) => m.toJsonLd()),
+          (await Array.fromAsync(repo.getMessages("bot", { order: "oldest" })))
+            .map((
+              m,
+            ) => m.toJsonLd()),
         ),
         [await messageA.toJsonLd(), await messageB.toJsonLd()],
       );
 
-      await repo.addMessage("01942976-3400-7f34-872e-2cbf0f9eeac4", messageC);
-      assert.deepStrictEqual(await repo.countMessages(), 3);
+      await repo.addMessage(
+        "bot",
+        "01942976-3400-7f34-872e-2cbf0f9eeac4",
+        messageC,
+      );
+      assert.deepStrictEqual(await repo.countMessages("bot"), 3);
       assert.deepStrictEqual(
-        await (await repo.getMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0"))
+        await (await repo.getMessage(
+          "bot",
+          "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+        ))
           ?.toJsonLd(),
         await messageA.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("0194244f-d800-7873-8993-ef71ccd47306"))
+        await (await repo.getMessage(
+          "bot",
+          "0194244f-d800-7873-8993-ef71ccd47306",
+        ))
           ?.toJsonLd(),
         await messageB.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("01942976-3400-7f34-872e-2cbf0f9eeac4"))
+        await (await repo.getMessage(
+          "bot",
+          "01942976-3400-7f34-872e-2cbf0f9eeac4",
+        ))
           ?.toJsonLd(),
         await messageC.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await repo.getMessage("01942e9c-9000-7480-a553-7a6ce737ce14"),
+        await repo.getMessage("bot", "01942e9c-9000-7480-a553-7a6ce737ce14"),
         undefined,
       );
       assert.deepStrictEqual(
         await Promise.all(
-          (await Array.fromAsync(repo.getMessages({ order: "newest" }))).map((
-            m,
-          ) => m.toJsonLd()),
+          (await Array.fromAsync(repo.getMessages("bot", { order: "newest" })))
+            .map((
+              m,
+            ) => m.toJsonLd()),
         ),
         [
           await messageC.toJsonLd(),
@@ -323,9 +368,10 @@ for (const name in factories) {
       );
       assert.deepStrictEqual(
         await Promise.all(
-          (await Array.fromAsync(repo.getMessages({ order: "oldest" }))).map((
-            m,
-          ) => m.toJsonLd()),
+          (await Array.fromAsync(repo.getMessages("bot", { order: "oldest" })))
+            .map((
+              m,
+            ) => m.toJsonLd()),
         ),
         [
           await messageA.toJsonLd(),
@@ -334,31 +380,47 @@ for (const name in factories) {
         ],
       );
 
-      await repo.addMessage("01942e9c-9000-7480-a553-7a6ce737ce14", messageD);
-      assert.deepStrictEqual(await repo.countMessages(), 4);
+      await repo.addMessage(
+        "bot",
+        "01942e9c-9000-7480-a553-7a6ce737ce14",
+        messageD,
+      );
+      assert.deepStrictEqual(await repo.countMessages("bot"), 4);
       assert.deepStrictEqual(
-        await (await repo.getMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0"))
+        await (await repo.getMessage(
+          "bot",
+          "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+        ))
           ?.toJsonLd(),
         await messageA.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("0194244f-d800-7873-8993-ef71ccd47306"))
+        await (await repo.getMessage(
+          "bot",
+          "0194244f-d800-7873-8993-ef71ccd47306",
+        ))
           ?.toJsonLd(),
         await messageB.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("01942976-3400-7f34-872e-2cbf0f9eeac4"))
+        await (await repo.getMessage(
+          "bot",
+          "01942976-3400-7f34-872e-2cbf0f9eeac4",
+        ))
           ?.toJsonLd(),
         await messageC.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("01942e9c-9000-7480-a553-7a6ce737ce14"))
+        await (await repo.getMessage(
+          "bot",
+          "01942e9c-9000-7480-a553-7a6ce737ce14",
+        ))
           ?.toJsonLd(),
         await messageD.toJsonLd(),
       );
       assert.deepStrictEqual(
         await Promise.all(
-          (await Array.fromAsync(repo.getMessages())).map((
+          (await Array.fromAsync(repo.getMessages("bot"))).map((
             m,
           ) => m.toJsonLd()),
         ),
@@ -372,7 +434,7 @@ for (const name in factories) {
       assert.deepStrictEqual(
         await Promise.all(
           (await Array.fromAsync(
-            repo.getMessages({
+            repo.getMessages("bot", {
               order: "oldest",
               until: Temporal.Instant.from("2025-01-03T00:00:00Z"),
             }),
@@ -387,7 +449,7 @@ for (const name in factories) {
       assert.deepStrictEqual(
         await Promise.all(
           (await Array.fromAsync(
-            repo.getMessages({
+            repo.getMessages("bot", {
               since: Temporal.Instant.from("2025-01-02T00:00:00Z"),
             }),
           )).map((m) => m.toJsonLd()),
@@ -401,7 +463,7 @@ for (const name in factories) {
       assert.deepStrictEqual(
         await Promise.all(
           (await Array.fromAsync(
-            repo.getMessages({
+            repo.getMessages("bot", {
               until: Temporal.Instant.from("2025-01-03T00:00:00Z"),
               since: Temporal.Instant.from("2025-01-02T00:00:00Z"),
             }),
@@ -414,37 +476,48 @@ for (const name in factories) {
       );
 
       const removed = await repo.removeMessage(
+        "bot",
         "0194244f-d800-7873-8993-ef71ccd47306",
       );
       assert.deepStrictEqual(
         await removed?.toJsonLd(),
         await messageB.toJsonLd(),
       );
-      assert.deepStrictEqual(await repo.countMessages(), 3);
+      assert.deepStrictEqual(await repo.countMessages("bot"), 3);
       assert.deepStrictEqual(
-        await (await repo.getMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0"))
+        await (await repo.getMessage(
+          "bot",
+          "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+        ))
           ?.toJsonLd(),
         await messageA.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await repo.getMessage("0194244f-d800-7873-8993-ef71ccd47306"),
+        await repo.getMessage("bot", "0194244f-d800-7873-8993-ef71ccd47306"),
         undefined,
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("01942976-3400-7f34-872e-2cbf0f9eeac4"))
+        await (await repo.getMessage(
+          "bot",
+          "01942976-3400-7f34-872e-2cbf0f9eeac4",
+        ))
           ?.toJsonLd(),
         await messageC.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("01942e9c-9000-7480-a553-7a6ce737ce14"))
+        await (await repo.getMessage(
+          "bot",
+          "01942e9c-9000-7480-a553-7a6ce737ce14",
+        ))
           ?.toJsonLd(),
         await messageD.toJsonLd(),
       );
       assert.deepStrictEqual(
         await Promise.all(
-          (await Array.fromAsync(repo.getMessages({ order: "newest" }))).map((
-            m,
-          ) => m.toJsonLd()),
+          (await Array.fromAsync(repo.getMessages("bot", { order: "newest" })))
+            .map((
+              m,
+            ) => m.toJsonLd()),
         ),
         [
           await messageD.toJsonLd(),
@@ -454,9 +527,10 @@ for (const name in factories) {
       );
       assert.deepStrictEqual(
         await Promise.all(
-          (await Array.fromAsync(repo.getMessages({ order: "oldest" }))).map((
-            m,
-          ) => m.toJsonLd()),
+          (await Array.fromAsync(repo.getMessages("bot", { order: "oldest" })))
+            .map((
+              m,
+            ) => m.toJsonLd()),
         ),
         [
           await messageA.toJsonLd(),
@@ -466,6 +540,7 @@ for (const name in factories) {
       );
 
       await repo.updateMessage(
+        "bot",
         "01942976-3400-7f34-872e-2cbf0f9eeac4",
         async (messageC) =>
           messageC.clone({
@@ -473,29 +548,39 @@ for (const name in factories) {
             updated: messageC2.updated,
           }),
       );
-      assert.deepStrictEqual(await repo.countMessages(), 3);
+      assert.deepStrictEqual(await repo.countMessages("bot"), 3);
       assert.deepStrictEqual(
-        await (await repo.getMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0"))
+        await (await repo.getMessage(
+          "bot",
+          "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+        ))
           ?.toJsonLd(),
         await messageA.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await repo.getMessage("0194244f-d800-7873-8993-ef71ccd47306"),
+        await repo.getMessage("bot", "0194244f-d800-7873-8993-ef71ccd47306"),
         undefined,
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("01942976-3400-7f34-872e-2cbf0f9eeac4"))
+        await (await repo.getMessage(
+          "bot",
+          "01942976-3400-7f34-872e-2cbf0f9eeac4",
+        ))
           ?.toJsonLd(),
         await messageC2.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("01942e9c-9000-7480-a553-7a6ce737ce14"))
+        await (await repo.getMessage(
+          "bot",
+          "01942e9c-9000-7480-a553-7a6ce737ce14",
+        ))
           ?.toJsonLd(),
         await messageD.toJsonLd(),
       );
 
       let updaterCalled = false;
       const updated = await repo.updateMessage(
+        "bot",
         "00000000-0000-0000-0000-000000000000",
         (message) => {
           updaterCalled = true;
@@ -504,49 +589,68 @@ for (const name in factories) {
       );
       assert.deepStrictEqual(updated, false);
       assert.deepStrictEqual(updaterCalled, false);
-      assert.deepStrictEqual(await repo.countMessages(), 3);
+      assert.deepStrictEqual(await repo.countMessages("bot"), 3);
       assert.deepStrictEqual(
-        await (await repo.getMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0"))
+        await (await repo.getMessage(
+          "bot",
+          "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+        ))
           ?.toJsonLd(),
         await messageA.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await repo.getMessage("0194244f-d800-7873-8993-ef71ccd47306"),
+        await repo.getMessage("bot", "0194244f-d800-7873-8993-ef71ccd47306"),
         undefined,
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("01942976-3400-7f34-872e-2cbf0f9eeac4"))
+        await (await repo.getMessage(
+          "bot",
+          "01942976-3400-7f34-872e-2cbf0f9eeac4",
+        ))
           ?.toJsonLd(),
         await messageC2.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("01942e9c-9000-7480-a553-7a6ce737ce14"))
+        await (await repo.getMessage(
+          "bot",
+          "01942e9c-9000-7480-a553-7a6ce737ce14",
+        ))
           ?.toJsonLd(),
         await messageD.toJsonLd(),
       );
 
       const updated2 = await repo.updateMessage(
+        "bot",
         "01942e9c-9000-7480-a553-7a6ce737ce14",
         (_) => undefined,
       );
       assert.deepStrictEqual(updated2, false);
-      assert.deepStrictEqual(await repo.countMessages(), 3);
+      assert.deepStrictEqual(await repo.countMessages("bot"), 3);
       assert.deepStrictEqual(
-        await (await repo.getMessage("01941f29-7c00-7fe8-ab0a-7b593990a3c0"))
+        await (await repo.getMessage(
+          "bot",
+          "01941f29-7c00-7fe8-ab0a-7b593990a3c0",
+        ))
           ?.toJsonLd(),
         await messageA.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await repo.getMessage("0194244f-d800-7873-8993-ef71ccd47306"),
+        await repo.getMessage("bot", "0194244f-d800-7873-8993-ef71ccd47306"),
         undefined,
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("01942976-3400-7f34-872e-2cbf0f9eeac4"))
+        await (await repo.getMessage(
+          "bot",
+          "01942976-3400-7f34-872e-2cbf0f9eeac4",
+        ))
           ?.toJsonLd(),
         await messageC2.toJsonLd(),
       );
       assert.deepStrictEqual(
-        await (await repo.getMessage("01942e9c-9000-7480-a553-7a6ce737ce14"))
+        await (await repo.getMessage(
+          "bot",
+          "01942e9c-9000-7480-a553-7a6ce737ce14",
+        ))
           ?.toJsonLd(),
         await messageD.toJsonLd(),
       );
@@ -568,70 +672,95 @@ for (const name in factories) {
         "https://example.com/ap/follow/8b76286d-5eef-4f02-8a16-080ff2b0e2ca",
       );
 
-      assert.deepStrictEqual(await repo.countFollowers(), 0);
-      assert.deepStrictEqual(await repo.hasFollower(followerA.id!), false);
-      assert.deepStrictEqual(await repo.hasFollower(followerB.id!), false);
-      assert.deepStrictEqual(await Array.fromAsync(repo.getFollowers()), []);
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 0);
+      assert.deepStrictEqual(
+        await repo.hasFollower("bot", followerA.id!),
+        false,
+      );
+      assert.deepStrictEqual(
+        await repo.hasFollower("bot", followerB.id!),
+        false,
+      );
+      assert.deepStrictEqual(
+        await Array.fromAsync(repo.getFollowers("bot")),
+        [],
+      );
 
-      await repo.addFollower(followFromA, followerA);
-      assert.deepStrictEqual(await repo.countFollowers(), 1);
-      assert.ok(await repo.hasFollower(followerA.id!));
-      assert.deepStrictEqual(await repo.hasFollower(followerB.id!), false);
+      await repo.addFollower("bot", followFromA, followerA);
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+      assert.ok(await repo.hasFollower("bot", followerA.id!));
+      assert.deepStrictEqual(
+        await repo.hasFollower("bot", followerB.id!),
+        false,
+      );
       assert.deepStrictEqual(
         await Promise.all(
-          (await Array.fromAsync(repo.getFollowers())).map((f) => f.toJsonLd()),
+          (await Array.fromAsync(repo.getFollowers("bot"))).map((f) =>
+            f.toJsonLd()
+          ),
         ),
         [await followerA.toJsonLd()],
       );
 
-      await repo.addFollower(followFromB, followerB);
-      assert.deepStrictEqual(await repo.countFollowers(), 2);
-      assert.ok(await repo.hasFollower(followerA.id!));
-      assert.ok(await repo.hasFollower(followerB.id!));
+      await repo.addFollower("bot", followFromB, followerB);
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 2);
+      assert.ok(await repo.hasFollower("bot", followerA.id!));
+      assert.ok(await repo.hasFollower("bot", followerB.id!));
       assert.deepStrictEqual(
         await Promise.all(
-          (await Array.fromAsync(repo.getFollowers())).map((f) => f.toJsonLd()),
+          (await Array.fromAsync(repo.getFollowers("bot"))).map((f) =>
+            f.toJsonLd()
+          ),
         ),
         [await followerA.toJsonLd(), await followerB.toJsonLd()],
       );
       assert.deepStrictEqual(
         await Promise.all(
-          (await Array.fromAsync(repo.getFollowers({ offset: 1 }))).map((f) =>
-            f.toJsonLd()
-          ),
+          (await Array.fromAsync(repo.getFollowers("bot", { offset: 1 }))).map((
+            f,
+          ) => f.toJsonLd()),
         ),
         [await followerB.toJsonLd()],
       );
       assert.deepStrictEqual(
         await Promise.all(
-          (await Array.fromAsync(repo.getFollowers({ limit: 1 }))).map((f) =>
-            f.toJsonLd()
-          ),
+          (await Array.fromAsync(repo.getFollowers("bot", { limit: 1 }))).map((
+            f,
+          ) => f.toJsonLd()),
         ),
         [await followerA.toJsonLd()],
       );
 
       assert.deepStrictEqual(
-        await repo.removeFollower(followFromA, followerB.id!),
+        await repo.removeFollower("bot", followFromA, followerB.id!),
         undefined,
       );
       assert.deepStrictEqual(
-        await repo.removeFollower(followFromB, followerA.id!),
+        await repo.removeFollower("bot", followFromB, followerA.id!),
         undefined,
       );
-      assert.deepStrictEqual(await repo.countFollowers(), 2);
-      assert.ok(await repo.hasFollower(followerA.id!));
-      assert.ok(await repo.hasFollower(followerB.id!));
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 2);
+      assert.ok(await repo.hasFollower("bot", followerA.id!));
+      assert.ok(await repo.hasFollower("bot", followerB.id!));
 
-      await repo.removeFollower(followFromA, followerA.id!);
-      assert.deepStrictEqual(await repo.countFollowers(), 1);
-      assert.deepStrictEqual(await repo.hasFollower(followerA.id!), false);
-      assert.ok(await repo.hasFollower(followerB.id!));
+      await repo.removeFollower("bot", followFromA, followerA.id!);
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+      assert.deepStrictEqual(
+        await repo.hasFollower("bot", followerA.id!),
+        false,
+      );
+      assert.ok(await repo.hasFollower("bot", followerB.id!));
 
-      await repo.removeFollower(followFromB, followerB.id!);
-      assert.deepStrictEqual(await repo.countFollowers(), 0);
-      assert.deepStrictEqual(await repo.hasFollower(followerA.id!), false);
-      assert.deepStrictEqual(await repo.hasFollower(followerB.id!), false);
+      await repo.removeFollower("bot", followFromB, followerB.id!);
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 0);
+      assert.deepStrictEqual(
+        await repo.hasFollower("bot", followerA.id!),
+        false,
+      );
+      assert.deepStrictEqual(
+        await repo.hasFollower("bot", followerB.id!),
+        false,
+      );
     });
 
     test("sent follows", async () => {
@@ -644,20 +773,30 @@ for (const name in factories) {
       });
 
       assert.deepStrictEqual(
-        await repo.getSentFollow("03a395a2-353a-4894-afdb-2cab31a7b004"),
+        await repo.getSentFollow("bot", "03a395a2-353a-4894-afdb-2cab31a7b004"),
         undefined,
       );
 
-      await repo.addSentFollow("03a395a2-353a-4894-afdb-2cab31a7b004", follow);
+      await repo.addSentFollow(
+        "bot",
+        "03a395a2-353a-4894-afdb-2cab31a7b004",
+        follow,
+      );
       assert.deepStrictEqual(
-        await (await repo.getSentFollow("03a395a2-353a-4894-afdb-2cab31a7b004"))
+        await (await repo.getSentFollow(
+          "bot",
+          "03a395a2-353a-4894-afdb-2cab31a7b004",
+        ))
           ?.toJsonLd(),
         await follow.toJsonLd(),
       );
 
-      await repo.removeSentFollow("03a395a2-353a-4894-afdb-2cab31a7b004");
+      await repo.removeSentFollow(
+        "bot",
+        "03a395a2-353a-4894-afdb-2cab31a7b004",
+      );
       assert.deepStrictEqual(
-        await repo.getSentFollow("03a395a2-353a-4894-afdb-2cab31a7b004"),
+        await repo.getSentFollow("bot", "03a395a2-353a-4894-afdb-2cab31a7b004"),
         undefined,
       );
     });
@@ -672,16 +811,22 @@ for (const name in factories) {
         object: followeeId,
       });
 
-      assert.deepStrictEqual(await repo.getFollowee(followeeId), undefined);
-
-      await repo.addFollowee(followeeId, follow);
       assert.deepStrictEqual(
-        await (await repo.getFollowee(followeeId))?.toJsonLd(),
+        await repo.getFollowee("bot", followeeId),
+        undefined,
+      );
+
+      await repo.addFollowee("bot", followeeId, follow);
+      assert.deepStrictEqual(
+        await (await repo.getFollowee("bot", followeeId))?.toJsonLd(),
         await follow.toJsonLd(),
       );
 
-      await repo.removeFollowee(followeeId);
-      assert.deepStrictEqual(await repo.getFollowee(followeeId), undefined);
+      await repo.removeFollowee("bot", followeeId);
+      assert.deepStrictEqual(
+        await repo.getFollowee("bot", followeeId),
+        undefined,
+      );
     });
 
     test("poll voting", async () => {
@@ -692,71 +837,71 @@ for (const name in factories) {
       const voter3 = new URL("https://example.com/ap/actor/charlie");
 
       // Initially, no votes exist
-      assert.deepStrictEqual(await repo.countVoters(messageId1), 0);
-      assert.deepStrictEqual(await repo.countVotes(messageId1), {});
-      assert.deepStrictEqual(await repo.countVoters(messageId2), 0);
-      assert.deepStrictEqual(await repo.countVotes(messageId2), {});
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId1), 0);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId1), {});
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId2), 0);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId2), {});
 
       // Single voter, single option
-      await repo.vote(messageId1, voter1, "option1");
-      assert.deepStrictEqual(await repo.countVoters(messageId1), 1);
-      assert.deepStrictEqual(await repo.countVotes(messageId1), {
+      await repo.vote("bot", messageId1, voter1, "option1");
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId1), 1);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId1), {
         "option1": 1,
       });
 
       // Same voter votes for same option again (should be ignored)
-      await repo.vote(messageId1, voter1, "option1");
-      assert.deepStrictEqual(await repo.countVoters(messageId1), 1);
-      assert.deepStrictEqual(await repo.countVotes(messageId1), {
+      await repo.vote("bot", messageId1, voter1, "option1");
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId1), 1);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId1), {
         "option1": 1,
       });
 
       // Same voter votes for different option (multiple choice)
-      await repo.vote(messageId1, voter1, "option2");
-      assert.deepStrictEqual(await repo.countVoters(messageId1), 1);
-      assert.deepStrictEqual(await repo.countVotes(messageId1), {
+      await repo.vote("bot", messageId1, voter1, "option2");
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId1), 1);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId1), {
         "option1": 1,
         "option2": 1,
       });
 
       // Different voter votes for same option
-      await repo.vote(messageId1, voter2, "option1");
-      assert.deepStrictEqual(await repo.countVoters(messageId1), 2);
-      assert.deepStrictEqual(await repo.countVotes(messageId1), {
+      await repo.vote("bot", messageId1, voter2, "option1");
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId1), 2);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId1), {
         "option1": 2,
         "option2": 1,
       });
 
       // Third voter votes for new option
-      await repo.vote(messageId1, voter3, "option3");
-      assert.deepStrictEqual(await repo.countVoters(messageId1), 3);
-      assert.deepStrictEqual(await repo.countVotes(messageId1), {
+      await repo.vote("bot", messageId1, voter3, "option3");
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId1), 3);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId1), {
         "option1": 2,
         "option2": 1,
         "option3": 1,
       });
 
       // Votes for different message should be separate
-      await repo.vote(messageId2, voter1, "optionA");
-      await repo.vote(messageId2, voter2, "optionB");
-      assert.deepStrictEqual(await repo.countVoters(messageId2), 2);
-      assert.deepStrictEqual(await repo.countVotes(messageId2), {
+      await repo.vote("bot", messageId2, voter1, "optionA");
+      await repo.vote("bot", messageId2, voter2, "optionB");
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId2), 2);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId2), {
         "optionA": 1,
         "optionB": 1,
       });
 
       // Original message votes should remain unchanged
-      assert.deepStrictEqual(await repo.countVoters(messageId1), 3);
-      assert.deepStrictEqual(await repo.countVotes(messageId1), {
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId1), 3);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId1), {
         "option1": 2,
         "option2": 1,
         "option3": 1,
       });
 
       // Test with empty options (edge case)
-      await repo.vote(messageId1, voter1, "");
-      assert.deepStrictEqual(await repo.countVoters(messageId1), 3);
-      assert.deepStrictEqual(await repo.countVotes(messageId1), {
+      await repo.vote("bot", messageId1, voter1, "");
+      assert.deepStrictEqual(await repo.countVoters("bot", messageId1), 3);
+      assert.deepStrictEqual(await repo.countVotes("bot", messageId1), {
         "option1": 2,
         "option2": 1,
         "option3": 1,
@@ -765,3 +910,614 @@ for (const name in factories) {
     });
   });
 }
+
+function createNote(uuid: Uuid, actor: string): Create {
+  return new Create({
+    id: new URL(`https://example.com/ap/actor/${actor}/create/${uuid}`),
+    actor: new URL(`https://example.com/ap/actor/${actor}`),
+    to: new URL(`https://example.com/ap/actor/${actor}/followers`),
+    cc: PUBLIC_COLLECTION,
+    object: new Note({
+      id: new URL(`https://example.com/ap/actor/${actor}/note/${uuid}`),
+      attribution: new URL(`https://example.com/ap/actor/${actor}`),
+      to: new URL(`https://example.com/ap/actor/${actor}/followers`),
+      cc: PUBLIC_COLLECTION,
+      content: "Hello, world!",
+      published: Temporal.Instant.from("2025-01-01T00:00:00Z"),
+    }),
+    published: Temporal.Instant.from("2025-01-01T00:00:00Z"),
+  });
+}
+
+for (const name in factories) {
+  const factory = factories[name];
+
+  describe(`${name}: bot isolation`, () => {
+    test("key pairs are isolated by bot identifier", async () => {
+      const repo = factory();
+      await repo.setKeyPairs("botA", keyPairs);
+      assert.deepStrictEqual(await repo.getKeyPairs("botB"), undefined);
+      assert.deepStrictEqual(await repo.getKeyPairs("botA"), keyPairs);
+    });
+
+    test("messages are isolated by bot identifier", async () => {
+      const repo = factory();
+      const messageId: Uuid = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+      const message = createNote(messageId, "botA");
+      await repo.addMessage("botA", messageId, message);
+      assert.deepStrictEqual(
+        await repo.getMessage("botB", messageId),
+        undefined,
+      );
+      assert.deepStrictEqual(await repo.countMessages("botB"), 0);
+      assert.deepStrictEqual(
+        await Array.fromAsync(repo.getMessages("botB")),
+        [],
+      );
+      assert.deepStrictEqual(await repo.countMessages("botA"), 1);
+      assert.deepStrictEqual(
+        await (await repo.getMessage("botA", messageId))?.toJsonLd(),
+        await message.toJsonLd(),
+      );
+
+      // Removing through the wrong bot identifier must not delete the message:
+      assert.deepStrictEqual(
+        await repo.removeMessage("botB", messageId),
+        undefined,
+      );
+      assert.deepStrictEqual(await repo.countMessages("botA"), 1);
+
+      // Updating through the wrong bot identifier must not touch the message:
+      let updaterCalled = false;
+      const updated = await repo.updateMessage("botB", messageId, (message) => {
+        updaterCalled = true;
+        return message;
+      });
+      assert.deepStrictEqual(updated, false);
+      assert.deepStrictEqual(updaterCalled, false);
+    });
+
+    test("followers are isolated by bot identifier", async () => {
+      const repo = factory();
+      const follower = new Person({
+        id: new URL("https://example.com/ap/actor/john"),
+        preferredUsername: "john",
+      });
+      const followId = new URL(
+        "https://example.com/ap/follow/be2da56a-0ea3-4a6a-9dff-2a1837be67e0",
+      );
+      await repo.addFollower("botA", followId, follower);
+      assert.deepStrictEqual(
+        await repo.hasFollower("botB", follower.id!),
+        false,
+      );
+      assert.deepStrictEqual(await repo.countFollowers("botB"), 0);
+      assert.deepStrictEqual(
+        await Array.fromAsync(repo.getFollowers("botB")),
+        [],
+      );
+      assert.ok(await repo.hasFollower("botA", follower.id!));
+
+      // Removing through the wrong bot identifier must not delete the follower:
+      assert.deepStrictEqual(
+        await repo.removeFollower("botB", followId, follower.id!),
+        undefined,
+      );
+      assert.ok(await repo.hasFollower("botA", follower.id!));
+    });
+
+    test("sent follows are isolated by bot identifier", async () => {
+      const repo = factory();
+      const followUuid: Uuid = "03a395a2-353a-4894-afdb-2cab31a7b004";
+      const follow = new Follow({
+        id: new URL(`https://example.com/ap/actor/botA/follow/${followUuid}`),
+        actor: new URL("https://example.com/ap/actor/botA"),
+        object: new URL("https://example.com/ap/actor/john"),
+      });
+      await repo.addSentFollow("botA", followUuid, follow);
+      assert.deepStrictEqual(
+        await repo.getSentFollow("botB", followUuid),
+        undefined,
+      );
+      assert.deepStrictEqual(
+        await repo.removeSentFollow("botB", followUuid),
+        undefined,
+      );
+      assert.deepStrictEqual(
+        await (await repo.getSentFollow("botA", followUuid))?.toJsonLd(),
+        await follow.toJsonLd(),
+      );
+    });
+
+    test("followees are isolated by bot identifier", async () => {
+      const repo = factory();
+      const followeeId = new URL("https://example.com/ap/actor/john");
+      const follow = new Follow({
+        id: new URL(
+          "https://example.com/ap/actor/botA/follow/03a395a2-353a-4894-afdb-2cab31a7b004",
+        ),
+        actor: new URL("https://example.com/ap/actor/botA"),
+        object: followeeId,
+      });
+      await repo.addFollowee("botA", followeeId, follow);
+      assert.deepStrictEqual(
+        await repo.getFollowee("botB", followeeId),
+        undefined,
+      );
+      assert.deepStrictEqual(
+        await repo.removeFollowee("botB", followeeId),
+        undefined,
+      );
+      assert.deepStrictEqual(
+        await (await repo.getFollowee("botA", followeeId))?.toJsonLd(),
+        await follow.toJsonLd(),
+      );
+    });
+
+    test("poll votes are isolated by bot identifier", async () => {
+      const repo = factory();
+      const messageId: Uuid = "01945678-1234-7890-abcd-ef0123456789";
+      const voter = new URL("https://example.com/ap/actor/alice");
+      await repo.vote("botA", messageId, voter, "option1");
+      assert.deepStrictEqual(await repo.countVoters("botB", messageId), 0);
+      assert.deepStrictEqual(await repo.countVotes("botB", messageId), {});
+      assert.deepStrictEqual(await repo.countVoters("botA", messageId), 1);
+      assert.deepStrictEqual(await repo.countVotes("botA", messageId), {
+        option1: 1,
+      });
+    });
+  });
+
+  describe(`${name}: findFollowedBots()`, () => {
+    test("yields the identifiers of bots following the given actor", async () => {
+      const repo = factory();
+      const followeeId = new URL("https://example.com/ap/actor/john");
+      const otherFolloweeId = new URL("https://example.com/ap/actor/jane");
+      const followA = new Follow({
+        id: new URL(
+          "https://example.com/ap/actor/botA/follow/03a395a2-353a-4894-afdb-2cab31a7b004",
+        ),
+        actor: new URL("https://example.com/ap/actor/botA"),
+        object: followeeId,
+      });
+      const followB = new Follow({
+        id: new URL(
+          "https://example.com/ap/actor/botB/follow/e35ff5d8-ede9-4f5e-9b83-4bfcd4c9a69c",
+        ),
+        actor: new URL("https://example.com/ap/actor/botB"),
+        object: followeeId,
+      });
+
+      assert.deepStrictEqual(
+        await Array.fromAsync(repo.findFollowedBots(followeeId)),
+        [],
+      );
+
+      await repo.addFollowee("botA", followeeId, followA);
+      await repo.addFollowee("botB", followeeId, followB);
+      const bots = await Array.fromAsync(repo.findFollowedBots(followeeId));
+      bots.sort();
+      assert.deepStrictEqual(bots, ["botA", "botB"]);
+      assert.deepStrictEqual(
+        await Array.fromAsync(repo.findFollowedBots(otherFolloweeId)),
+        [],
+      );
+
+      // Adding the same followee twice must not duplicate the identifier:
+      await repo.addFollowee("botA", followeeId, followA);
+      const bots2 = await Array.fromAsync(repo.findFollowedBots(followeeId));
+      bots2.sort();
+      assert.deepStrictEqual(bots2, ["botA", "botB"]);
+
+      await repo.removeFollowee("botA", followeeId);
+      assert.deepStrictEqual(
+        await Array.fromAsync(repo.findFollowedBots(followeeId)),
+        ["botB"],
+      );
+
+      await repo.removeFollowee("botB", followeeId);
+      assert.deepStrictEqual(
+        await Array.fromAsync(repo.findFollowedBots(followeeId)),
+        [],
+      );
+    });
+  });
+
+  describe(`${name}: forIdentifier()`, () => {
+    test("returns a repository view scoped to the given identifier", async () => {
+      const repo = factory();
+      const scoped = repo.forIdentifier("botA");
+      assert.deepStrictEqual(scoped.identifier, "botA");
+
+      // Writes through the scoped view are visible through the root:
+      const messageId: Uuid = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+      const message = createNote(messageId, "botA");
+      await scoped.addMessage(messageId, message);
+      assert.deepStrictEqual(
+        await (await repo.getMessage("botA", messageId))?.toJsonLd(),
+        await message.toJsonLd(),
+      );
+      assert.deepStrictEqual(
+        await repo.getMessage("botB", messageId),
+        undefined,
+      );
+      assert.deepStrictEqual(await scoped.countMessages(), 1);
+
+      // Writes through the root are visible through the scoped view:
+      const follower = new Person({
+        id: new URL("https://example.com/ap/actor/john"),
+        preferredUsername: "john",
+      });
+      const followId = new URL(
+        "https://example.com/ap/follow/be2da56a-0ea3-4a6a-9dff-2a1837be67e0",
+      );
+      await repo.addFollower("botA", followId, follower);
+      assert.ok(await scoped.hasFollower(follower.id!));
+      assert.deepStrictEqual(await scoped.countFollowers(), 1);
+
+      // Key pairs round-trip through the scoped view:
+      await scoped.setKeyPairs(keyPairs);
+      assert.deepStrictEqual(await scoped.getKeyPairs(), keyPairs);
+      assert.deepStrictEqual(await repo.getKeyPairs("botA"), keyPairs);
+      assert.deepStrictEqual(await repo.getKeyPairs("botB"), undefined);
+    });
+  });
+}
+
+describe("KvRepository.migrate()", () => {
+  async function seedLegacyData(kv: MemoryKvStore): Promise<{
+    messageId: Uuid;
+    messageJson: unknown;
+    followerId: URL;
+    followRequestId: URL;
+    followeeId: URL;
+    followeeFollowJson: unknown;
+    sentFollowId: Uuid;
+    sentFollowJson: unknown;
+  }> {
+    // Simulates the key layout of BotKit 0.4 and earlier, which was not
+    // scoped by bot identifiers.
+    const messageId: Uuid = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+    const message = createNote(messageId, "bot");
+    const messageJson = await message.toJsonLd({ format: "compact" });
+    await kv.set(["_botkit", "messages"], [messageId]);
+    await kv.set(["_botkit", "messages", messageId], messageJson);
+
+    const keyPairsData = [];
+    for (const pair of keyPairs) {
+      keyPairsData.push({
+        private: await exportJwk(pair.privateKey),
+        public: await exportJwk(pair.publicKey),
+      });
+    }
+    await kv.set(["_botkit", "keyPairs"], keyPairsData);
+
+    const follower = new Person({
+      id: new URL("https://example.com/ap/actor/john"),
+      preferredUsername: "john",
+    });
+    const followRequestId = new URL(
+      "https://example.com/ap/follow/be2da56a-0ea3-4a6a-9dff-2a1837be67e0",
+    );
+    await kv.set(["_botkit", "followers"], [follower.id!.href]);
+    await kv.set(
+      ["_botkit", "followers", follower.id!.href],
+      await follower.toJsonLd({ format: "compact" }),
+    );
+    await kv.set(
+      ["_botkit", "followRequests", followRequestId.href],
+      follower.id!.href,
+    );
+
+    const followeeId = new URL("https://example.com/ap/actor/jane");
+    const followeeFollow = new Follow({
+      id: new URL(
+        "https://example.com/ap/follow/03a395a2-353a-4894-afdb-2cab31a7b004",
+      ),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: followeeId,
+    });
+    const followeeFollowJson = await followeeFollow.toJsonLd({
+      format: "compact",
+    });
+    await kv.set(["_botkit", "followees", followeeId.href], followeeFollowJson);
+
+    const sentFollowId: Uuid = "e35ff5d8-ede9-4f5e-9b83-4bfcd4c9a69c";
+    const sentFollow = new Follow({
+      id: new URL(`https://example.com/ap/follow/${sentFollowId}`),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: new URL("https://example.com/ap/actor/joe"),
+    });
+    const sentFollowJson = await sentFollow.toJsonLd({ format: "compact" });
+    await kv.set(["_botkit", "follows", sentFollowId], sentFollowJson);
+
+    // Poll votes for the message:
+    await kv.set(["_botkit", "polls", messageId], ["option1", "option2"]);
+    await kv.set(["_botkit", "polls", messageId, "option1"], [
+      "https://example.com/ap/actor/alice",
+      "https://example.com/ap/actor/bob",
+    ]);
+    await kv.set(["_botkit", "polls", messageId, "option2"], [
+      "https://example.com/ap/actor/alice",
+    ]);
+
+    return {
+      messageId,
+      messageJson,
+      followerId: follower.id!,
+      followRequestId,
+      followeeId,
+      followeeFollowJson,
+      sentFollowId,
+      sentFollowJson,
+    };
+  }
+
+  test("adopts legacy unscoped data", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+
+    await repo.migrate("bot");
+
+    assert.deepStrictEqual(await repo.getKeyPairs("bot"), keyPairs);
+    assert.deepStrictEqual(await repo.countMessages("bot"), 1);
+    assert.deepStrictEqual(
+      await (await repo.getMessage("bot", seed.messageId))?.toJsonLd({
+        format: "compact",
+      }),
+      seed.messageJson,
+    );
+    assert.deepStrictEqual(
+      (await Array.fromAsync(repo.getMessages("bot"))).length,
+      1,
+    );
+    assert.ok(await repo.hasFollower("bot", seed.followerId));
+    assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+    assert.deepStrictEqual(await repo.countVoters("bot", seed.messageId), 2);
+    assert.deepStrictEqual(await repo.countVotes("bot", seed.messageId), {
+      option1: 2,
+      option2: 1,
+    });
+
+    // Data must belong to the migrated identifier only:
+    assert.deepStrictEqual(await repo.getKeyPairs("other"), undefined);
+    assert.deepStrictEqual(await repo.countMessages("other"), 0);
+
+    // Legacy keys are kept (copy, not move), so a partially failed run can
+    // be retried without data loss:
+    assert.ok(await kv.get(["_botkit", "messages", seed.messageId]) != null);
+  });
+
+  test("is idempotent", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+
+    await repo.migrate("bot");
+    await repo.migrate("bot");
+
+    assert.deepStrictEqual(await repo.countMessages("bot"), 1);
+    assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+
+    // A migrated message that is removed afterwards must not reappear:
+    await repo.removeMessage("bot", seed.messageId);
+    await repo.migrate("bot");
+    assert.deepStrictEqual(await repo.countMessages("bot"), 0);
+  });
+
+  test("does nothing without legacy data", async () => {
+    const kv = new MemoryKvStore();
+    const repo = new KvRepository(kv);
+    await repo.migrate("bot");
+    assert.deepStrictEqual(await repo.countMessages("bot"), 0);
+    assert.deepStrictEqual(await repo.getKeyPairs("bot"), undefined);
+  });
+
+  test("does not clobber scoped data written before migration", async () => {
+    const kv = new MemoryKvStore();
+    await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+    await repo.setKeyPairs("bot", keyPairs.slice(0, 1));
+    await repo.migrate("bot");
+    assert.deepStrictEqual(await repo.getKeyPairs("bot"), [keyPairs[0]]);
+  });
+
+  test("migrates sent follows eagerly", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+    await repo.migrate("bot");
+
+    const follow = await repo.getSentFollow("bot", seed.sentFollowId);
+    assert.deepStrictEqual(
+      await follow?.toJsonLd({ format: "compact" }),
+      seed.sentFollowJson,
+    );
+    // Legacy keys are copied, not moved:
+    assert.ok(
+      await kv.get(["_botkit", "follows", seed.sentFollowId]) != null,
+    );
+
+    // The adoption applies only to the migrating identifier:
+    const kv2 = new MemoryKvStore();
+    const seed2 = await seedLegacyData(kv2);
+    const repo2 = new KvRepository(kv2);
+    await repo2.migrate("bot");
+    assert.deepStrictEqual(
+      await repo2.getSentFollow("other", seed2.sentFollowId),
+      undefined,
+    );
+  });
+
+  test("migrates followees eagerly with their reverse index", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+    await repo.migrate("bot");
+
+    // The reverse index is populated by the migration itself, before any
+    // followee is individually accessed, so timeline routing works right
+    // after an upgrade:
+    assert.deepStrictEqual(
+      await Array.fromAsync(repo.findFollowedBots(seed.followeeId)),
+      ["bot"],
+    );
+    const follow = await repo.getFollowee("bot", seed.followeeId);
+    assert.deepStrictEqual(
+      await follow?.toJsonLd({ format: "compact" }),
+      seed.followeeFollowJson,
+    );
+  });
+
+  test("migrates follow requests eagerly", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+    await repo.migrate("bot");
+
+    // removeFollower() consults the migrated follow request record:
+    const removed = await repo.removeFollower(
+      "bot",
+      seed.followRequestId,
+      seed.followerId,
+    );
+    assert.ok(removed != null);
+    assert.deepStrictEqual(
+      await repo.hasFollower("bot", seed.followerId),
+      false,
+    );
+    assert.deepStrictEqual(await repo.countFollowers("bot"), 0);
+  });
+
+  test("migrates poll options named like lock keys", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    // Poll option names are user-controlled, so an option may collide with
+    // the transient "lock" suffix used by the message/follower index lists:
+    await kv.set(["_botkit", "polls", seed.messageId], ["lock", "open"]);
+    await kv.set(
+      ["_botkit", "polls", seed.messageId, "lock"],
+      ["https://example.com/ap/actor/voter1"],
+    );
+    await kv.set(
+      ["_botkit", "polls", seed.messageId, "open"],
+      ["https://example.com/ap/actor/voter2"],
+    );
+    const repo = new KvRepository(kv);
+    await repo.migrate("bot");
+
+    assert.deepStrictEqual(await repo.countVotes("bot", seed.messageId), {
+      lock: 1,
+      open: 1,
+    });
+  });
+
+  test("adopts legacy data for one identifier only", async () => {
+    const kv = new MemoryKvStore();
+    await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+
+    await repo.migrate("botA");
+    // A later migration for another identifier must not adopt the same
+    // legacy rows again; that would break cross-identifier isolation:
+    await repo.migrate("botB");
+
+    assert.deepStrictEqual(await repo.countMessages("botA"), 1);
+    assert.deepStrictEqual(await repo.countMessages("botB"), 0);
+    assert.deepStrictEqual(await repo.getKeyPairs("botB"), undefined);
+    assert.deepStrictEqual(await repo.countFollowers("botB"), 0);
+  });
+
+  test("claims the legacy data atomically under concurrency", async () => {
+    // Slows reads down so that two concurrent migrations overlap on the
+    // missing-marker check; the CAS-backed claim must still admit only one:
+    class SlowKvStore implements KvStore {
+      readonly #inner = new MemoryKvStore();
+      async get<T = unknown>(key: KvKey): Promise<T | undefined> {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return await this.#inner.get<T>(key);
+      }
+      set(key: KvKey, value: unknown): Promise<void> {
+        return this.#inner.set(key, value);
+      }
+      delete(key: KvKey): Promise<void> {
+        return this.#inner.delete(key);
+      }
+      cas(
+        key: KvKey,
+        expectedValue: unknown,
+        newValue: unknown,
+      ): Promise<boolean> {
+        return this.#inner.cas!(key, expectedValue, newValue);
+      }
+      list(prefix?: KvKey): AsyncIterable<KvStoreListEntry> {
+        return this.#inner.list(prefix);
+      }
+    }
+    const kv = new SlowKvStore();
+    // Seed legacy data through the inner store's interface:
+    const messageId: Uuid = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+    const message = createNote(messageId, "bot");
+    await kv.set(["_botkit", "messages"], [messageId]);
+    await kv.set(
+      ["_botkit", "messages", messageId],
+      await message.toJsonLd({ format: "compact" }),
+    );
+
+    const repo = new KvRepository(kv);
+    await Promise.all([repo.migrate("botA"), repo.migrate("botB")]);
+
+    const counts = [
+      await repo.countMessages("botA"),
+      await repo.countMessages("botB"),
+    ];
+    counts.sort();
+    // Exactly one identifier adopted the legacy data:
+    assert.deepStrictEqual(counts, [0, 1]);
+  });
+
+  test("keeps the legacy data with the adopting identifier", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+
+    await repo.migrate("botA");
+    await repo.migrate("botB");
+
+    assert.deepStrictEqual(
+      await repo.getSentFollow("botB", seed.sentFollowId),
+      undefined,
+    );
+    assert.ok(await repo.getSentFollow("botA", seed.sentFollowId) != null);
+  });
+
+  test("forwards migration through MemoryCachedRepository", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new MemoryCachedRepository(new KvRepository(kv));
+
+    await repo.migrate?.("bot");
+
+    assert.deepStrictEqual(await repo.getKeyPairs("bot"), keyPairs);
+    assert.deepStrictEqual(await repo.countMessages("bot"), 1);
+    assert.ok(await repo.hasFollower("bot", seed.followerId));
+    // Records keyed by UUIDs are migrated as well:
+    assert.deepStrictEqual(
+      await (await repo.getSentFollow("bot", seed.sentFollowId))?.toJsonLd({
+        format: "compact",
+      }),
+      seed.sentFollowJson,
+    );
+  });
+
+  test("does not expose legacy data before migrate() is called", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+    assert.deepStrictEqual(
+      await repo.getSentFollow("bot", seed.sentFollowId),
+      undefined,
+    );
+  });
+});

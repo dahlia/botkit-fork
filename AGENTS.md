@@ -68,6 +68,10 @@ Architecture
  -  *src/mod.ts* - Main entry point, re-exports all public APIs
  -  *src/bot.ts* - Core Bot interface and createBot function
  -  *src/bot-impl.ts* - Internal Bot implementation
+ -  *src/instance.ts* - Instance interface and createInstance function for
+    hosting multiple bots on a single server
+ -  *src/instance-impl.ts* - Internal Instance implementation, which owns
+    the Fedify federation and routes incoming activities to the right bots
  -  *src/session.ts* - Session management for bot operations
  -  *src/message.ts* - Message types and ActivityPub objects (Note, Article,
     etc.)
@@ -80,8 +84,13 @@ Architecture
 
 ### Key concepts
 
- -  *Bot*: The main bot instance created with `createBot()`, handles events
-    and provides session access
+ -  *Instance*: A server hosting one or more bots, created with
+    `createInstance()`; owns the shared infrastructure (KV store, queue,
+    repository, HTTP handling)
+ -  *Bot*: An individual ActivityPub actor created with `createBot()` (which
+    hosts a single bot on a dedicated instance) or `Instance.createBot()`
+    (static bots or dynamic bot groups); handles events and provides session
+    access
  -  *Session*: Scoped bot operations for publishing content and managing state
  -  *Message*: ActivityPub objects like Note, Article, Question with rich text
     support

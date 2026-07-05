@@ -32,6 +32,7 @@ import { encode } from "html-entities";
 import MarkdownIt from "markdown-it";
 import type { DeferredCustomEmoji } from "./emoji.ts";
 import type { Session } from "./session.ts";
+import { SessionImpl } from "./session-impl.ts";
 
 /**
  * A tree structure representing a text with formatting.  It does not only
@@ -410,7 +411,7 @@ export function mention<TContextData>(
       isActor(b) ? b : async (session) => {
         if (session.actorId.href === b.href) return await session.getActor();
         const documentLoader = await session.context.getDocumentLoader(
-          session.bot,
+          { identifier: session.bot.identifier },
         );
         return await session.context.lookupObject(b, { documentLoader });
       },
@@ -422,7 +423,7 @@ export function mention<TContextData>(
       async (session) => {
         if (session.actorHandle === a) return await session.getActor();
         const documentLoader = await session.context.getDocumentLoader(
-          session.bot,
+          { identifier: session.bot.identifier },
         );
         return await session.context.lookupObject(a, { documentLoader });
       },
@@ -446,11 +447,30 @@ export function mention<TContextData>(
     async (session) => {
       if (a.href === session.actorId.href) return await session.getActor();
       const documentLoader = await session.context.getDocumentLoader(
-        session.bot,
+        { identifier: session.bot.identifier },
       );
       return await session.context.lookupObject(a, { documentLoader });
     },
   );
+}
+
+/**
+ * The base URL (without a trailing slash) under which the hashtag pages of
+ * the session's bot live: the origin itself on a single-bot instance, and
+ * the bot's own web path (e.g. `https://host/@username`) on a multi-bot
+ * instance, where the root `/tags/` path is not served.
+ */
+function getHashtagPageBase<TContextData>(
+  session: Session<TContextData>,
+): string {
+  if (session instanceof SessionImpl) {
+    const url = session.bot.instance.getBotWebUrl(
+      session.bot,
+      session.context.origin,
+    );
+    return url.href.replace(/\/+$/, "");
+  }
+  return session.context.origin;
 }
 
 /**
@@ -472,7 +492,7 @@ export class HashtagText<TContextData> implements Text<"inline", TContextData> {
 
   async *getHtml(session: Session<TContextData>): AsyncIterable<string> {
     yield '<a href="';
-    yield encode(session.context.origin);
+    yield encode(getHashtagPageBase(session));
     yield "/tags/";
     yield encode(encodeURIComponent(this.#tag.toLowerCase()));
     yield '" class="mention hashtag" rel="tag" target="_blank">#<span>';
@@ -483,8 +503,9 @@ export class HashtagText<TContextData> implements Text<"inline", TContextData> {
   async *getTags(session: Session<TContextData>): AsyncIterable<Link | Object> {
     yield new Hashtag({
       href: new URL(
-        `/tags/${encodeURIComponent(this.#tag.toLowerCase())}`,
-        session.context.origin,
+        `${getHashtagPageBase(session)}/tags/${
+          encodeURIComponent(this.#tag.toLowerCase())
+        }`,
       ),
       name: `#${this.#tag.toLowerCase()}`,
     });
@@ -805,6 +826,7 @@ interface MarkdownEnv {
   mentions: string[];
   hashtags: string[];
   origin: string;
+  tagBase: string;
   actors?: Record<string, string | null>;
 }
 
@@ -850,6 +872,7 @@ export class MarkdownText<TContextData> implements Text<"block", TContextData> {
         mentions: [],
         hashtags: [],
         origin: "http://localhost",
+        tagBase: "http://localhost",
       };
       md.render(content, env);
       this.#mentions = env.mentions;
@@ -858,7 +881,7 @@ export class MarkdownText<TContextData> implements Text<"block", TContextData> {
       md.use(hashtagPlugin, {
         link(hashtag: string, env: MarkdownEnv) {
           const tag = hashtag.substring(1).toLowerCase();
-          return new URL(`/tags/${encodeURIComponent(tag)}`, env.origin).href;
+          return `${env.tagBase}/tags/${encodeURIComponent(tag)}`;
         },
         linkAttributes(_hashtag: string, _env: MarkdownEnv) {
           return {
@@ -876,6 +899,7 @@ export class MarkdownText<TContextData> implements Text<"block", TContextData> {
         mentions: [],
         hashtags: [],
         origin: "http://localhost",
+        tagBase: "http://localhost",
       };
       md.render(content, env);
       this.#hashtags = env.hashtags;
@@ -888,7 +912,9 @@ export class MarkdownText<TContextData> implements Text<"block", TContextData> {
   ): Promise<Record<string, Object>> {
     if (this.#mentions == null) return {};
     if (this.#actors != null) return this.#actors;
-    const documentLoader = await session.context.getDocumentLoader(session.bot);
+    const documentLoader = await session.context.getDocumentLoader({
+      identifier: session.bot.identifier,
+    });
     const objects = await Promise.all(
       this.#mentions.map((m) =>
         m === session.actorHandle
@@ -928,6 +954,7 @@ export class MarkdownText<TContextData> implements Text<"block", TContextData> {
       mentions: [],
       hashtags: [],
       origin: session.context.origin,
+      tagBase: getHashtagPageBase(session),
       actors,
     };
     yield this.#markdownIt.render(this.#content, env);
@@ -949,8 +976,7 @@ export class MarkdownText<TContextData> implements Text<"block", TContextData> {
         yield new Hashtag({
           name: `#${tag}`,
           href: new URL(
-            `/tags/${encodeURIComponent(tag)}`,
-            session.context.origin,
+            `${getHashtagPageBase(session)}/tags/${encodeURIComponent(tag)}`,
           ),
         });
       }

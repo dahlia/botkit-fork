@@ -39,6 +39,7 @@ import {
 } from "@fedify/vocab";
 import { decode } from "html-entities";
 import { v7 as uuidv7 } from "uuid";
+import { parseLocalUri } from "./uri.ts";
 import xss from "xss";
 import type { DeferredCustomEmoji, Emoji } from "./emoji.ts";
 import type {
@@ -148,7 +149,10 @@ export class MessageImpl<T extends MessageClass, TContextData>
     const id = uuidv7({ msecs: +published }) as Uuid;
     const visibility = options.visibility ?? this.visibility;
     const originalActor = this.actor.id == null ? [] : [this.actor.id];
-    const uri = this.session.context.getObjectUri(Announce, { id });
+    const uri = this.session.context.getObjectUri(Announce, {
+      identifier: this.session.bot.identifier,
+      id,
+    });
     const announce = new Announce({
       id: uri,
       actor: this.session.context.getActorUri(this.session.bot.identifier),
@@ -373,10 +377,15 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
   extends MessageImpl<T, TContextData>
   implements AuthorizedMessage<T, TContextData> {
   async update(text: Text<"block", TContextData>): Promise<void> {
-    const parsed = this.session.context.parseUri(this.id);
+    const parsed = parseLocalUri(
+      this.session.context,
+      this.id,
+      this.session.bot.legacyObjectUrisIdentifier,
+    );
     if (
       parsed?.type !== "object" ||
-      !messageClasses.some((cls) => parsed.class === cls)
+      !messageClasses.some((cls) => parsed.class === cls) ||
+      parsed.values.identifier !== this.session.bot.identifier
     ) {
       return;
     }
@@ -464,7 +473,10 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
         update = new Update({
           id: new URL(
             `#updated/${updated.toString()}`,
-            this.session.context.getObjectUri(Create, { id }),
+            this.session.context.getObjectUri(Create, {
+              identifier: this.session.bot.identifier,
+              id,
+            }),
           ),
           actors: newMessage.attributionIds,
           tos: to.map((url) => new URL(url)),
@@ -512,10 +524,15 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
   }
 
   async delete(): Promise<void> {
-    const parsed = this.session.context.parseUri(this.id);
+    const parsed = parseLocalUri(
+      this.session.context,
+      this.id,
+      this.session.bot.legacyObjectUrisIdentifier,
+    );
     if (
       parsed?.type !== "object" ||
-      !messageClasses.some((cls) => parsed.class === cls)
+      !messageClasses.some((cls) => parsed.class === cls) ||
+      parsed.values.identifier !== this.session.bot.identifier
     ) {
       return;
     }
@@ -664,9 +681,16 @@ export async function createMessage<T extends MessageClass, TContextData>(
   }
   if (replyTarget == null) {
     let rt: Link | Object | null;
-    const parsed = session.context.parseUri(raw.replyTargetId);
-    // @ts-ignore: The `class` property satisfies the `MessageClass` type.
-    if (parsed?.type === "object" && messageClasses.includes(parsed.class)) {
+    const parsed = parseLocalUri(
+      session.context,
+      raw.replyTargetId,
+      session.bot.legacyObjectUrisIdentifier,
+    );
+    if (
+      // @ts-ignore: The `class` property satisfies the `MessageClass` type.
+      parsed?.type === "object" && messageClasses.includes(parsed.class) &&
+      parsed.values.identifier === session.bot.identifier
+    ) {
       // @ts-ignore: The `class` property satisfies the `MessageClass` type.
       // deno-lint-ignore no-explicit-any
       const cls: new (values: any) => T = parsed.class;
@@ -694,9 +718,16 @@ export async function createMessage<T extends MessageClass, TContextData>(
     }
     if (quoteUrl == null) quoteUrl = raw.quoteUrl;
     let qt: Object | null = null;
-    const parsed = session.context.parseUri(quoteUrl);
-    // @ts-ignore: The `class` property satisfies the `MessageClass` type.
-    if (parsed?.type === "object" && messageClasses.includes(parsed.class)) {
+    const parsed = parseLocalUri(
+      session.context,
+      quoteUrl,
+      session.bot.legacyObjectUrisIdentifier,
+    );
+    if (
+      // @ts-ignore: The `class` property satisfies the `MessageClass` type.
+      parsed?.type === "object" && messageClasses.includes(parsed.class) &&
+      parsed.values.identifier === session.bot.identifier
+    ) {
       // @ts-ignore: The `class` property satisfies the `MessageClass` type.
       // deno-lint-ignore no-explicit-any
       const cls: new (values: any) => T = parsed.class;

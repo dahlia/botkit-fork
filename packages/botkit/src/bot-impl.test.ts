@@ -222,7 +222,7 @@ test("BotImpl.dispatchActor()", async () => {
   assert.ok(publicKey != null);
   assert.deepStrictEqual(publicKey.ownerId, actor.id);
   assert.ok(publicKey.publicKey != null);
-  const keys = await repository.getKeyPairs();
+  const keys = await repository.getKeyPairs("bot");
   assert.ok(keys != null);
   assert.deepStrictEqual(publicKey.publicKey, keys[0].publicKey);
   const assertionMethods = await Array.fromAsync(actor.getAssertionMethods());
@@ -267,7 +267,7 @@ test("BotImpl.dispatchActorKeyPairs()", async () => {
   );
   // Generation:
   const keyPairs = await bot.dispatchActorKeyPairs(ctx, "bot");
-  const storedKeyPairs = await repository.getKeyPairs();
+  const storedKeyPairs = await repository.getKeyPairs("bot");
   assert.deepStrictEqual(keyPairs, storedKeyPairs);
   // Retrieval:
   const keyPairs2 = await bot.dispatchActorKeyPairs(ctx, "bot");
@@ -298,6 +298,7 @@ test("BotImpl.dispatchFollowers()", async () => {
   assert.deepStrictEqual(empty, { items: [], nextCursor: null });
 
   await repository.addFollower(
+    "bot",
     new URL("https://example.com/actor/1#follow"),
     new Person({
       id: new URL("https://example.com/actor/1"),
@@ -306,6 +307,7 @@ test("BotImpl.dispatchFollowers()", async () => {
     }),
   );
   await repository.addFollower(
+    "bot",
     new URL("https://example.com/actor/2#follow"),
     new Person({
       id: new URL("https://example.com/actor/2"),
@@ -314,6 +316,7 @@ test("BotImpl.dispatchFollowers()", async () => {
     }),
   );
   await repository.addFollower(
+    "bot",
     new URL("https://example.com/actor/3#follow"),
     new Person({
       id: new URL("https://example.com/actor/3"),
@@ -393,6 +396,7 @@ test("BotImpl.countFollowers()", async () => {
   assert.deepStrictEqual(await bot.countFollowers(ctx, "non-existent"), null);
   assert.deepStrictEqual(await bot.countFollowers(ctx, "bot"), 0);
   await repository.addFollower(
+    "bot",
     new URL("https://example.com/actor/1#follow"),
     new Person({
       id: new URL("https://example.com/actor/1"),
@@ -401,6 +405,7 @@ test("BotImpl.countFollowers()", async () => {
     }),
   );
   await repository.addFollower(
+    "bot",
     new URL("https://example.com/actor/2#follow"),
     new Person({
       id: new URL("https://example.com/actor/2"),
@@ -409,6 +414,7 @@ test("BotImpl.countFollowers()", async () => {
     }),
   );
   await repository.addFollower(
+    "bot",
     new URL("https://example.com/actor/3#follow"),
     new Person({
       id: new URL("https://example.com/actor/3"),
@@ -467,6 +473,7 @@ test("BotImpl.getPermissionChecker()", async () => {
   assert.deepStrictEqual(nonFollower(directPost), false);
 
   await repository.addFollower(
+    "bot",
     new URL("https://example.com/actor/john#follow"),
     new Person({
       id: new URL("https://example.com/actor/john"),
@@ -529,6 +536,7 @@ test("BotImpl.dispatchOutbox()", async () => {
   });
 
   await repository.addMessage(
+    "bot",
     "78acb1ea-4ac6-46b7-bcd4-3a8965d8126e",
     new Create({
       id: new URL(
@@ -549,6 +557,7 @@ test("BotImpl.dispatchOutbox()", async () => {
     }),
   );
   await repository.addMessage(
+    "bot",
     "46442170-836d-4a0d-9142-f31242abe2f9",
     new Create({
       id: new URL(
@@ -569,6 +578,7 @@ test("BotImpl.dispatchOutbox()", async () => {
     }),
   );
   await repository.addMessage(
+    "bot",
     "8386a4c7-06f8-409f-ad72-2bba43e83363",
     new Create({
       id: new URL(
@@ -682,6 +692,7 @@ test("BotImpl.countOutbox()", async () => {
   assert.deepStrictEqual(await bot.countOutbox(ctx, "bot"), 0);
 
   await repository.addMessage(
+    "bot",
     "78acb1ea-4ac6-46b7-bcd4-3a8965d8126e",
     new Create({
       id: new URL(
@@ -700,6 +711,7 @@ test("BotImpl.countOutbox()", async () => {
     }),
   );
   await repository.addMessage(
+    "bot",
     "46442170-836d-4a0d-9142-f31242abe2f9",
     new Create({
       id: new URL(
@@ -718,6 +730,7 @@ test("BotImpl.countOutbox()", async () => {
     }),
   );
   await repository.addMessage(
+    "bot",
     "8386a4c7-06f8-409f-ad72-2bba43e83363",
     new Create({
       id: new URL(
@@ -749,11 +762,15 @@ test("BotImpl.dispatchFollow()", async () => {
     undefined,
   );
   assert.deepStrictEqual(
-    await bot.dispatchFollow(ctx, { id: crypto.randomUUID() }),
+    await bot.dispatchFollow(ctx, {
+      identifier: "bot",
+      id: crypto.randomUUID(),
+    }),
     null,
   );
 
   await repository.addSentFollow(
+    "bot",
     "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a",
     new Follow({
       id: new URL(
@@ -765,6 +782,7 @@ test("BotImpl.dispatchFollow()", async () => {
     }),
   );
   const follow = await bot.dispatchFollow(ctx, {
+    identifier: "bot",
     id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a",
   });
   assert.ok(follow instanceof Follow);
@@ -800,6 +818,7 @@ test("BotImpl.authorizeFollow()", async () => {
     undefined,
   );
   await repository.addSentFollow(
+    "bot",
     "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a",
     new Follow({
       id: new URL(
@@ -823,14 +842,14 @@ test("BotImpl.authorizeFollow()", async () => {
   assert.ok(
     await bot.authorizeFollow(
       ctx,
-      { id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a" },
+      { identifier: "bot", id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a" },
     ),
   );
   setSignedKeyOwner(await new SessionImpl(bot, ctx).getActor());
   assert.ok(
     await bot.authorizeFollow(
       ctx,
-      { id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a" },
+      { identifier: "bot", id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a" },
     ),
   );
   setSignedKeyOwner(
@@ -839,7 +858,7 @@ test("BotImpl.authorizeFollow()", async () => {
   assert.deepStrictEqual(
     await bot.authorizeFollow(
       ctx,
-      { id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a" },
+      { identifier: "bot", id: "b51f6ca8-53e6-4f7d-ac1f-d039e8c6df5a" },
     ),
     false,
   );
@@ -849,7 +868,7 @@ test("BotImpl.authorizeFollow()", async () => {
   assert.deepStrictEqual(
     await bot.authorizeFollow(
       ctx,
-      { id: crypto.randomUUID() },
+      { identifier: "bot", id: crypto.randomUUID() },
     ),
     false,
   );
@@ -867,11 +886,12 @@ test("BotImpl.dispatchCreate()", async () => {
     undefined,
   );
   assert.deepStrictEqual(
-    await bot.dispatchCreate(ctx, { id: "non-existent" }),
+    await bot.dispatchCreate(ctx, { identifier: "bot", id: "non-existent" }),
     null,
   );
 
   await repository.addMessage(
+    "bot",
     "78acb1ea-4ac6-46b7-bcd4-3a8965d8126e",
     new Create({
       id: new URL(
@@ -890,6 +910,7 @@ test("BotImpl.dispatchCreate()", async () => {
     }),
   );
   const create = await bot.dispatchCreate(ctx, {
+    identifier: "bot",
     id: "78acb1ea-4ac6-46b7-bcd4-3a8965d8126e",
   });
   assert.ok(create instanceof Create);
@@ -909,12 +930,14 @@ test("BotImpl.dispatchCreate()", async () => {
   ctx2.getSignedKeyOwner = () => Promise.resolve(actor);
   assert.deepStrictEqual(
     await bot.dispatchCreate(ctx2, {
+      identifier: "bot",
       id: "78acb1ea-4ac6-46b7-bcd4-3a8965d8126e",
     }),
     create,
   );
 
   await repository.addMessage(
+    "bot",
     "8386a4c7-06f8-409f-ad72-2bba43e83363",
     new Create({
       id: new URL(
@@ -932,11 +955,13 @@ test("BotImpl.dispatchCreate()", async () => {
   );
   assert.deepStrictEqual(
     await bot.dispatchCreate(ctx, {
+      identifier: "bot",
       id: "8386a4c7-06f8-409f-ad72-2bba43e83363",
     }),
     null,
   );
   const create2 = await bot.dispatchCreate(ctx2, {
+    identifier: "bot",
     id: "8386a4c7-06f8-409f-ad72-2bba43e83363",
   });
   assert.ok(create2 instanceof Create);
@@ -948,6 +973,7 @@ test("BotImpl.dispatchCreate()", async () => {
   );
 
   await repository.addMessage(
+    "bot",
     "ce8081ac-f238-484b-9a70-5d8a4b66d829",
     new Announce({
       id: new URL(
@@ -961,6 +987,7 @@ test("BotImpl.dispatchCreate()", async () => {
   );
   assert.deepStrictEqual(
     await bot.dispatchCreate(ctx, {
+      identifier: "bot",
       id: "ce8081ac-f238-484b-9a70-5d8a4b66d829",
     }),
     null,
@@ -984,6 +1011,7 @@ test("BotImpl.dispatchMessage()", async () => {
   );
 
   await repository.addMessage(
+    "bot",
     "78acb1ea-4ac6-46b7-bcd4-3a8965d8126e",
     new Create({
       id: new URL(
@@ -1039,6 +1067,7 @@ test("BotImpl.dispatchMessage()", async () => {
   );
 
   await repository.addMessage(
+    "bot",
     "8386a4c7-06f8-409f-ad72-2bba43e83363",
     new Create({
       id: new URL(
@@ -1074,6 +1103,7 @@ test("BotImpl.dispatchMessage()", async () => {
   );
 
   await repository.addMessage(
+    "bot",
     "ce8081ac-f238-484b-9a70-5d8a4b66d829",
     new Announce({
       id: new URL(
@@ -1107,11 +1137,12 @@ test("BotImpl.dispatchAnnounce()", async () => {
     undefined,
   );
   assert.deepStrictEqual(
-    await bot.dispatchAnnounce(ctx, { id: "non-existent" }),
+    await bot.dispatchAnnounce(ctx, { identifier: "bot", id: "non-existent" }),
     null,
   );
 
   await repository.addMessage(
+    "bot",
     "ce8081ac-f238-484b-9a70-5d8a4b66d829",
     new Announce({
       id: new URL(
@@ -1124,6 +1155,7 @@ test("BotImpl.dispatchAnnounce()", async () => {
     }),
   );
   const announce = await bot.dispatchAnnounce(ctx, {
+    identifier: "bot",
     id: "ce8081ac-f238-484b-9a70-5d8a4b66d829",
   });
   assert.ok(announce instanceof Announce);
@@ -1135,6 +1167,7 @@ test("BotImpl.dispatchAnnounce()", async () => {
   );
 
   await repository.addMessage(
+    "bot",
     "78acb1ea-4ac6-46b7-bcd4-3a8965d8126e",
     new Create({
       id: new URL(
@@ -1154,12 +1187,14 @@ test("BotImpl.dispatchAnnounce()", async () => {
   );
   assert.deepStrictEqual(
     await bot.dispatchAnnounce(ctx, {
+      identifier: "bot",
       id: "78acb1ea-4ac6-46b7-bcd4-3a8965d8126e",
     }),
     null,
   );
 
   await repository.addMessage(
+    "bot",
     "d4a7ef9b-682c-4de9-b23c-87747d6725cb",
     new Announce({
       id: new URL(
@@ -1172,6 +1207,7 @@ test("BotImpl.dispatchAnnounce()", async () => {
   );
   assert.deepStrictEqual(
     await bot.dispatchAnnounce(ctx, {
+      identifier: "bot",
       id: "d4a7ef9b-682c-4de9-b23c-87747d6725cb",
     }),
     null,
@@ -1185,6 +1221,7 @@ test("BotImpl.dispatchAnnounce()", async () => {
   });
   ctx2.getSignedKeyOwner = () => Promise.resolve(actor);
   const announce2 = await bot.dispatchAnnounce(ctx2, {
+    identifier: "bot",
     id: "d4a7ef9b-682c-4de9-b23c-87747d6725cb",
   });
   assert.ok(announce2 instanceof Announce);
@@ -1298,7 +1335,7 @@ for (const policy of ["accept", "reject", "manual"] as const) {
         object: new URL("https://example.com/ap/actor/bot"),
       });
       await bot.onFollowed(ctx, followWithoutActor);
-      assert.deepStrictEqual(await repository.countFollowers(), 0);
+      assert.deepStrictEqual(await repository.countFollowers("bot"), 0);
     });
 
     await t.test("with wrong actor", async () => {
@@ -1308,7 +1345,7 @@ for (const policy of ["accept", "reject", "manual"] as const) {
         object: new URL("https://example.com/ap/actor/bot"),
       });
       await bot.onFollowed(ctx, followWithWrongActor);
-      assert.deepStrictEqual(await repository.countFollowers(), 0);
+      assert.deepStrictEqual(await repository.countFollowers("bot"), 0);
     });
 
     const actor = new Person({
@@ -1323,7 +1360,7 @@ for (const policy of ["accept", "reject", "manual"] as const) {
         object: new URL("https://example.com/ap/actor/non-existent"),
       });
       await bot.onFollowed(ctx, followWithWrongRecipient);
-      assert.deepStrictEqual(await repository.countFollowers(), 0);
+      assert.deepStrictEqual(await repository.countFollowers("bot"), 0);
     });
 
     await t.test("with correct follow", async () => {
@@ -1334,14 +1371,15 @@ for (const policy of ["accept", "reject", "manual"] as const) {
       });
       await bot.onFollowed(ctx, follow);
       if (policy === "accept") {
-        assert.deepStrictEqual(await repository.countFollowers(), 1);
+        assert.deepStrictEqual(await repository.countFollowers("bot"), 1);
         assert.ok(
           await repository.hasFollower(
+            "bot",
             new URL("https://example.com/ap/actor/john"),
           ),
         );
         const [storedFollower] = await Array.fromAsync(
-          repository.getFollowers(),
+          repository.getFollowers("bot"),
         );
         assert.ok(storedFollower instanceof Person);
         assert.deepStrictEqual(storedFollower.id, actor.id);
@@ -1358,7 +1396,7 @@ for (const policy of ["accept", "reject", "manual"] as const) {
         assert.deepStrictEqual(ctx.forwardedRecipients, []);
         assert.deepStrictEqual(followRequests.length, 1);
       } else {
-        assert.deepStrictEqual(await repository.countFollowers(), 0);
+        assert.deepStrictEqual(await repository.countFollowers("bot"), 0);
         if (policy === "reject") {
           assert.deepStrictEqual(ctx.sentActivities.length, 1);
           const { activity, recipients } = ctx.sentActivities[0];
@@ -1396,6 +1434,7 @@ test("BotImpl.onUnfollowed()", async (t) => {
   const ctx = createMockInboxContext(bot, "https://example.com", "bot");
 
   await repository.addFollower(
+    "bot",
     new URL("https://example.com/ap/actor/john/follows/bot"),
     new Person({
       id: new URL("https://example.com/ap/actor/john"),
@@ -1404,8 +1443,8 @@ test("BotImpl.onUnfollowed()", async (t) => {
   );
 
   async function assertNoEffect() {
-    assert.deepStrictEqual(await repository.countFollowers(), 1);
-    const [follower] = await Array.fromAsync(repository.getFollowers());
+    assert.deepStrictEqual(await repository.countFollowers("bot"), 1);
+    const [follower] = await Array.fromAsync(repository.getFollowers("bot"));
     assert.ok(follower instanceof Person);
     assert.deepStrictEqual(
       follower.id,
@@ -1467,7 +1506,7 @@ test("BotImpl.onUnfollowed()", async (t) => {
       }),
     });
     await bot.onUnfollowed(ctx, undo);
-    assert.deepStrictEqual(await repository.countFollowers(), 0);
+    assert.deepStrictEqual(await repository.countFollowers("bot"), 0);
     assert.deepStrictEqual(ctx.sentActivities, []);
     assert.deepStrictEqual(ctx.forwardedRecipients, []);
     assert.deepStrictEqual(unfollowed.length, 1);
@@ -1528,6 +1567,7 @@ test("BotImpl.onFollowAccepted()", async (t) => {
 
   await t.test("with non-actor", async () => {
     await repository.addSentFollow(
+      "bot",
       "2ca58e2a-a34a-43e6-81af-c4f21ffed0c5",
       new Follow({
         id: new URL(
@@ -1551,6 +1591,7 @@ test("BotImpl.onFollowAccepted()", async (t) => {
 
   await t.test("with actor without URI", async () => {
     await repository.addSentFollow(
+      "bot",
       "a99ff3bf-72a2-412b-83b9-cba894d38805",
       new Follow({
         id: new URL(
@@ -1576,6 +1617,7 @@ test("BotImpl.onFollowAccepted()", async (t) => {
 
   await t.test("with actor", async () => {
     await repository.addSentFollow(
+      "bot",
       "3bca0b8e-503a-47ea-ad69-6b7c29369fbd",
       new Follow({
         id: new URL(
@@ -1607,6 +1649,7 @@ test("BotImpl.onFollowAccepted()", async (t) => {
       new URL("https://example.com/ap/actor/john"),
     );
     const follow = await repository.getFollowee(
+      "bot",
       new URL("https://example.com/ap/actor/john"),
     );
     assert.ok(follow != null);
@@ -1667,6 +1710,7 @@ test("BotImpl.onFollowRejected()", async (t) => {
 
   await t.test("with non-actor", async () => {
     await repository.addSentFollow(
+      "bot",
       "2ca58e2a-a34a-43e6-81af-c4f21ffed0c5",
       new Follow({
         id: new URL(
@@ -1690,6 +1734,7 @@ test("BotImpl.onFollowRejected()", async (t) => {
 
   await t.test("with actor without URI", async () => {
     await repository.addSentFollow(
+      "bot",
       "a99ff3bf-72a2-412b-83b9-cba894d38805",
       new Follow({
         id: new URL(
@@ -1715,6 +1760,7 @@ test("BotImpl.onFollowRejected()", async (t) => {
 
   await t.test("with actor", async () => {
     await repository.addSentFollow(
+      "bot",
       "3bca0b8e-503a-47ea-ad69-6b7c29369fbd",
       new Follow({
         id: new URL(
@@ -1746,7 +1792,10 @@ test("BotImpl.onFollowRejected()", async (t) => {
       new URL("https://example.com/ap/actor/john"),
     );
     assert.deepStrictEqual(
-      await repository.getSentFollow("3bca0b8e-503a-47ea-ad69-6b7c29369fbd"),
+      await repository.getSentFollow(
+        "bot",
+        "3bca0b8e-503a-47ea-ad69-6b7c29369fbd",
+      ),
       undefined,
     );
   });
@@ -1793,6 +1842,7 @@ test("BotImpl.onCreated()", async (t) => {
   });
 
   await repository.addMessage(
+    "bot",
     "a6358f1b-c978-49d3-8065-37a1df6168de",
     new Create({
       id: new URL(
@@ -2016,7 +2066,7 @@ test("BotImpl.onAnnounced()", async () => {
     to: PUBLIC_COLLECTION,
     cc: new URL("https://example.com/ap/actor/bot/followers"),
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2049,7 +2099,7 @@ test("BotImpl.onLiked()", async () => {
     id: new URL("https://example.com/ap/actor/bot/like/1"),
     actor: new URL("https://example.com/ap/actor/bot"),
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2081,7 +2131,7 @@ test("BotImpl.onUnliked()", async () => {
     id: new URL("https://example.com/ap/actor/bot/like/1"),
     actor: new URL("https://example.com/ap/actor/bot"),
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2129,7 +2179,7 @@ test("BotImpl.onReacted()", async () => {
     actor: new URL("https://example.com/ap/actor/bot"),
     name: ":heart:",
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2168,7 +2218,7 @@ test("BotImpl.onReacted()", async () => {
     actor: new URL("https://example.com/ap/actor/bot"),
     name: ":thumbsup:",
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2217,7 +2267,7 @@ test("BotImpl.onUnreacted()", async () => {
     actor: new URL("https://example.com/ap/actor/bot"),
     name: ":heart:",
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2262,7 +2312,7 @@ test("BotImpl.onUnreacted()", async () => {
     actor: new URL("https://example.com/ap/actor/bot"),
     name: ":thumbsup:",
     object: new Note({
-      id: new URL("https://example.com/ap/actor/bot/note/1"),
+      id: new URL("https://example.com/notes/1"),
       attribution: new URL("https://example.com/ap/actor/bot"),
       to: PUBLIC_COLLECTION,
       cc: new URL("https://example.com/ap/actor/bot/followers"),
@@ -2394,6 +2444,7 @@ test("BotImpl.fetch() includes FEP-5711 inverse properties", async () => {
   const actorId = new URL("https://example.com/ap/actor/bot");
 
   await repository.addFollower(
+    "bot",
     new URL("https://example.com/actor/1#follow"),
     new Person({
       id: new URL("https://example.com/actor/1"),
@@ -2402,6 +2453,7 @@ test("BotImpl.fetch() includes FEP-5711 inverse properties", async () => {
     }),
   );
   await repository.addMessage(
+    "bot",
     "78acb1ea-4ac6-46b7-bcd4-3a8965d8126e",
     new Create({
       id: new URL(
@@ -2766,7 +2818,7 @@ test("BotImpl.onVote()", async (t) => {
     }),
     published: Temporal.Now.instant(),
   });
-  await repository.addMessage(pollId, poll);
+  await repository.addMessage("bot", pollId, poll);
 
   // Create a voter
   const voter = new Person({
@@ -2824,7 +2876,7 @@ test("BotImpl.onVote()", async (t) => {
     );
 
     // Check that vote count was updated in repository
-    const updatedPoll = await repository.getMessage(pollId);
+    const updatedPoll = await repository.getMessage("bot", pollId);
     assert.ok(updatedPoll instanceof Create);
     const updatedQuestion = await updatedPoll.getObject(ctx);
     assert.ok(updatedQuestion instanceof Question);
@@ -2873,7 +2925,7 @@ test("BotImpl.onVote()", async (t) => {
       }),
       published: Temporal.Now.instant(),
     });
-    await repository.addMessage(multiPollId, multiPoll);
+    await repository.addMessage("bot", multiPollId, multiPoll);
 
     ctx.sentActivities = [];
     ctx.forwardedRecipients = [];
@@ -2967,7 +3019,7 @@ test("BotImpl.onVote()", async (t) => {
       }),
       published: Temporal.Now.instant(),
     });
-    await repository.addMessage(expiredPollId, expiredPoll);
+    await repository.addMessage("bot", expiredPollId, expiredPoll);
 
     ctx.sentActivities = [];
     ctx.forwardedRecipients = [];
@@ -3034,3 +3086,160 @@ test("BotImpl.onVote()", async (t) => {
 });
 
 // cSpell: ignore thumbsup
+
+test("BotImpl.fetch() redirects legacy object URIs", async (t) => {
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    username: "bot",
+  });
+
+  await t.test("redirects GET requests", async () => {
+    const response = await bot.fetch(
+      new Request(
+        "https://example.com/ap/follow/2ca58e2a-a34a-43e6-81af-c4f21ffed0c5",
+      ),
+      undefined,
+    );
+    assert.deepStrictEqual(response.status, 301);
+    assert.deepStrictEqual(
+      response.headers.get("Location"),
+      "https://example.com/ap/actor/bot/follow/2ca58e2a-a34a-43e6-81af-c4f21ffed0c5",
+    );
+  });
+
+  await t.test("redirects HEAD requests", async () => {
+    const response = await bot.fetch(
+      new Request("https://example.com/ap/note/123", { method: "HEAD" }),
+      undefined,
+    );
+    assert.deepStrictEqual(response.status, 301);
+    assert.deepStrictEqual(
+      response.headers.get("Location"),
+      "https://example.com/ap/actor/bot/note/123",
+    );
+  });
+
+  await t.test("preserves the query string", async () => {
+    const response = await bot.fetch(
+      new Request("https://example.com/ap/note/123?foo=bar"),
+      undefined,
+    );
+    assert.deepStrictEqual(response.status, 301);
+    assert.deepStrictEqual(
+      response.headers.get("Location"),
+      "https://example.com/ap/actor/bot/note/123?foo=bar",
+    );
+  });
+
+  await t.test("does not redirect POST requests", async () => {
+    const response = await bot.fetch(
+      new Request("https://example.com/ap/note/123", { method: "POST" }),
+      undefined,
+    );
+    assert.notDeepStrictEqual(response.status, 301);
+  });
+
+  await t.test("does not redirect canonical or unrelated paths", async () => {
+    const canonical = await bot.fetch(
+      new Request("https://example.com/ap/actor/bot/note/123"),
+      undefined,
+    );
+    assert.notDeepStrictEqual(canonical.status, 301);
+    const inbox = await bot.fetch(
+      new Request("https://example.com/ap/inbox"),
+      undefined,
+    );
+    assert.notDeepStrictEqual(inbox.status, 301);
+  });
+});
+
+test("BotImpl.onFollowAccepted() with canonical follow URIs", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const accepted: Actor[] = [];
+  bot.onAcceptFollow = (_, actor) => void (accepted.push(actor));
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  await repository.addSentFollow(
+    "bot",
+    "9d952a10-77e6-46bd-a48a-208b47e5e2bb",
+    new Follow({
+      id: new URL(
+        "https://example.com/ap/actor/bot/follow/9d952a10-77e6-46bd-a48a-208b47e5e2bb",
+      ),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: new Person({
+        id: new URL("https://example.com/ap/actor/john"),
+        preferredUsername: "john",
+      }),
+    }),
+  );
+  await bot.onFollowAccepted(
+    ctx,
+    new Accept({
+      actor: new URL("https://example.com/ap/actor/john"),
+      object: new URL(
+        "https://example.com/ap/actor/bot/follow/9d952a10-77e6-46bd-a48a-208b47e5e2bb",
+      ),
+    }),
+  );
+  assert.deepStrictEqual(accepted.length, 1);
+  assert.deepStrictEqual(
+    accepted[0].id,
+    new URL("https://example.com/ap/actor/john"),
+  );
+  assert.ok(
+    await repository.getFollowee(
+      "bot",
+      new URL("https://example.com/ap/actor/john"),
+    ) != null,
+  );
+});
+
+test("BotImpl.onLiked() with legacy message URIs", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const likes: Like<void>[] = [];
+  bot.onLike = (_, like) => void (likes.push(like));
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+  // The message is stored with a canonical URI, but a remote server that
+  // saw it before the upgrade may still refer to it by its legacy URI:
+  await repository.addMessage(
+    "bot",
+    messageId,
+    new Create({
+      id: new URL(
+        `https://example.com/ap/actor/bot/create/${messageId}`,
+      ),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      to: PUBLIC_COLLECTION,
+      object: new Note({
+        id: new URL(`https://example.com/ap/actor/bot/note/${messageId}`),
+        attribution: new URL("https://example.com/ap/actor/bot"),
+        to: PUBLIC_COLLECTION,
+        content: "Hello, world!",
+      }),
+    }),
+  );
+  await bot.onLiked(
+    ctx,
+    new RawLike({
+      id: new URL("https://remote.example/likes/1"),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: new URL(`https://example.com/ap/note/${messageId}`),
+    }),
+  );
+  assert.deepStrictEqual(likes.length, 1);
+  assert.deepStrictEqual(
+    likes[0].message.id,
+    new URL(`https://example.com/ap/actor/bot/note/${messageId}`),
+  );
+});

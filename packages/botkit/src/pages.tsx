@@ -29,11 +29,13 @@ import {
 import { Hono } from "hono";
 import { decode } from "html-entities";
 import { parseTemplate } from "url-template";
+import type { Context as HonoContext } from "hono";
 import type { BotImpl } from "./bot-impl.ts";
 import { FollowButton } from "./components/FollowButton.tsx";
 import { Follower } from "./components/Follower.tsx";
 import { Layout } from "./components/Layout.tsx";
 import { Message } from "./components/Message.tsx";
+import type { InstanceImpl } from "./instance-impl.ts";
 import { getMessageClass, isMessageObject, textXss } from "./message-impl.ts";
 import type { MessageClass } from "./message.ts";
 import type { Uuid } from "./repository.ts";
@@ -47,11 +49,30 @@ export interface Env {
   readonly Bindings: Bindings;
 }
 
+export interface InstanceBindings {
+  readonly instance: InstanceImpl<unknown>;
+  readonly contextData: unknown;
+}
+
+export interface InstanceEnv {
+  readonly Bindings: InstanceBindings;
+}
+
+// deno-lint-ignore no-explicit-any
+type PageContext = HonoContext<any>;
+
 export const app = new Hono<Env>();
 
-app.get("/", async (c) => {
-  const { bot } = c.env;
-  const ctx = bot.federation.createContext(c.req.raw, c.env.contextData);
+app.get("/", (c) => profilePage(c, c.env.bot, c.env.contextData, ""));
+
+async function profilePage(
+  c: PageContext,
+  bot: BotImpl<unknown>,
+  contextData: unknown,
+  base: string,
+): Promise<Response> {
+  const home = base === "" ? "/" : base;
+  const ctx = bot.federation.createContext(c.req.raw, contextData);
   const session = bot.getSession(ctx);
   const url = new URL(c.req.url);
   const handle = `@${bot.username}@${url.host}`;
@@ -84,10 +105,10 @@ app.get("/", async (c) => {
     offset ? { offset: Temporal.Instant.from(offset) } : {},
   );
   const activityLink = ctx.getActorUri(bot.identifier);
-  const feedLink = new URL("/feed.xml", url);
+  const feedLink = new URL(`${base}/feed.xml`, url);
   let nextLink: URL | undefined;
   if (nextPost?.published != null) {
-    nextLink = new URL("/", url);
+    nextLink = new URL(home, url);
     nextLink.searchParams.set("offset", nextPost.published.toString());
   }
   return c.html(
@@ -119,12 +140,12 @@ app.get("/", async (c) => {
             />
           )}
           <h1>
-            <a href="/">{bot.name ?? bot.username}</a>
+            <a href={home}>{bot.name ?? bot.username}</a>
           </h1>
           <p>
             <span style="user-select: all;">{handle}</span> &middot;{" "}
             <a
-              href="/feed.xml"
+              href={`${base}/feed.xml`}
               rel="alternate"
               type="application/atom+xml"
               title="Atom feed"
@@ -145,7 +166,7 @@ app.get("/", async (c) => {
             </a>{" "}
             &middot;{" "}
             <span>
-              <a href="/followers">
+              <a href={`${base}/followers`}>
                 {followersCount === 1
                   ? `1 follower`
                   : `${followersCount.toLocaleString("en")} followers`}
@@ -157,7 +178,7 @@ app.get("/", async (c) => {
                 ? `1 post`
                 : `${postsCount.toLocaleString("en")} posts`}
             </span>{" "}
-            &middot; <FollowButton bot={bot} />
+            &middot; <FollowButton bot={bot} action={`${base}/follow`} />
           </p>
         </hgroup>
         {summary &&
@@ -209,18 +230,28 @@ app.get("/", async (c) => {
       },
     },
   );
-});
+}
 
-app.get("/followers", async (c) => {
-  const { bot } = c.env;
-  const ctx = bot.federation.createContext(c.req.raw, c.env.contextData);
+app.get(
+  "/followers",
+  (c) => followersPage(c, c.env.bot, c.env.contextData, ""),
+);
+
+async function followersPage(
+  c: PageContext,
+  bot: BotImpl<unknown>,
+  contextData: unknown,
+  base: string,
+): Promise<Response> {
+  const home = base === "" ? "/" : base;
+  const ctx = bot.federation.createContext(c.req.raw, contextData);
   const session = bot.getSession(ctx);
   const followersCount = await bot.repository.countFollowers();
   const followers = await Array.fromAsync(bot.repository.getFollowers());
 
   const url = new URL(c.req.url);
   const activityLink = ctx.getActorUri(bot.identifier);
-  const feedLink = new URL("/feed.xml", url);
+  const feedLink = new URL(`${base}/feed.xml`, url);
 
   return c.html(
     <Layout
@@ -231,7 +262,7 @@ app.get("/followers", async (c) => {
     >
       <header class="container">
         <h1>
-          <a href="/">&larr;</a>{" "}
+          <a href={home}>&larr;</a>{" "}
           {followersCount === 1
             ? `1 follower`
             : `${followersCount.toLocaleString("en")} followers`}
@@ -248,13 +279,23 @@ app.get("/followers", async (c) => {
       </main>
     </Layout>,
   );
-});
+}
 
-app.get("/tags/:hashtag", async (c) => {
+app.get(
+  "/tags/:hashtag",
+  (c) => hashtagPage(c, c.env.bot, c.env.contextData, ""),
+);
+
+async function hashtagPage(
+  c: PageContext,
+  bot: BotImpl<unknown>,
+  contextData: unknown,
+  base: string,
+): Promise<Response> {
   const hashtag = c.req.param("hashtag");
-  const { bot } = c.env;
+  if (hashtag == null) return c.notFound();
   const url = new URL(c.req.url);
-  const ctx = bot.federation.createContext(c.req.raw, c.env.contextData);
+  const ctx = bot.federation.createContext(c.req.raw, contextData);
   const session = bot.getSession(ctx);
   const offset = c.req.query("offset");
   const { posts, nextPost } = await getPosts(bot, ctx, {
@@ -263,7 +304,7 @@ app.get("/tags/:hashtag", async (c) => {
   });
   let nextLink: URL | undefined;
   if (nextPost?.published != null) {
-    nextLink = new URL(`/tags/${encodeURIComponent(hashtag)}`, url);
+    nextLink = new URL(`${base}/tags/${encodeURIComponent(hashtag)}`, url);
     nextLink.searchParams.set("offset", nextPost.published.toString());
   }
   return c.html(
@@ -273,13 +314,18 @@ app.get("/tags/:hashtag", async (c) => {
       </header>
       <main class="container">
         {posts.map((message) => (
-          <Message message={message} session={session} />
+          <Message
+            message={message}
+            session={session}
+          />
         ))}
       </main>
       <footer class="container">
         <nav style="display: block; text-align: end;">
           {nextLink && (
-            <a rel="next" href={nextLink.href}>Older posts &rarr;</a>
+            <a rel="next" href={nextLink.href}>
+              Older posts &rarr;
+            </a>
           )}
         </nav>
       </footer>
@@ -290,13 +336,23 @@ app.get("/tags/:hashtag", async (c) => {
       },
     },
   );
-});
+}
 
-app.get("/message/:id", async (c) => {
+app.get(
+  "/message/:id",
+  (c) => messagePage(c, c.env.bot, c.env.contextData, ""),
+);
+
+async function messagePage(
+  c: PageContext,
+  bot: BotImpl<unknown>,
+  contextData: unknown,
+  base: string,
+): Promise<Response> {
   const id = c.req.param("id");
-  const { bot } = c.env;
+  if (id == null) return c.notFound();
   const url = new URL(c.req.url);
-  const ctx = bot.federation.createContext(c.req.raw, c.env.contextData);
+  const ctx = bot.federation.createContext(c.req.raw, contextData);
   const session = bot.getSession(ctx);
   const post = await bot.repository.getMessage(id as Uuid);
   if (post == null || !isPublic(post)) return c.notFound();
@@ -304,9 +360,9 @@ app.get("/message/:id", async (c) => {
   if (message == null || !isMessageObject(message)) return c.notFound();
   const activityLink = ctx.getObjectUri<MessageClass>(
     getMessageClass(message),
-    { id },
+    { identifier: bot.identifier, id },
   );
-  const feedLink = new URL("/feed.xml", url);
+  const feedLink = new URL(`${base}/feed.xml`, url);
   let title = message.name;
   if (title == null) {
     title = message.summary ?? message.content;
@@ -334,17 +390,24 @@ app.get("/message/:id", async (c) => {
       },
     },
   );
-});
+}
 
-app.get("/feed.xml", async (c) => {
-  const { bot } = c.env;
+app.get("/feed.xml", (c) => feedPage(c, c.env.bot, c.env.contextData, ""));
+
+async function feedPage(
+  c: PageContext,
+  bot: BotImpl<unknown>,
+  contextData: unknown,
+  base: string,
+): Promise<Response> {
+  const home = base === "" ? "/" : base;
   const url = new URL(c.req.url);
-  const ctx = bot.federation.createContext(c.req.raw, c.env.contextData);
+  const ctx = bot.federation.createContext(c.req.raw, contextData);
   const session = bot.getSession(ctx);
   const { posts } = await getPosts(bot, ctx, { window: 30 });
   const botName = bot.name ?? bot.username;
-  const canonicalUrl = new URL("/feed.xml", url);
-  const profileUrl = new URL("/", url);
+  const canonicalUrl = new URL(`${base}/feed.xml`, url);
+  const profileUrl = new URL(home, url);
   const actorUrl = ctx.getActorUri(bot.identifier);
   c.header(
     "Link",
@@ -431,11 +494,18 @@ app.get("/feed.xml", async (c) => {
   );
   response.headers.set("Content-Type", "application/atom+xml; charset=utf-8");
   return response;
-});
+}
 
-app.post("/follow", async (c) => {
-  const { bot } = c.env;
-  const ctx = bot.federation.createContext(c.req.raw, c.env.contextData);
+app.post("/follow", (c) => followPage(c, c.env.bot, c.env.contextData, ""));
+
+async function followPage(
+  c: PageContext,
+  bot: BotImpl<unknown>,
+  contextData: unknown,
+  base: string,
+): Promise<Response> {
+  const home = base === "" ? "/" : base;
+  const ctx = bot.federation.createContext(c.req.raw, contextData);
   const url = new URL(c.req.url);
 
   const formData = await c.req.formData();
@@ -449,7 +519,7 @@ app.post("/follow", async (c) => {
             <h1>Error</h1>
             <p>Follower handle is required.</p>
             <p>
-              <a href="/">Go back</a>
+              <a href={home}>Go back</a>
             </p>
           </main>
         </Layout>,
@@ -474,7 +544,7 @@ app.post("/follow", async (c) => {
               <code>@{followerHandle}</code>.
             </p>
             <p>
-              <a href="/">Go back</a>
+              <a href={home}>Go back</a>
             </p>
           </main>
         </Layout>,
@@ -504,7 +574,7 @@ app.post("/follow", async (c) => {
             <code>@{followerHandle}</code>.
           </p>
           <p>
-            <a href="/">Go back</a>
+            <a href={home}>Go back</a>
           </p>
         </main>
       </Layout>,
@@ -519,14 +589,94 @@ app.post("/follow", async (c) => {
             An internal server error occurred while processing your request.
           </p>
           <p>
-            <a href="/">Go back</a>
+            <a href={home}>Go back</a>
           </p>
         </main>
       </Layout>,
       500,
     );
   }
+}
+
+export const multiApp = new Hono<InstanceEnv>();
+
+multiApp.get("/", (c) => {
+  const { instance } = c.env;
+  const url = new URL(c.req.url);
+  const cssFilename = instance.pages.color === "azure"
+    ? `pico.min.css`
+    : `pico.${instance.pages.color}.min.css`;
+  const bots = [...instance.bots];
+  return c.html(
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>{url.host}</title>
+        <link
+          rel="stylesheet"
+          href={`https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/${cssFilename}`}
+        />
+        <style dangerouslySetInnerHTML={{ __html: instance.pages.css }} />
+      </head>
+      <body>
+        <header class="container">
+          <h1>{url.host}</h1>
+        </header>
+        <main class="container">
+          <ul>
+            {bots.map((bot) => (
+              <li>
+                <a href={`/@${encodeURIComponent(bot.username)}`}>
+                  {bot.name ?? bot.username}
+                </a>{" "}
+                <span style="user-select: all;">
+                  @{bot.username}@{url.host}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </main>
+      </body>
+    </html>,
+  );
 });
+
+/**
+ * Resolves the bot a multi-bot page belongs to, and delegates to the given
+ * page handler with the bot's base path.
+ */
+function withBot(
+  page: (
+    c: PageContext,
+    bot: BotImpl<unknown>,
+    contextData: unknown,
+    base: string,
+  ) => Promise<Response>,
+): (c: HonoContext<InstanceEnv>) => Promise<Response> {
+  return async (c) => {
+    const { instance, contextData } = c.env;
+    const username = c.req.param("handle")?.slice(1);
+    if (username == null) return c.notFound();
+    const ctx = instance.federation.createContext(c.req.raw, contextData);
+    const bot = await instance.resolveBotByUsername(ctx, username);
+    if (bot == null) return c.notFound();
+    return await page(
+      c,
+      bot,
+      contextData,
+      `/@${encodeURIComponent(username)}`,
+    );
+  };
+}
+
+const handlePattern = ":handle{@[^/]+}";
+
+multiApp.get(`/${handlePattern}`, withBot(profilePage));
+multiApp.get(`/${handlePattern}/followers`, withBot(followersPage));
+multiApp.get(`/${handlePattern}/tags/:hashtag`, withBot(hashtagPage));
+multiApp.get(`/${handlePattern}/feed.xml`, withBot(feedPage));
+multiApp.post(`/${handlePattern}/follow`, withBot(followPage));
+multiApp.get(`/${handlePattern}/:id`, withBot(messagePage));
 
 interface GetPostsOptions {
   readonly hashtag?: string;

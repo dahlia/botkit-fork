@@ -69,9 +69,14 @@ test("FollowRequestImpl.accept()", async () => {
   await followRequest.accept();
   assert.deepStrictEqual(followRequest.state, "accepted");
   assert.ok(
-    await repository.hasFollower(new URL("https://example.com/ap/actor/john")),
+    await repository.hasFollower(
+      "bot",
+      new URL("https://example.com/ap/actor/john"),
+    ),
   );
-  const [storedFollower] = await Array.fromAsync(repository.getFollowers());
+  const [storedFollower] = await Array.fromAsync(
+    repository.getFollowers("bot"),
+  );
   assert.ok(storedFollower != null);
   assert.deepStrictEqual(storedFollower.id, follower.id);
   assert.deepStrictEqual(
@@ -121,7 +126,10 @@ test("FollowRequestImpl.reject()", async () => {
   await followRequest.reject();
   assert.deepStrictEqual(followRequest.state, "rejected");
   assert.deepStrictEqual(
-    await repository.hasFollower(new URL("https://example.com/ap/actor/john")),
+    await repository.hasFollower(
+      "bot",
+      new URL("https://example.com/ap/actor/john"),
+    ),
     false,
   );
   assert.deepStrictEqual(ctx.sentActivities.length, 1);

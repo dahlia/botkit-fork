@@ -13,11 +13,12 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import type {
-  Repository,
-  RepositoryGetFollowersOptions,
-  RepositoryGetMessagesOptions,
-  Uuid,
+import {
+  ActorScopedRepository,
+  type Repository,
+  type RepositoryGetFollowersOptions,
+  type RepositoryGetMessagesOptions,
+  type Uuid,
 } from "@fedify/botkit/repository";
 import { exportJwk, importJwk } from "@fedify/fedify/sig";
 import { Temporal, toTemporalInstant } from "@js-temporal/polyfill";
@@ -44,6 +45,7 @@ const logger = getLogger(["botkit", "postgres"]);
 const schemaNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const followRequestAdvisoryLockNamespace = 0x4254;
 const followerAdvisoryLockNamespace = 0x4246;
+const schemaUpgradeAdvisoryLockNamespace = 0x424b;
 
 type Queryable = Pick<postgres.Sql, "unsafe">;
 type QueryParameter = postgres.SerializableParameter;
@@ -137,12 +139,24 @@ export async function initializePostgresRepositorySchema(
     [],
     prepare,
   );
+  await upgradeLegacySchema(sql, validatedSchema, prepare);
+  await execute(
+    sql,
+    `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."botkit_metadata" (
+       "key" TEXT PRIMARY KEY,
+       value TEXT NOT NULL
+     )`,
+    [],
+    prepare,
+  );
   await execute(
     sql,
     `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."key_pairs" (
-       position INTEGER PRIMARY KEY,
+       bot_id TEXT NOT NULL,
+       position INTEGER NOT NULL,
        private_key_jwk JSONB NOT NULL,
-       public_key_jwk JSONB NOT NULL
+       public_key_jwk JSONB NOT NULL,
+       PRIMARY KEY (bot_id, position)
      )`,
     [],
     prepare,
@@ -150,9 +164,11 @@ export async function initializePostgresRepositorySchema(
   await execute(
     sql,
     `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."messages" (
-       id TEXT PRIMARY KEY,
+       bot_id TEXT NOT NULL,
+       id TEXT NOT NULL,
        activity_json JSONB NOT NULL,
-       published BIGINT
+       published BIGINT,
+       PRIMARY KEY (bot_id, id)
      )`,
     [],
     prepare,
@@ -160,15 +176,17 @@ export async function initializePostgresRepositorySchema(
   await execute(
     sql,
     `CREATE INDEX IF NOT EXISTS "idx_messages_published"
-       ON "${validatedSchema}"."messages" (published, id)`,
+       ON "${validatedSchema}"."messages" (bot_id, published, id)`,
     [],
     prepare,
   );
   await execute(
     sql,
     `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."followers" (
-       follower_id TEXT PRIMARY KEY,
-       actor_json JSONB NOT NULL
+       bot_id TEXT NOT NULL,
+       follower_id TEXT NOT NULL,
+       actor_json JSONB NOT NULL,
+       PRIMARY KEY (bot_id, follower_id)
      )`,
     [],
     prepare,
@@ -176,10 +194,14 @@ export async function initializePostgresRepositorySchema(
   await execute(
     sql,
     `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."follow_requests" (
-       follow_request_id TEXT PRIMARY KEY,
-       follower_id TEXT NOT NULL
-         REFERENCES "${validatedSchema}"."followers" (follower_id)
+       bot_id TEXT NOT NULL,
+       follow_request_id TEXT NOT NULL,
+       follower_id TEXT NOT NULL,
+       PRIMARY KEY (bot_id, follow_request_id),
+       FOREIGN KEY (bot_id, follower_id)
+         REFERENCES "${validatedSchema}"."followers" (bot_id, follower_id)
          ON DELETE CASCADE
+         DEFERRABLE INITIALLY IMMEDIATE
      )`,
     [],
     prepare,
@@ -187,15 +209,17 @@ export async function initializePostgresRepositorySchema(
   await execute(
     sql,
     `CREATE INDEX IF NOT EXISTS "idx_follow_requests_follower"
-       ON "${validatedSchema}"."follow_requests" (follower_id)`,
+       ON "${validatedSchema}"."follow_requests" (bot_id, follower_id)`,
     [],
     prepare,
   );
   await execute(
     sql,
     `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."sent_follows" (
-       id TEXT PRIMARY KEY,
-       follow_json JSONB NOT NULL
+       bot_id TEXT NOT NULL,
+       id TEXT NOT NULL,
+       follow_json JSONB NOT NULL,
+       PRIMARY KEY (bot_id, id)
      )`,
     [],
     prepare,
@@ -203,19 +227,29 @@ export async function initializePostgresRepositorySchema(
   await execute(
     sql,
     `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."followees" (
-       followee_id TEXT PRIMARY KEY,
-       follow_json JSONB NOT NULL
+       bot_id TEXT NOT NULL,
+       followee_id TEXT NOT NULL,
+       follow_json JSONB NOT NULL,
+       PRIMARY KEY (bot_id, followee_id)
      )`,
     [],
     prepare,
   );
   await execute(
     sql,
+    `CREATE INDEX IF NOT EXISTS "idx_followees_followee_id"
+       ON "${validatedSchema}"."followees" (followee_id)`,
+    [],
+    prepare,
+  );
+  await execute(
+    sql,
     `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."poll_votes" (
+       bot_id TEXT NOT NULL,
        message_id TEXT NOT NULL,
        voter_id TEXT NOT NULL,
        option TEXT NOT NULL,
-       PRIMARY KEY (message_id, voter_id, option)
+       PRIMARY KEY (bot_id, message_id, voter_id, option)
      )`,
     [],
     prepare,
@@ -223,10 +257,192 @@ export async function initializePostgresRepositorySchema(
   await execute(
     sql,
     `CREATE INDEX IF NOT EXISTS "idx_poll_votes_message_option"
-       ON "${validatedSchema}"."poll_votes" (message_id, option)`,
+       ON "${validatedSchema}"."poll_votes" (bot_id, message_id, option)`,
     [],
     prepare,
   );
+}
+
+const upgradableTables = [
+  "key_pairs",
+  "messages",
+  "followers",
+  "follow_requests",
+  "sent_follows",
+  "followees",
+  "poll_votes",
+] as const;
+
+/**
+ * Upgrades tables created by \@fedify/botkit-postgres 0.4, which had no
+ * `bot_id` column, into the bot-scoped schema.  Existing rows get the
+ * empty-string bot ID; use {@link PostgresRepository.migrate} to assign them
+ * to a bot actor identifier.
+ *
+ * The whole upgrade is sent as a single multi-statement query without
+ * parameters, which PostgreSQL executes over the simple query protocol in
+ * one implicit transaction on one connection, so it is atomic even when
+ * `sql` is a connection pool.
+ */
+async function upgradeLegacySchema(
+  sql: Queryable,
+  schema: string,
+  prepare: boolean,
+): Promise<void> {
+  const rows = await execute<{ readonly table_name: string }>(
+    sql,
+    `SELECT t.table_name
+       FROM information_schema.tables t
+      WHERE t.table_schema = $1
+        AND t.table_name = ANY($2)
+        AND NOT EXISTS (
+          SELECT 1
+            FROM information_schema.columns c
+           WHERE c.table_schema = t.table_schema
+             AND c.table_name = t.table_name
+             AND c.column_name = 'bot_id'
+        )`,
+    [schema, [...upgradableTables]],
+    prepare,
+  );
+  if (rows.length < 1) return;
+  const tables = rows.map((row) => row.table_name);
+  logger.info(
+    "Upgrading legacy tables without a bot_id column: {tables}.",
+    { tables },
+  );
+  // Multiple processes can start against the same legacy schema at once, so
+  // the whole upgrade runs inside one PL/pgSQL block: an advisory lock
+  // serializes it, and every table is re-checked under the lock, so the
+  // process that lost the race finds nothing left to do.  The detection
+  // query above is merely a fast path for already-upgraded schemas.
+  const legacyTable = (table: string) =>
+    `EXISTS (SELECT 1
+        FROM information_schema.tables t
+       WHERE t.table_schema = '${schema}' AND t.table_name = '${table}')
+     AND NOT EXISTS (SELECT 1
+        FROM information_schema.columns c
+       WHERE c.table_schema = '${schema}' AND c.table_name = '${table}'
+         AND c.column_name = 'bot_id')`;
+  const block = `
+    DO $botkit_upgrade$
+    DECLARE
+      upgraded boolean := false;
+    BEGIN
+      PERFORM pg_catalog.pg_advisory_xact_lock(
+        ${schemaUpgradeAdvisoryLockNamespace},
+        pg_catalog.hashtext('${schema}')
+      );
+
+      IF ${legacyTable("follow_requests")} THEN
+        -- The old foreign key referenced followers (follower_id) only; it
+        -- has to go away before the followers primary key changes:
+        ALTER TABLE "${schema}"."follow_requests"
+          DROP CONSTRAINT IF EXISTS "follow_requests_follower_id_fkey";
+      END IF;
+
+      IF ${legacyTable("key_pairs")} THEN
+        ALTER TABLE "${schema}"."key_pairs"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."key_pairs" ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."key_pairs"
+          DROP CONSTRAINT IF EXISTS "key_pairs_pkey";
+        ALTER TABLE "${schema}"."key_pairs" ADD PRIMARY KEY (bot_id, position);
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("messages")} THEN
+        ALTER TABLE "${schema}"."messages"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."messages" ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."messages"
+          DROP CONSTRAINT IF EXISTS "messages_pkey";
+        ALTER TABLE "${schema}"."messages" ADD PRIMARY KEY (bot_id, id);
+        DROP INDEX IF EXISTS "${schema}"."idx_messages_published";
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("followers")} THEN
+        ALTER TABLE "${schema}"."followers"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."followers" ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."followers"
+          DROP CONSTRAINT IF EXISTS "followers_pkey";
+        ALTER TABLE "${schema}"."followers"
+          ADD PRIMARY KEY (bot_id, follower_id);
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("follow_requests")} THEN
+        ALTER TABLE "${schema}"."follow_requests"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."follow_requests"
+          ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."follow_requests"
+          DROP CONSTRAINT IF EXISTS "follow_requests_pkey";
+        ALTER TABLE "${schema}"."follow_requests"
+          ADD PRIMARY KEY (bot_id, follow_request_id);
+        ALTER TABLE "${schema}"."follow_requests"
+          ADD FOREIGN KEY (bot_id, follower_id)
+          REFERENCES "${schema}"."followers" (bot_id, follower_id)
+          ON DELETE CASCADE
+          DEFERRABLE INITIALLY IMMEDIATE;
+        DROP INDEX IF EXISTS "${schema}"."idx_follow_requests_follower";
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("sent_follows")} THEN
+        ALTER TABLE "${schema}"."sent_follows"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."sent_follows"
+          ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."sent_follows"
+          DROP CONSTRAINT IF EXISTS "sent_follows_pkey";
+        ALTER TABLE "${schema}"."sent_follows" ADD PRIMARY KEY (bot_id, id);
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("followees")} THEN
+        ALTER TABLE "${schema}"."followees"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."followees" ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."followees"
+          DROP CONSTRAINT IF EXISTS "followees_pkey";
+        ALTER TABLE "${schema}"."followees"
+          ADD PRIMARY KEY (bot_id, followee_id);
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("poll_votes")} THEN
+        ALTER TABLE "${schema}"."poll_votes"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."poll_votes" ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."poll_votes"
+          DROP CONSTRAINT IF EXISTS "poll_votes_pkey";
+        ALTER TABLE "${schema}"."poll_votes"
+          ADD PRIMARY KEY (bot_id, message_id, voter_id, option);
+        DROP INDEX IF EXISTS "${schema}"."idx_poll_votes_message_option";
+        upgraded := true;
+      END IF;
+
+      IF upgraded THEN
+        -- The marker lets migrate() distinguish rows carried over from
+        -- a legacy schema (bot_id = '') from data legitimately stored under
+        -- an empty-string identifier:
+        CREATE TABLE IF NOT EXISTS "${schema}"."botkit_metadata" (
+          "key" TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        INSERT INTO "${schema}"."botkit_metadata" ("key", value)
+        VALUES ('legacy_data', '1')
+        ON CONFLICT ("key") DO NOTHING;
+      END IF;
+    END
+    $botkit_upgrade$
+  `;
+  // DO blocks cannot be prepared:
+  await execute(sql, block, [], false);
+  logger.info("Finished upgrading legacy tables.");
 }
 
 /**
@@ -295,19 +511,27 @@ export class PostgresRepository implements Repository, AsyncDisposable {
     }
   }
 
-  async setKeyPairs(keyPairs: CryptoKeyPair[]): Promise<void> {
+  async setKeyPairs(
+    identifier: string,
+    keyPairs: CryptoKeyPair[],
+  ): Promise<void> {
     await this.ensureReady();
     await this.sql.begin(async (sql) => {
-      await this.query(sql, `DELETE FROM ${this.table("key_pairs")}`);
+      await this.query(
+        sql,
+        `DELETE FROM ${this.table("key_pairs")} WHERE bot_id = $1`,
+        [identifier],
+      );
       for (const [position, keyPair] of keyPairs.entries()) {
         const privateJwk = await exportJwk(keyPair.privateKey);
         const publicJwk = await exportJwk(keyPair.publicKey);
         await this.query(
           sql,
           `INSERT INTO ${this.table("key_pairs")}
-             (position, private_key_jwk, public_key_jwk)
-           VALUES ($1, $2::jsonb, $3::jsonb)`,
+             (bot_id, position, private_key_jwk, public_key_jwk)
+           VALUES ($1, $2, $3::jsonb, $4::jsonb)`,
           [
+            identifier,
             position,
             serializeJson(privateJwk),
             serializeJson(publicJwk),
@@ -317,7 +541,7 @@ export class PostgresRepository implements Repository, AsyncDisposable {
     });
   }
 
-  async getKeyPairs(): Promise<CryptoKeyPair[] | undefined> {
+  async getKeyPairs(identifier: string): Promise<CryptoKeyPair[] | undefined> {
     await this.ensureReady();
     const rows = await this.query<{
       readonly private_key_jwk: unknown;
@@ -326,7 +550,9 @@ export class PostgresRepository implements Repository, AsyncDisposable {
       this.sql,
       `SELECT private_key_jwk, public_key_jwk
          FROM ${this.table("key_pairs")}
+        WHERE bot_id = $1
      ORDER BY position ASC`,
+      [identifier],
     );
     if (rows.length < 1) return undefined;
     const keyPairs: CryptoKeyPair[] = [];
@@ -344,13 +570,19 @@ export class PostgresRepository implements Repository, AsyncDisposable {
     return keyPairs;
   }
 
-  async addMessage(id: Uuid, activity: Create | Announce): Promise<void> {
+  async addMessage(
+    identifier: string,
+    id: Uuid,
+    activity: Create | Announce,
+  ): Promise<void> {
     await this.ensureReady();
     await this.query(
       this.sql,
-      `INSERT INTO ${this.table("messages")} (id, activity_json, published)
-       VALUES ($1, $2::jsonb, $3)`,
+      `INSERT INTO ${this.table("messages")}
+         (bot_id, id, activity_json, published)
+       VALUES ($1, $2, $3::jsonb, $4)`,
       [
+        identifier,
         id,
         serializeJson(await activity.toJsonLd({ format: "compact" })),
         activity.published?.epochMilliseconds ?? null,
@@ -359,6 +591,7 @@ export class PostgresRepository implements Repository, AsyncDisposable {
   }
 
   async updateMessage(
+    identifier: string,
     id: Uuid,
     updater: (
       existing: Create | Announce,
@@ -370,9 +603,9 @@ export class PostgresRepository implements Repository, AsyncDisposable {
         sql,
         `SELECT activity_json
            FROM ${this.table("messages")}
-          WHERE id = $1
+          WHERE bot_id = $1 AND id = $2
           FOR UPDATE`,
-        [id],
+        [identifier, id],
       );
       const row = rows[0];
       if (row == null) return false;
@@ -385,10 +618,11 @@ export class PostgresRepository implements Repository, AsyncDisposable {
         `UPDATE ${this.table("messages")}
             SET activity_json = $1::jsonb,
                 published = $2
-          WHERE id = $3`,
+          WHERE bot_id = $3 AND id = $4`,
         [
           serializeJson(await updated.toJsonLd({ format: "compact" })),
           updated.published?.epochMilliseconds ?? null,
+          identifier,
           id,
         ],
       );
@@ -396,27 +630,31 @@ export class PostgresRepository implements Repository, AsyncDisposable {
     });
   }
 
-  async removeMessage(id: Uuid): Promise<Create | Announce | undefined> {
+  async removeMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
     await this.ensureReady();
     const rows = await this.query<{ readonly activity_json: unknown }>(
       this.sql,
       `DELETE FROM ${this.table("messages")}
-        WHERE id = $1
+        WHERE bot_id = $1 AND id = $2
     RETURNING activity_json`,
-      [id],
+      [identifier, id],
     );
     return await parseActivity(rows[0]?.activity_json);
   }
 
   async *getMessages(
+    identifier: string,
     options: RepositoryGetMessagesOptions = {},
   ): AsyncIterable<Create | Announce> {
     await this.ensureReady();
     const { order = "newest", since, until, limit } = options;
-    const parameters: QueryParameter[] = [];
+    const parameters: QueryParameter[] = [identifier];
     let query = `SELECT activity_json
                    FROM ${this.table("messages")}
-                  WHERE TRUE`;
+                  WHERE bot_id = $1`;
     if (since != null) {
       parameters.push(since.epochMilliseconds);
       query += ` AND published >= $${parameters.length}`;
@@ -443,29 +681,38 @@ export class PostgresRepository implements Repository, AsyncDisposable {
     }
   }
 
-  async getMessage(id: Uuid): Promise<Create | Announce | undefined> {
+  async getMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
     await this.ensureReady();
     const rows = await this.query<{ readonly activity_json: unknown }>(
       this.sql,
       `SELECT activity_json
          FROM ${this.table("messages")}
-        WHERE id = $1`,
-      [id],
+        WHERE bot_id = $1 AND id = $2`,
+      [identifier, id],
     );
     return await parseActivity(rows[0]?.activity_json);
   }
 
-  async countMessages(): Promise<number> {
+  async countMessages(identifier: string): Promise<number> {
     await this.ensureReady();
     const rows = await this.query<{ readonly count: number }>(
       this.sql,
       `SELECT COUNT(*)::integer AS count
-         FROM ${this.table("messages")}`,
+         FROM ${this.table("messages")}
+        WHERE bot_id = $1`,
+      [identifier],
     );
     return rows[0]?.count ?? 0;
   }
 
-  async addFollower(followId: URL, follower: Actor): Promise<void> {
+  async addFollower(
+    identifier: string,
+    followId: URL,
+    follower: Actor,
+  ): Promise<void> {
     await this.ensureReady();
     if (follower.id == null) {
       throw new TypeError("The follower ID is missing.");
@@ -473,97 +720,101 @@ export class PostgresRepository implements Repository, AsyncDisposable {
     const followerId = follower.id;
     const followerJson = await follower.toJsonLd({ format: "compact" });
     await this.sql.begin(async (sql) => {
-      await this.lockFollowRequest(sql, followId);
+      await this.lockFollowRequest(sql, identifier, followId);
       const rows = await this.query<{ readonly follower_id: string }>(
         sql,
         `SELECT follower_id
            FROM ${this.table("follow_requests")}
-          WHERE follow_request_id = $1
+          WHERE bot_id = $1 AND follow_request_id = $2
           FOR UPDATE`,
-        [followId.href],
+        [identifier, followId.href],
       );
       const previousFollowerId = rows[0]?.follower_id;
-      await this.lockFollowers(sql, [
+      await this.lockFollowers(sql, identifier, [
         followerId.href,
         ...(previousFollowerId == null ? [] : [previousFollowerId]),
       ]);
       await this.query(
         sql,
-        `INSERT INTO ${this.table("followers")} (follower_id, actor_json)
-         VALUES ($1, $2::jsonb)
-         ON CONFLICT (follower_id)
+        `INSERT INTO ${this.table("followers")}
+           (bot_id, follower_id, actor_json)
+         VALUES ($1, $2, $3::jsonb)
+         ON CONFLICT (bot_id, follower_id)
          DO UPDATE SET actor_json = EXCLUDED.actor_json`,
-        [followerId.href, serializeJson(followerJson)],
+        [identifier, followerId.href, serializeJson(followerJson)],
       );
       await this.query(
         sql,
-        `INSERT INTO ${
-          this.table("follow_requests")
-        } (follow_request_id, follower_id)
-         VALUES ($1, $2)
-         ON CONFLICT (follow_request_id)
+        `INSERT INTO ${this.table("follow_requests")}
+           (bot_id, follow_request_id, follower_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (bot_id, follow_request_id)
          DO UPDATE SET follower_id = EXCLUDED.follower_id`,
-        [followId.href, followerId.href],
+        [identifier, followId.href, followerId.href],
       );
       if (
         previousFollowerId != null && previousFollowerId !== followerId.href
       ) {
-        await this.cleanupFollower(sql, previousFollowerId);
+        await this.cleanupFollower(sql, identifier, previousFollowerId);
       }
     });
   }
 
   async removeFollower(
+    identifier: string,
     followId: URL,
     followerId: URL,
   ): Promise<Actor | undefined> {
     await this.ensureReady();
     return await this.sql.begin(async (sql) => {
-      await this.lockFollowRequest(sql, followId);
+      await this.lockFollowRequest(sql, identifier, followId);
       const rows = await this.query<{ readonly actor_json: unknown }>(
         sql,
         `SELECT f.actor_json
            FROM ${this.table("follow_requests")} AS fr
            JOIN ${this.table("followers")} AS f
-             ON f.follower_id = fr.follower_id
-          WHERE fr.follow_request_id = $1
-            AND fr.follower_id = $2
+             ON f.bot_id = fr.bot_id AND f.follower_id = fr.follower_id
+          WHERE fr.bot_id = $1
+            AND fr.follow_request_id = $2
+            AND fr.follower_id = $3
           FOR UPDATE`,
-        [followId.href, followerId.href],
+        [identifier, followId.href, followerId.href],
       );
       const row = rows[0];
       if (row == null) return undefined;
       await this.query(
         sql,
         `DELETE FROM ${this.table("follow_requests")}
-          WHERE follow_request_id = $1`,
-        [followId.href],
+          WHERE bot_id = $1 AND follow_request_id = $2`,
+        [identifier, followId.href],
       );
-      await this.cleanupFollower(sql, followerId.href);
+      await this.cleanupFollower(sql, identifier, followerId.href);
       return await parseActor(row.actor_json);
     });
   }
 
-  async hasFollower(followerId: URL): Promise<boolean> {
+  async hasFollower(identifier: string, followerId: URL): Promise<boolean> {
     await this.ensureReady();
     const rows = await this.query<{ readonly exists: number }>(
       this.sql,
       `SELECT 1 AS exists
          FROM ${this.table("followers")}
-        WHERE follower_id = $1`,
-      [followerId.href],
+        WHERE bot_id = $1 AND follower_id = $2`,
+      [identifier, followerId.href],
     );
     return rows.length > 0;
   }
 
   async *getFollowers(
+    identifier: string,
     options: RepositoryGetFollowersOptions = {},
   ): AsyncIterable<Actor> {
     await this.ensureReady();
     const { offset = 0, limit } = options;
-    const parameters: QueryParameter[] = [];
+    const parameters: QueryParameter[] = [identifier];
     let query = `SELECT actor_json
                    FROM ${this.table("followers")}
+                  WHERE bot_id = $1
                ORDER BY follower_id ASC`;
     if (limit != null) {
       parameters.push(limit, offset);
@@ -583,116 +834,166 @@ export class PostgresRepository implements Repository, AsyncDisposable {
     }
   }
 
-  async countFollowers(): Promise<number> {
+  async countFollowers(identifier: string): Promise<number> {
     await this.ensureReady();
     const rows = await this.query<{ readonly count: number }>(
       this.sql,
       `SELECT COUNT(*)::integer AS count
-         FROM ${this.table("followers")}`,
+         FROM ${this.table("followers")}
+        WHERE bot_id = $1`,
+      [identifier],
     );
     return rows[0]?.count ?? 0;
   }
 
-  async addSentFollow(id: Uuid, follow: Follow): Promise<void> {
+  async addSentFollow(
+    identifier: string,
+    id: Uuid,
+    follow: Follow,
+  ): Promise<void> {
     await this.ensureReady();
     await this.query(
       this.sql,
-      `INSERT INTO ${this.table("sent_follows")} (id, follow_json)
-       VALUES ($1, $2::jsonb)
-       ON CONFLICT (id)
+      `INSERT INTO ${this.table("sent_follows")} (bot_id, id, follow_json)
+       VALUES ($1, $2, $3::jsonb)
+       ON CONFLICT (bot_id, id)
        DO UPDATE SET follow_json = EXCLUDED.follow_json`,
-      [id, serializeJson(await follow.toJsonLd({ format: "compact" }))],
+      [
+        identifier,
+        id,
+        serializeJson(await follow.toJsonLd({ format: "compact" })),
+      ],
     );
   }
 
-  async removeSentFollow(id: Uuid): Promise<Follow | undefined> {
+  async removeSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
     await this.ensureReady();
     const rows = await this.query<{ readonly follow_json: unknown }>(
       this.sql,
       `DELETE FROM ${this.table("sent_follows")}
-        WHERE id = $1
+        WHERE bot_id = $1 AND id = $2
     RETURNING follow_json`,
-      [id],
+      [identifier, id],
     );
     return await parseFollow(rows[0]?.follow_json);
   }
 
-  async getSentFollow(id: Uuid): Promise<Follow | undefined> {
+  async getSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
     await this.ensureReady();
     const rows = await this.query<{ readonly follow_json: unknown }>(
       this.sql,
       `SELECT follow_json
          FROM ${this.table("sent_follows")}
-        WHERE id = $1`,
-      [id],
+        WHERE bot_id = $1 AND id = $2`,
+      [identifier, id],
     );
     return await parseFollow(rows[0]?.follow_json);
   }
 
-  async addFollowee(followeeId: URL, follow: Follow): Promise<void> {
+  async addFollowee(
+    identifier: string,
+    followeeId: URL,
+    follow: Follow,
+  ): Promise<void> {
     await this.ensureReady();
     await this.query(
       this.sql,
-      `INSERT INTO ${this.table("followees")} (followee_id, follow_json)
-       VALUES ($1, $2::jsonb)
-       ON CONFLICT (followee_id)
+      `INSERT INTO ${this.table("followees")}
+         (bot_id, followee_id, follow_json)
+       VALUES ($1, $2, $3::jsonb)
+       ON CONFLICT (bot_id, followee_id)
        DO UPDATE SET follow_json = EXCLUDED.follow_json`,
       [
+        identifier,
         followeeId.href,
         serializeJson(await follow.toJsonLd({ format: "compact" })),
       ],
     );
   }
 
-  async removeFollowee(followeeId: URL): Promise<Follow | undefined> {
+  async removeFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
     await this.ensureReady();
     const rows = await this.query<{ readonly follow_json: unknown }>(
       this.sql,
       `DELETE FROM ${this.table("followees")}
-        WHERE followee_id = $1
+        WHERE bot_id = $1 AND followee_id = $2
     RETURNING follow_json`,
-      [followeeId.href],
+      [identifier, followeeId.href],
     );
     return await parseFollow(rows[0]?.follow_json);
   }
 
-  async getFollowee(followeeId: URL): Promise<Follow | undefined> {
+  async getFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
     await this.ensureReady();
     const rows = await this.query<{ readonly follow_json: unknown }>(
       this.sql,
       `SELECT follow_json
          FROM ${this.table("followees")}
-        WHERE followee_id = $1`,
-      [followeeId.href],
+        WHERE bot_id = $1 AND followee_id = $2`,
+      [identifier, followeeId.href],
     );
     return await parseFollow(rows[0]?.follow_json);
   }
 
-  async vote(messageId: Uuid, voterId: URL, option: string): Promise<void> {
+  async *findFollowedBots(followeeId: URL): AsyncIterable<string> {
+    await this.ensureReady();
+    const rows = await this.query<{ readonly bot_id: string }>(
+      this.sql,
+      `SELECT bot_id
+         FROM ${this.table("followees")}
+        WHERE followee_id = $1
+     ORDER BY bot_id ASC`,
+      [followeeId.href],
+    );
+    for (const row of rows) yield row.bot_id;
+  }
+
+  async vote(
+    identifier: string,
+    messageId: Uuid,
+    voterId: URL,
+    option: string,
+  ): Promise<void> {
     await this.ensureReady();
     await this.query(
       this.sql,
-      `INSERT INTO ${this.table("poll_votes")} (message_id, voter_id, option)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (message_id, voter_id, option)
+      `INSERT INTO ${this.table("poll_votes")}
+         (bot_id, message_id, voter_id, option)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (bot_id, message_id, voter_id, option)
        DO NOTHING`,
-      [messageId, voterId.href, option],
+      [identifier, messageId, voterId.href, option],
     );
   }
 
-  async countVoters(messageId: Uuid): Promise<number> {
+  async countVoters(identifier: string, messageId: Uuid): Promise<number> {
     await this.ensureReady();
     const rows = await this.query<{ readonly count: number }>(
       this.sql,
       `SELECT COUNT(DISTINCT voter_id)::integer AS count
          FROM ${this.table("poll_votes")}
-        WHERE message_id = $1`,
-      [messageId],
+        WHERE bot_id = $1 AND message_id = $2`,
+      [identifier, messageId],
     );
     return rows[0]?.count ?? 0;
   }
 
-  async countVotes(messageId: Uuid): Promise<Readonly<Record<string, number>>> {
+  async countVotes(
+    identifier: string,
+    messageId: Uuid,
+  ): Promise<Readonly<Record<string, number>>> {
     await this.ensureReady();
     const rows = await this.query<{
       readonly option: string;
@@ -701,10 +1002,10 @@ export class PostgresRepository implements Repository, AsyncDisposable {
       this.sql,
       `SELECT option, COUNT(*)::integer AS count
          FROM ${this.table("poll_votes")}
-        WHERE message_id = $1
+        WHERE bot_id = $1 AND message_id = $2
      GROUP BY option
      ORDER BY option ASC`,
-      [messageId],
+      [identifier, messageId],
     );
     const result: Record<string, number> = {};
     for (const row of rows) {
@@ -713,12 +1014,61 @@ export class PostgresRepository implements Repository, AsyncDisposable {
     return result;
   }
 
+  /**
+   * Migrates data stored by \@fedify/botkit-postgres 0.4, which was not
+   * scoped by bot actor identifiers, so that it belongs to the given
+   * identifier.  Rows carried over from a legacy schema have the
+   * empty-string bot ID; this method assigns them to the identifier in
+   * a single transaction.  It only acts when the schema was actually
+   * upgraded from a legacy layout, so data legitimately stored under an
+   * empty-string identifier is never touched, and calling it again is
+   * a no-op.
+   * @param identifier The identifier of the bot actor that adopts the legacy
+   *                   data.
+   * @since 0.5.0
+   */
+  async migrate(identifier: string): Promise<void> {
+    await this.ensureReady();
+    await this.sql.begin(async (sql) => {
+      const rows = await this.query<{ readonly value: string }>(
+        sql,
+        `SELECT value FROM ${this.table("botkit_metadata")}
+          WHERE "key" = 'legacy_data'
+            FOR UPDATE`,
+      );
+      if (rows.length < 1) return;
+      // The followers and follow_requests rows move in tandem, which
+      // temporarily breaks the foreign key between them; defer the check to
+      // the commit:
+      await execute(sql, "SET CONSTRAINTS ALL DEFERRED", [], false);
+      for (const table of upgradableTables) {
+        await this.query(
+          sql,
+          `UPDATE "${this.schema}"."${table}"
+              SET bot_id = $1
+            WHERE bot_id = ''`,
+          [identifier],
+        );
+      }
+      await this.query(
+        sql,
+        `DELETE FROM ${this.table("botkit_metadata")}
+          WHERE "key" = 'legacy_data'`,
+      );
+    });
+  }
+
+  forIdentifier(identifier: string): ActorScopedRepository {
+    return new ActorScopedRepository(this, identifier);
+  }
+
   private table(name: string): string {
     return `"${this.schema}"."${name}"`;
   }
 
   private async lockFollowRequest(
     sql: Queryable,
+    identifier: string,
     followId: URL,
   ): Promise<void> {
     await this.query(
@@ -726,13 +1076,14 @@ export class PostgresRepository implements Repository, AsyncDisposable {
       `SELECT pg_catalog.pg_advisory_xact_lock($1, pg_catalog.hashtext($2))`,
       [
         followRequestAdvisoryLockNamespace,
-        `${this.schema}:${followId.href}`,
+        `${this.schema}:${identifier}:${followId.href}`,
       ],
     );
   }
 
   private async lockFollower(
     sql: Queryable,
+    identifier: string,
     followerId: string,
   ): Promise<void> {
     await this.query(
@@ -740,36 +1091,40 @@ export class PostgresRepository implements Repository, AsyncDisposable {
       `SELECT pg_catalog.pg_advisory_xact_lock($1, pg_catalog.hashtext($2))`,
       [
         followerAdvisoryLockNamespace,
-        `${this.schema}:${followerId}`,
+        `${this.schema}:${identifier}:${followerId}`,
       ],
     );
   }
 
   private async lockFollowers(
     sql: Queryable,
+    identifier: string,
     followerIds: readonly string[],
   ): Promise<void> {
     const uniqueFollowerIds = [...new Set(followerIds)].sort();
     for (const followerId of uniqueFollowerIds) {
-      await this.lockFollower(sql, followerId);
+      await this.lockFollower(sql, identifier, followerId);
     }
   }
 
   private async cleanupFollower(
     sql: Queryable,
+    identifier: string,
     followerId: string,
   ): Promise<void> {
-    await this.lockFollower(sql, followerId);
+    await this.lockFollower(sql, identifier, followerId);
     await this.query(
       sql,
       `DELETE FROM ${this.table("followers")}
-        WHERE follower_id = $1
+        WHERE bot_id = $1
+          AND follower_id = $2
           AND NOT EXISTS (
             SELECT 1
               FROM ${this.table("follow_requests")}
-             WHERE follower_id = $1
+             WHERE bot_id = $1
+               AND follower_id = $2
           )`,
-      [followerId],
+      [identifier, followerId],
     );
   }
 

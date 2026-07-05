@@ -22,14 +22,27 @@ export {
 export {
   Application,
   type Bot,
+  type BotEventHandlers,
   type BotWithVoidContextData,
   createBot,
   type CreateBotOptions,
   Image,
   type PagesOptions,
+  type ReadonlyBot,
   Service,
   type Software,
 } from "./bot.ts";
+export {
+  type BotDispatcher,
+  type BotGroup,
+  type BotProfile,
+  type CreateBotGroupOptions,
+  createInstance,
+  type CreateInstanceOptions,
+  DEFAULT_INSTANCE_ACTOR_IDENTIFIER,
+  type Instance,
+  type InstanceWithVoidContextData,
+} from "./instance.ts";
 export {
   type CustomEmoji,
   type DeferredCustomEmoji,
@@ -70,9 +83,11 @@ export {
   type Reaction,
 } from "./reaction.ts";
 export {
+  ActorScopedRepository,
   Announce,
   Create,
   KvRepository,
+  type KvRepositoryOptions,
   MemoryCachedRepository,
   MemoryRepository,
   type Repository,

@@ -18,7 +18,8 @@ import type { Actor } from "@fedify/vocab";
 import assert from "node:assert";
 import { test } from "node:test";
 import type { BotImpl } from "./bot-impl.ts";
-import { createBot } from "./bot.ts";
+import { MemoryRepository } from "./repository.ts";
+import { createBot, type ReadonlyBot } from "./bot.ts";
 import type { FollowRequest } from "./follow.ts";
 import type { Message, MessageClass, SharedMessage } from "./message.ts";
 import type { Like } from "./reaction.ts";
@@ -118,4 +119,64 @@ test("createBot()", async () => {
     ],
     subject: "acct:bot@example.com",
   });
+});
+
+test("Session.bot is a ReadonlyBot", () => {
+  const bot = createBot<void>({
+    kv: new MemoryKvStore(),
+    username: "readonlybot",
+  });
+  const session = bot.getSession("https://example.com");
+  const view: ReadonlyBot = session.bot;
+  assert.deepStrictEqual(view.identifier, "bot");
+  assert.deepStrictEqual(view.username, "readonlybot");
+  assert.deepStrictEqual(view.followerPolicy, "accept");
+
+  // Event handlers must not be reachable through the session's bot view:
+  // @ts-expect-error: ReadonlyBot does not expose event handlers.
+  session.bot.onMention = undefined;
+  // @ts-expect-error: ReadonlyBot does not expose the repository.
+  session.bot.repository;
+});
+
+test("createBot() adopts legacy repository data", async () => {
+  const kv = new MemoryKvStore();
+  // Simulates the unscoped key layout of BotKit 0.4 and earlier:
+  const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+  await kv.set(["_botkit", "messages"], [messageId]);
+  await kv.set(["_botkit", "messages", messageId], {
+    "@context": "https://www.w3.org/ns/activitystreams",
+    type: "Create",
+    id: `https://example.com/ap/create/${messageId}`,
+    actor: "https://example.com/ap/actor/bot",
+    object: {
+      type: "Note",
+      id: `https://example.com/ap/note/${messageId}`,
+      content: "Hello, world!",
+    },
+  });
+  const bot = createBot<void>({ kv, username: "bot" });
+  const { impl } = bot as unknown as { impl: BotImpl<void> };
+  // The legacy message is adopted before the first repository operation:
+  assert.deepStrictEqual(await impl.repository.countMessages(), 1);
+});
+
+test("createBot() runs Repository.migrate() once", async () => {
+  class MigratingMemoryRepository extends MemoryRepository {
+    migrated: string[] = [];
+    migrate(identifier: string): Promise<void> {
+      this.migrated.push(identifier);
+      return Promise.resolve();
+    }
+  }
+  const repository = new MigratingMemoryRepository();
+  const bot = createBot<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const { impl } = bot as unknown as { impl: BotImpl<void> };
+  await impl.repository.countMessages();
+  await impl.repository.countFollowers();
+  assert.deepStrictEqual(repository.migrated, ["bot"]);
 });

@@ -15,7 +15,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import {
   type Context,
-  createFederation,
   type Federation,
   generateCryptoKeyPair,
   type InboxContext,
@@ -26,7 +25,7 @@ import {
   type UnverifiedActivityReason,
 } from "@fedify/fedify";
 import {
-  Accept,
+  type Accept,
   type Activity,
   type Actor,
   Announce,
@@ -34,7 +33,6 @@ import {
   Article,
   ChatMessage,
   Create,
-  Delete,
   Emoji as APEmoji,
   EmojiReact,
   Endpoints,
@@ -50,17 +48,18 @@ import {
   PUBLIC_COLLECTION,
   Question,
   type Recipient,
-  Reject,
+  type Reject,
   Service,
-  Undo,
+  type Undo,
   Update,
 } from "@fedify/vocab";
-import { getLogger } from "@logtape/logtape";
-import mimeDb from "mime-db";
-import fs from "node:fs/promises";
-import { getXForwardedRequest } from "x-forwarded-fetch";
-import metadata from "../deno.json" with { type: "json" };
 import type { Bot, CreateBotOptions, PagesOptions } from "./bot.ts";
+import type {
+  BotDispatcher,
+  BotGroup,
+  BotProfile,
+  CreateBotGroupOptions,
+} from "./instance.ts";
 import {
   type CustomEmoji,
   type DeferredCustomEmoji,
@@ -84,6 +83,7 @@ import type {
   VoteEventHandler,
 } from "./events.ts";
 import { FollowRequestImpl } from "./follow-impl.ts";
+import { InstanceImpl } from "./instance-impl.ts";
 import {
   createMessage,
   getMessageVisibility,
@@ -92,10 +92,17 @@ import {
   messageClasses,
 } from "./message-impl.ts";
 import type { Message, MessageClass, SharedMessage } from "./message.ts";
-import { app } from "./pages.tsx";
 import type { Vote } from "./poll.ts";
 import type { Like, Reaction } from "./reaction.ts";
-import { KvRepository, type Repository, type Uuid } from "./repository.ts";
+import {
+  ActorScopedRepository,
+  KvRepository,
+  type Repository,
+  type RepositoryGetFollowersOptions,
+  type RepositoryGetMessagesOptions,
+  type Uuid,
+} from "./repository.ts";
+import { parseLocalUri } from "./uri.ts";
 import { SessionImpl } from "./session-impl.ts";
 import type { Session } from "./session.ts";
 import type { Text } from "./text.ts";
@@ -103,7 +110,41 @@ import type { Text } from "./text.ts";
 export interface BotImplOptions<TContextData>
   extends CreateBotOptions<TContextData> {
   collectionWindow?: number;
+
+  /**
+   * The instance to host the bot on.  If omitted, a dedicated instance is
+   * created from the given options, which preserves the single-bot behavior
+   * of BotKit 0.4 and earlier.
+   */
+  instance?: InstanceImpl<TContextData>;
+
+  /**
+   * Whether the bot is a transient view of a dynamically resolved bot,
+   * which is not registered on the instance.
+   */
+  transient?: boolean;
 }
+
+/**
+ * The names of the event handler properties of {@link BotEventHandlers}.
+ * @internal
+ */
+export const botEventHandlerNames = [
+  "onFollow",
+  "onUnfollow",
+  "onAcceptFollow",
+  "onRejectFollow",
+  "onMention",
+  "onReply",
+  "onQuote",
+  "onMessage",
+  "onSharedMessage",
+  "onLike",
+  "onUnlike",
+  "onReact",
+  "onUnreact",
+  "onVote",
+] as const;
 
 export class BotImpl<TContextData> implements Bot<TContextData> {
   readonly identifier: string;
@@ -117,13 +158,48 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
   readonly properties: Record<string, Text<"block" | "inline", TContextData>>;
   #properties: { pairs: PropertyValue[]; tags: (Link | Object)[] } | null;
   readonly followerPolicy: "accept" | "reject" | "manual";
-  readonly customEmojis: Record<string, CustomEmoji>;
-  readonly repository: Repository;
-  readonly software?: Software;
-  readonly behindProxy: boolean;
-  readonly pages: Required<PagesOptions>;
-  readonly collectionWindow: number;
-  readonly federation: Federation<TContextData>;
+  readonly repository: ActorScopedRepository;
+
+  /**
+   * The instance hosting the bot.  It owns the shared infrastructure:
+   * the Fedify federation, the key–value store, the message queue,
+   * the root repository, and HTTP handling.
+   */
+  readonly instance: InstanceImpl<TContextData>;
+
+  get customEmojis(): Record<string, CustomEmoji> {
+    return this.instance.customEmojis;
+  }
+
+  get software(): Software | undefined {
+    return this.instance.software;
+  }
+
+  get behindProxy(): boolean {
+    return this.instance.behindProxy;
+  }
+
+  get pages(): Required<PagesOptions> {
+    return this.instance.pages;
+  }
+
+  get collectionWindow(): number {
+    return this.instance.collectionWindow;
+  }
+
+  get federation(): Federation<TContextData> {
+    return this.instance.federation;
+  }
+
+  /**
+   * The identifier of the bot actor that owns local objects whose URIs are
+   * in the legacy (pre-0.5) format, which did not carry the identifier.
+   * Legacy URIs can only occur in deployments that hosted a single bot
+   * before the upgrade, so they are attributed to that bot.
+   */
+  get legacyObjectUrisIdentifier(): string | undefined {
+    return this.instance.legacyObjectUrisIdentifier;
+  }
 
   onFollow?: FollowEventHandler<TContextData>;
   onUnfollow?: UnfollowEventHandler<TContextData>;
@@ -152,118 +228,27 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     this.properties = options.properties ?? {};
     this.#properties = null;
     this.followerPolicy = options.followerPolicy ?? "accept";
-    this.customEmojis = {};
-    this.repository = options.repository ?? new KvRepository(options.kv);
-    this.software = options.software;
-    this.pages = {
-      color: "green",
-      css: "",
-      ...(options.pages ?? {}),
-    };
-    this.federation = createFederation<TContextData>({
+    this.instance = options.instance ?? new InstanceImpl({
       kv: options.kv,
+      // The single-bot deployment may carry data from BotKit 0.4 or
+      // earlier; adopt it for this bot before the first repository
+      // operation:
+      repository: new MigrationGatedRepository(
+        options.repository ?? new KvRepository(options.kv),
+        this.identifier,
+      ),
       queue: options.queue,
-      userAgent: {
-        software: `BotKit/${metadata.version}`,
-      },
+      software: options.software,
+      behindProxy: options.behindProxy,
+      pages: options.pages,
+      collectionWindow: options.collectionWindow,
+      // A dedicated instance hosts the single bot that predates the
+      // multi-bot upgrade, so legacy object URIs belong to it:
+      legacyObjectUris: { identifier: this.identifier },
+      compatMode: true,
     });
-    this.behindProxy = options.behindProxy ?? false;
-    this.collectionWindow = options.collectionWindow ?? 50;
-    this.initialize();
-  }
-
-  initialize(): void {
-    this.federation
-      .setActorDispatcher(
-        "/ap/actor/{identifier}",
-        this.dispatchActor.bind(this),
-      )
-      .mapHandle(this.mapHandle.bind(this))
-      .setKeyPairsDispatcher(this.dispatchActorKeyPairs.bind(this));
-    this.federation
-      .setFollowersDispatcher(
-        "/ap/actor/{identifier}/followers",
-        this.dispatchFollowers.bind(this),
-      )
-      .setFirstCursor(this.getFollowersFirstCursor.bind(this))
-      .setCounter(this.countFollowers.bind(this));
-    this.federation
-      .setOutboxDispatcher(
-        "/ap/actor/{identifier}/outbox",
-        this.dispatchOutbox.bind(this),
-      )
-      .setFirstCursor(this.getOutboxFirstCursor.bind(this))
-      .setCounter(this.countOutbox.bind(this));
-    this.federation
-      .setObjectDispatcher(
-        Follow,
-        "/ap/follow/{id}",
-        this.dispatchFollow.bind(this),
-      )
-      .authorize(this.authorizeFollow.bind(this));
-    this.federation.setObjectDispatcher(
-      Create,
-      "/ap/create/{id}",
-      this.dispatchCreate.bind(this),
-    );
-    this.federation.setObjectDispatcher(
-      Article,
-      "/ap/article/{id}",
-      (ctx, values) => this.dispatchMessage(Article, ctx, values.id),
-    );
-    this.federation.setObjectDispatcher(
-      ChatMessage,
-      "/ap/chat-message/{id}",
-      (ctx, values) => this.dispatchMessage(ChatMessage, ctx, values.id),
-    );
-    this.federation.setObjectDispatcher(
-      Note,
-      "/ap/note/{id}",
-      (ctx, values) => this.dispatchMessage(Note, ctx, values.id),
-    );
-    this.federation.setObjectDispatcher(
-      Question,
-      "/ap/question/{id}",
-      (ctx, values) => this.dispatchMessage(Question, ctx, values.id),
-    );
-    this.federation.setObjectDispatcher(
-      Announce,
-      "/ap/announce/{id}",
-      this.dispatchAnnounce.bind(this),
-    );
-    this.federation.setObjectDispatcher(
-      APEmoji,
-      "/ap/emoji/{name}",
-      this.dispatchEmoji.bind(this),
-    );
-    this.federation
-      .setInboxListeners("/ap/actor/{identifier}/inbox", "/ap/inbox")
-      .onUnverifiedActivity(this.onUnverifiedActivity.bind(this))
-      .on(Follow, this.onFollowed.bind(this))
-      .on(Undo, async (ctx, undo) => {
-        const object = await undo.getObject(ctx);
-        if (object instanceof Follow) await this.onUnfollowed(ctx, undo);
-        else if (object instanceof RawLike) await this.onUnliked(ctx, undo);
-        else {
-          const logger = getLogger(["botkit", "bot", "inbox"]);
-          logger.warn(
-            "The Undo object {undoId} is not about Follow or Like: {object}.",
-            { undoId: undo.id?.href, object },
-          );
-        }
-      })
-      .on(Accept, this.onFollowAccepted.bind(this))
-      .on(Reject, this.onFollowRejected.bind(this))
-      .on(Create, this.onCreated.bind(this))
-      .on(Announce, this.onAnnounced.bind(this))
-      .on(RawLike, this.onLiked.bind(this))
-      .setSharedKeyDispatcher(this.dispatchSharedKey.bind(this));
-    if (this.software != null) {
-      this.federation.setNodeInfoDispatcher(
-        "/nodeinfo/2.1",
-        this.dispatchNodeInfo.bind(this),
-      );
-    }
+    this.repository = this.instance.repository.forIdentifier(this.identifier);
+    if (!options.transient) this.instance.addBot(this);
   }
 
   async getActorSummary(
@@ -346,7 +331,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       outbox: ctx.getOutboxUri(identifier),
       publicKey: keyPairs[0].cryptographicKey,
       assertionMethods: keyPairs.map((pair) => pair.multikey),
-      url: new URL("/", ctx.origin),
+      url: this.instance.getBotWebUrl(this, ctx.origin),
     });
   }
 
@@ -484,8 +469,9 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
 
   async dispatchFollow(
     _ctx: RequestContext<TContextData>,
-    values: { id: string },
+    values: { identifier: string; id: string },
   ): Promise<Follow | null> {
+    if (values.identifier !== this.identifier) return null;
     const id = values.id as Uuid;
     const follow = await this.repository.getSentFollow(id);
     return follow ?? null;
@@ -493,8 +479,9 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
 
   async authorizeFollow(
     ctx: RequestContext<TContextData>,
-    values: { id: string },
+    values: { identifier: string; id: string },
   ): Promise<boolean> {
+    if (values.identifier !== this.identifier) return false;
     const signedKeyOwner = await ctx.getSignedKeyOwner();
     if (signedKeyOwner == null || signedKeyOwner.id == null) return false;
     const id = values.id as Uuid;
@@ -506,8 +493,9 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
 
   async dispatchCreate(
     ctx: RequestContext<TContextData>,
-    values: { id: string },
+    values: { identifier: string; id: string },
   ): Promise<Create | null> {
+    if (values.identifier !== this.identifier) return null;
     const activity = await this.repository.getMessage(values.id as Uuid);
     if (!(activity instanceof Create)) return null;
     const isVisible = await this.getPermissionChecker(ctx);
@@ -534,8 +522,9 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
 
   async dispatchAnnounce(
     ctx: RequestContext<TContextData>,
-    values: { id: string },
+    values: { identifier: string; id: string },
   ): Promise<Announce | null> {
+    if (values.identifier !== this.identifier) return null;
     const activity = await this.repository.getMessage(values.id as Uuid);
     if (!(activity instanceof Announce)) return null;
     const isVisible = await this.getPermissionChecker(ctx);
@@ -546,28 +535,19 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     ctx: Context<TContextData>,
     values: { name: string },
   ): APEmoji | null {
-    const customEmoji = this.customEmojis[values.name];
-    if (customEmoji == null) return null;
-    return this.getEmoji(ctx, values.name, customEmoji);
+    return this.instance.dispatchEmoji(ctx, values);
   }
 
-  dispatchSharedKey(_ctx: Context<TContextData>): { identifier: string } {
-    return { identifier: this.identifier };
+  dispatchSharedKey(ctx: Context<TContextData>): { identifier: string } {
+    return this.instance.dispatchSharedKey(ctx);
   }
 
   onUnverifiedActivity(
-    _ctx: RequestContext<TContextData>,
+    ctx: RequestContext<TContextData>,
     activity: Activity,
     reason: UnverifiedActivityReason,
   ): Response | void {
-    if (
-      activity instanceof Delete &&
-      reason.type === "keyFetchError" &&
-      "status" in reason.result &&
-      reason.result.status === 410
-    ) {
-      return new Response(null, { status: 202 });
-    }
+    return this.instance.onUnverifiedActivity(ctx, activity, reason);
   }
 
   async onFollowed(
@@ -620,8 +600,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     ctx: InboxContext<TContextData>,
     accept: Accept,
   ): Promise<void> {
-    const parsedObj = ctx.parseUri(accept.objectId);
-    if (parsedObj?.type !== "object" || parsedObj.class !== Follow) return;
+    const parsedObj = parseLocalUri(
+      ctx,
+      accept.objectId,
+      this.legacyObjectUrisIdentifier,
+    );
+    if (
+      parsedObj?.type !== "object" || parsedObj.class !== Follow ||
+      parsedObj.values.identifier !== this.identifier
+    ) {
+      return;
+    }
     const follow = await this.repository.getSentFollow(
       parsedObj.values.id as Uuid,
     );
@@ -644,8 +633,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     ctx: InboxContext<TContextData>,
     reject: Reject,
   ): Promise<void> {
-    const parsedObj = ctx.parseUri(reject.objectId);
-    if (parsedObj?.type !== "object" || parsedObj.class !== Follow) return;
+    const parsedObj = parseLocalUri(
+      ctx,
+      reject.objectId,
+      this.legacyObjectUrisIdentifier,
+    );
+    if (
+      parsedObj?.type !== "object" || parsedObj.class !== Follow ||
+      parsedObj.values.identifier !== this.identifier
+    ) {
+      return;
+    }
     const id = parsedObj.values.id as Uuid;
     const follow = await this.repository.getSentFollow(id);
     if (follow == null) return;
@@ -681,12 +679,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       if (messageCache != null) return messageCache;
       return messageCache = await createMessage(object, session, {});
     };
-    const replyTarget = ctx.parseUri(object.replyTargetId);
+    const replyTarget = parseLocalUri(
+      ctx,
+      object.replyTargetId,
+      this.legacyObjectUrisIdentifier,
+    );
     if (
       this.onVote != null &&
       object instanceof Note && replyTarget?.type === "object" &&
       // @ts-ignore: replyTarget.class satisfies (typeof messageClasses)[number]
       messageClasses.includes(replyTarget.class) &&
+      replyTarget.values.identifier === this.identifier &&
       object.name != null
     ) {
       if (
@@ -810,7 +813,8 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       this.onReply != null &&
       replyTarget?.type === "object" &&
       // @ts-ignore: replyTarget.class satisfies (typeof messageClasses)[number]
-      messageClasses.includes(replyTarget.class)
+      messageClasses.includes(replyTarget.class) &&
+      replyTarget.values.identifier === this.identifier
     ) {
       const message = await getMessage();
       if (
@@ -833,12 +837,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       }
     }
     if (quoteUrl == null) quoteUrl = object.quoteUrl;
-    const quoteTarget = ctx.parseUri(quoteUrl);
+    const quoteTarget = parseLocalUri(
+      ctx,
+      quoteUrl,
+      this.legacyObjectUrisIdentifier,
+    );
     if (
       this.onQuote != null &&
       quoteTarget?.type === "object" &&
       // @ts-ignore: quoteTarget.class satisfies (typeof messageClasses)[number]
-      messageClasses.includes(quoteTarget.class)
+      messageClasses.includes(quoteTarget.class) &&
+      quoteTarget.values.identifier === this.identifier
     ) {
       const message = await getMessage();
       if (
@@ -878,12 +887,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       this.onSharedMessage == null || announce.id == null ||
       announce.actorId == null
     ) return;
-    const objectUri = ctx.parseUri(announce.objectId);
+    const objectUri = parseLocalUri(
+      ctx,
+      announce.objectId,
+      this.legacyObjectUrisIdentifier,
+    );
     let object: Object | null = null;
     if (
       objectUri?.type === "object" &&
       // deno-lint-ignore no-explicit-any
-      messageClasses.includes(objectUri.class as any)
+      messageClasses.includes(objectUri.class as any) &&
+      objectUri.values.identifier === this.identifier
     ) {
       const msg = await this.repository.getMessage(objectUri.values.id as Uuid);
       if (msg instanceof Create) object = await msg.getObject(ctx);
@@ -914,13 +928,20 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     { session: Session<TContextData>; like: Like<TContextData> } | undefined
   > {
     if (like.id == null || like.actorId == null) return undefined;
-    const objectUri = ctx.parseUri(like.objectId);
+    const objectUri = parseLocalUri(
+      ctx,
+      like.objectId,
+      this.legacyObjectUrisIdentifier,
+    );
     let object: Object | null = null;
     if (
       objectUri?.type === "object" &&
       // deno-lint-ignore no-explicit-any
       messageClasses.includes(objectUri.class as any)
     ) {
+      // A local object owned by another bot is not this bot's to report;
+      // the owner receives the activity through its own routing:
+      if (objectUri.values.identifier !== this.identifier) return undefined;
       const msg = await this.repository.getMessage(objectUri.values.id as Uuid);
       if (msg instanceof Create) object = await msg.getObject(ctx);
     } else {
@@ -990,13 +1011,20 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       }
     }
     if (emoji == null) return undefined;
-    const objectUri = ctx.parseUri(react.objectId);
+    const objectUri = parseLocalUri(
+      ctx,
+      react.objectId,
+      this.legacyObjectUrisIdentifier,
+    );
     let object: Object | null = null;
     if (
       objectUri?.type === "object" &&
       // deno-lint-ignore no-explicit-any
       messageClasses.includes(objectUri.class as any)
     ) {
+      // A local object owned by another bot is not this bot's to report;
+      // the owner receives the activity through its own routing:
+      if (objectUri.values.identifier !== this.identifier) return undefined;
       const msg = await this.repository.getMessage(objectUri.values.id as Uuid);
       if (msg instanceof Create) object = await msg.getObject(ctx);
     } else {
@@ -1046,23 +1074,8 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     await this.onUnreact(session, reaction);
   }
 
-  dispatchNodeInfo(_ctx: Context<TContextData>): NodeInfo {
-    return {
-      software: this.software!,
-      protocols: ["activitypub"],
-      services: {
-        outbound: ["atom1.0"], // TODO
-      },
-      usage: {
-        users: {
-          total: 1,
-          activeMonth: 1, // FIXME
-          activeHalfyear: 1, // FIXME
-        },
-        localPosts: 0, // FIXME
-        localComments: 0,
-      },
-    };
+  dispatchNodeInfo(ctx: Context<TContextData>): NodeInfo {
+    return this.instance.dispatchNodeInfo(ctx);
   }
 
   getSession(
@@ -1082,106 +1095,20 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     return new SessionImpl(this, ctx);
   }
 
-  async addCollectionInverseProperty(
+  addCollectionInverseProperty(
     request: Request,
     contextData: TContextData,
     response: Response,
   ): Promise<Response> {
-    if (!response.ok) return response;
-    const ctx = this.federation.createContext(request, contextData);
-    const parsed = ctx.parseUri(new URL(request.url));
-    if (
-      parsed == null ||
-      (parsed.type !== "outbox" && parsed.type !== "followers") ||
-      parsed.identifier == null
-    ) {
-      return response;
-    }
-    const contentType = response.headers.get("Content-Type");
-    if (
-      contentType == null ||
-      (
-        !contentType.startsWith("application/activity+json") &&
-        !contentType.startsWith("application/ld+json")
-      )
-    ) {
-      return response;
-    }
-    const body = await response.json();
-    if (typeof body !== "object" || body == null || Array.isArray(body)) {
-      return new Response(JSON.stringify(body), {
-        headers: response.headers,
-        status: response.status,
-        statusText: response.statusText,
-      });
-    }
-    const property = parsed.type === "outbox" ? "outboxOf" : "followersOf";
-    const actorUri = ctx.getActorUri(parsed.identifier).href;
-    if (body[property] === actorUri) {
-      return new Response(JSON.stringify(body), {
-        headers: response.headers,
-        status: response.status,
-        statusText: response.statusText,
-      });
-    }
-    const headers = new Headers(response.headers);
-    headers.delete("Content-Length");
-    return new Response(JSON.stringify({ ...body, [property]: actorUri }), {
-      headers,
-      status: response.status,
-      statusText: response.statusText,
-    });
+    return this.instance.addCollectionInverseProperty(
+      request,
+      contextData,
+      response,
+    );
   }
 
-  async fetch(request: Request, contextData: TContextData): Promise<Response> {
-    if (this.behindProxy) {
-      request = await getXForwardedRequest(request);
-    }
-    const url = new URL(request.url);
-    if (
-      url.pathname.startsWith("/.well-known/") ||
-      url.pathname.startsWith("/ap/") ||
-      url.pathname.startsWith("/nodeinfo/")
-    ) {
-      const response = await this.federation.fetch(request, { contextData });
-      return await this.addCollectionInverseProperty(
-        request,
-        contextData,
-        response,
-      );
-    }
-    const match = /^\/emojis\/([a-z0-9-_]+)(?:$|\.)/.exec(url.pathname);
-    if (match != null) {
-      const customEmoji = this.customEmojis[match[1]];
-      if (customEmoji == null || !("file" in customEmoji)) {
-        return new Response("Not Found", { status: 404 });
-      }
-      let file: fs.FileHandle;
-      try {
-        file = await fs.open(customEmoji.file, "r");
-      } catch (error) {
-        if (
-          typeof error === "object" && error != null && "code" in error &&
-          error.code === "ENOENT"
-        ) {
-          return new Response("Not Found", { status: 404 });
-        }
-        throw error;
-      }
-      const fileInfo = await file.stat();
-      return new Response(file.readableWebStream(), {
-        headers: {
-          "Content-Type": customEmoji.type,
-          "Content-Length": fileInfo.size.toString(),
-          "Cache-Control": "public, max-age=31536000, immutable",
-          "Last-Modified": (fileInfo.mtime ?? new Date()).toUTCString(),
-          "ETag": `"${fileInfo.mtime?.getTime().toString(36)}${
-            fileInfo.size.toString(36)
-          }"`,
-        },
-      });
-    }
-    return await app.fetch(request, { bot: this, contextData });
+  fetch(request: Request, contextData: TContextData): Promise<Response> {
+    return this.instance.fetch(request, contextData);
   }
 
   getEmoji(
@@ -1189,63 +1116,448 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     name: string,
     data: CustomEmoji,
   ): APEmoji {
-    let url: URL;
-    if ("url" in data) {
-      url = new URL(data.url);
-    } else {
-      // @ts-ignore: data.type satisfies keyof typeof mimeDb
-      const t = mimeDb[data.type];
-      url = new URL(
-        `/emojis/${name}${
-          t == null || t.extensions == null || t.extensions.length < 1
-            ? ""
-            : `.${t.extensions[0]}`
-        }`,
-        ctx.origin,
-      );
-    }
-    return new APEmoji({
-      id: ctx.getObjectUri(APEmoji, { name }),
-      name: `:${name}:`,
-      icon: new Image({
-        mediaType: data.type,
-        url,
-      }),
-    });
+    return this.instance.getEmoji(ctx, name, data);
   }
 
   addCustomEmoji<TEmojiName extends string>(
     name: TEmojiName,
     data: CustomEmoji,
   ): DeferredCustomEmoji<TContextData> {
-    if (!name.match(/^[a-z0-9-_]+$/i)) {
-      throw new TypeError(
-        `Invalid custom emoji name: ${name}. It must match /^[a-z0-9-_]+$/i.`,
-      );
-    } else if (name in this.customEmojis) {
-      throw new TypeError(`Duplicate custom emoji name: ${name}`);
-    } else if (!data.type.startsWith("image/")) {
-      throw new TypeError(`Unsupported media type: ${data.type}`);
-    }
-    this.customEmojis[name] = data;
-    return (session: Session<TContextData>) =>
-      this.getEmoji(
-        session.context,
-        name,
-        data,
-      );
+    return this.instance.addCustomEmoji(name, data);
   }
 
   addCustomEmojis<TEmojiName extends string>(
     emojis: Readonly<Record<TEmojiName, CustomEmoji>>,
   ): Readonly<Record<TEmojiName, DeferredCustomEmoji<TContextData>>> {
-    const emojiMap = {} as Record<
-      TEmojiName,
-      DeferredCustomEmoji<TContextData>
-    >;
-    for (const name in emojis) {
-      emojiMap[name] = this.addCustomEmoji(name, emojis[name]);
+    return this.instance.addCustomEmojis(emojis);
+  }
+}
+
+/**
+ * Wraps a {@link BotImpl} instance with a plain object implementing
+ * the {@link Bot} interface.  Since `deno serve` does not recognize a class
+ * instance having fetch(), we wrap a BotImpl instance with a plain object.
+ * See also https://github.com/denoland/deno/issues/24062
+ * @param bot The bot implementation to wrap.
+ * @returns The wrapped bot.
+ * @internal
+ */
+export function wrapBotImpl<TContextData>(
+  bot: BotImpl<TContextData>,
+): Bot<TContextData> {
+  const wrapper = {
+    impl: bot,
+    get federation() {
+      return bot.federation;
+    },
+    get identifier() {
+      return bot.identifier;
+    },
+    getSession(a, b?) {
+      // @ts-ignore: BotImpl.getSession() implements Bot.getSession()
+      return bot.getSession(a, b);
+    },
+    fetch(request, contextData) {
+      return bot.fetch(request, contextData);
+    },
+    addCustomEmojis<TEmojiName extends string>(
+      emojis: Readonly<Record<TEmojiName, CustomEmoji>>,
+    ): Readonly<Record<TEmojiName, DeferredCustomEmoji<TContextData>>> {
+      return bot.addCustomEmojis(emojis);
+    },
+    get onFollow() {
+      return bot.onFollow;
+    },
+    set onFollow(value) {
+      bot.onFollow = value;
+    },
+    get onUnfollow() {
+      return bot.onUnfollow;
+    },
+    set onUnfollow(value) {
+      bot.onUnfollow = value;
+    },
+    get onAcceptFollow() {
+      return bot.onAcceptFollow;
+    },
+    set onAcceptFollow(value) {
+      bot.onAcceptFollow = value;
+    },
+    get onRejectFollow() {
+      return bot.onRejectFollow;
+    },
+    set onRejectFollow(value) {
+      bot.onRejectFollow = value;
+    },
+    get onMention() {
+      return bot.onMention;
+    },
+    set onMention(value) {
+      bot.onMention = value;
+    },
+    get onReply() {
+      return bot.onReply;
+    },
+    set onReply(value) {
+      bot.onReply = value;
+    },
+    get onQuote() {
+      return bot.onQuote;
+    },
+    set onQuote(value) {
+      bot.onQuote = value;
+    },
+    get onMessage() {
+      return bot.onMessage;
+    },
+    set onMessage(value) {
+      bot.onMessage = value;
+    },
+    get onSharedMessage() {
+      return bot.onSharedMessage;
+    },
+    set onSharedMessage(value) {
+      bot.onSharedMessage = value;
+    },
+    get onLike() {
+      return bot.onLike;
+    },
+    set onLike(value) {
+      bot.onLike = value;
+    },
+    get onUnlike() {
+      return bot.onUnlike;
+    },
+    set onUnlike(value) {
+      bot.onUnlike = value;
+    },
+    get onReact() {
+      return bot.onReact;
+    },
+    set onReact(value) {
+      bot.onReact = value;
+    },
+    get onUnreact() {
+      return bot.onUnreact;
+    },
+    set onUnreact(value) {
+      bot.onUnreact = value;
+    },
+    get onVote() {
+      return bot.onVote;
+    },
+    set onVote(value) {
+      bot.onVote = value;
+    },
+  } satisfies Bot<TContextData> & { impl: BotImpl<TContextData> };
+  return wrapper;
+}
+
+/**
+ * A repository decorator that adopts legacy (pre-0.5) data for a bot actor
+ * before the first repository operation.  The migration is kicked off at
+ * construction time and every operation awaits its completion, so data
+ * stored by BotKit 0.4 or earlier is visible from the start.
+ * @internal
+ */
+export class MigrationGatedRepository implements Repository {
+  readonly #repository: Repository;
+  readonly #migration: Promise<void>;
+
+  constructor(repository: Repository, identifier: string) {
+    this.#repository = repository;
+    this.#migration = repository.migrate?.(identifier) ?? Promise.resolve();
+    // The rejection is re-thrown by the first awaiting operation; this
+    // no-op handler only prevents an unhandled rejection warning:
+    this.#migration.catch(() => {});
+  }
+
+  async setKeyPairs(
+    identifier: string,
+    keyPairs: CryptoKeyPair[],
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.setKeyPairs(identifier, keyPairs);
+  }
+
+  async getKeyPairs(identifier: string): Promise<CryptoKeyPair[] | undefined> {
+    await this.#migration;
+    return await this.#repository.getKeyPairs(identifier);
+  }
+
+  async addMessage(
+    identifier: string,
+    id: Uuid,
+    activity: Create | Announce,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.addMessage(identifier, id, activity);
+  }
+
+  async updateMessage(
+    identifier: string,
+    id: Uuid,
+    updater: (
+      existing: Create | Announce,
+    ) => Create | Announce | undefined | Promise<Create | Announce | undefined>,
+  ): Promise<boolean> {
+    await this.#migration;
+    return await this.#repository.updateMessage(identifier, id, updater);
+  }
+
+  async removeMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
+    await this.#migration;
+    return await this.#repository.removeMessage(identifier, id);
+  }
+
+  async *getMessages(
+    identifier: string,
+    options?: RepositoryGetMessagesOptions,
+  ): AsyncIterable<Create | Announce> {
+    await this.#migration;
+    yield* this.#repository.getMessages(identifier, options);
+  }
+
+  async getMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
+    await this.#migration;
+    return await this.#repository.getMessage(identifier, id);
+  }
+
+  async countMessages(identifier: string): Promise<number> {
+    await this.#migration;
+    return await this.#repository.countMessages(identifier);
+  }
+
+  async addFollower(
+    identifier: string,
+    followId: URL,
+    follower: Actor,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.addFollower(identifier, followId, follower);
+  }
+
+  async removeFollower(
+    identifier: string,
+    followId: URL,
+    followerId: URL,
+  ): Promise<Actor | undefined> {
+    await this.#migration;
+    return await this.#repository.removeFollower(
+      identifier,
+      followId,
+      followerId,
+    );
+  }
+
+  async hasFollower(identifier: string, followerId: URL): Promise<boolean> {
+    await this.#migration;
+    return await this.#repository.hasFollower(identifier, followerId);
+  }
+
+  async *getFollowers(
+    identifier: string,
+    options?: RepositoryGetFollowersOptions,
+  ): AsyncIterable<Actor> {
+    await this.#migration;
+    yield* this.#repository.getFollowers(identifier, options);
+  }
+
+  async countFollowers(identifier: string): Promise<number> {
+    await this.#migration;
+    return await this.#repository.countFollowers(identifier);
+  }
+
+  async addSentFollow(
+    identifier: string,
+    id: Uuid,
+    follow: Follow,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.addSentFollow(identifier, id, follow);
+  }
+
+  async removeSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
+    await this.#migration;
+    return await this.#repository.removeSentFollow(identifier, id);
+  }
+
+  async getSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
+    await this.#migration;
+    return await this.#repository.getSentFollow(identifier, id);
+  }
+
+  async addFollowee(
+    identifier: string,
+    followeeId: URL,
+    follow: Follow,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.addFollowee(identifier, followeeId, follow);
+  }
+
+  async removeFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
+    await this.#migration;
+    return await this.#repository.removeFollowee(identifier, followeeId);
+  }
+
+  async getFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
+    await this.#migration;
+    return await this.#repository.getFollowee(identifier, followeeId);
+  }
+
+  async *findFollowedBots(followeeId: URL): AsyncIterable<string> {
+    await this.#migration;
+    yield* this.#repository.findFollowedBots(followeeId);
+  }
+
+  async vote(
+    identifier: string,
+    messageId: Uuid,
+    voterId: URL,
+    option: string,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.vote(identifier, messageId, voterId, option);
+  }
+
+  async countVoters(identifier: string, messageId: Uuid): Promise<number> {
+    await this.#migration;
+    return await this.#repository.countVoters(identifier, messageId);
+  }
+
+  async countVotes(
+    identifier: string,
+    messageId: Uuid,
+  ): Promise<Readonly<Record<string, number>>> {
+    await this.#migration;
+    return await this.#repository.countVotes(identifier, messageId);
+  }
+
+  forIdentifier(identifier: string): ActorScopedRepository {
+    return new ActorScopedRepository(this, identifier);
+  }
+
+  async migrate(identifier: string): Promise<void> {
+    await this.#migration;
+    await this.#repository.migrate?.(identifier);
+  }
+}
+
+/**
+ * The internal implementation of a {@link BotGroup}: a registry of event
+ * handlers shared by every bot its dispatcher resolves.
+ * @internal
+ */
+export class BotGroupImpl<TContextData> implements BotGroup<TContextData> {
+  readonly instance: InstanceImpl<TContextData>;
+  readonly dispatcher: BotDispatcher<TContextData>;
+  readonly mapUsername?: (
+    ctx: Context<TContextData>,
+    username: string,
+  ) => string | null | Promise<string | null>;
+
+  onFollow?: FollowEventHandler<TContextData>;
+  onUnfollow?: UnfollowEventHandler<TContextData>;
+  onAcceptFollow?: AcceptEventHandler<TContextData>;
+  onRejectFollow?: RejectEventHandler<TContextData>;
+  onMention?: MentionEventHandler<TContextData>;
+  onReply?: ReplyEventHandler<TContextData>;
+  onQuote?: QuoteEventHandler<TContextData>;
+  onMessage?: MessageEventHandler<TContextData>;
+  onSharedMessage?: SharedMessageEventHandler<TContextData>;
+  onLike?: LikeEventHandler<TContextData>;
+  onUnlike?: UnlikeEventHandler<TContextData>;
+  onReact?: ReactionEventHandler<TContextData>;
+  onUnreact?: UndoneReactionEventHandler<TContextData>;
+  onVote?: VoteEventHandler<TContextData>;
+
+  constructor(
+    instance: InstanceImpl<TContextData>,
+    dispatcher: BotDispatcher<TContextData>,
+    options: CreateBotGroupOptions<TContextData> = {},
+  ) {
+    this.instance = instance;
+    this.dispatcher = dispatcher;
+    this.mapUsername = options.mapUsername;
+  }
+
+  async getSession(
+    origin: string | URL,
+    identifier: string,
+    contextData: TContextData,
+  ): Promise<Session<TContextData>> {
+    const ctx = this.instance.federation.createContext(
+      new URL(origin),
+      contextData,
+    );
+    const bot = await this.instance.resolveBot(ctx, identifier);
+    if (bot == null || !(bot instanceof GroupBotImpl) || bot.group !== this) {
+      throw new TypeError(
+        `The group's dispatcher does not resolve the identifier: ${identifier}`,
+      );
     }
-    return emojiMap;
+    return bot.getSession(ctx);
+  }
+}
+
+/**
+ * A transient per-bot view of a dynamically resolved bot.  It behaves like
+ * a regular {@link BotImpl}, except that its event handlers are read live
+ * from the owning {@link BotGroupImpl} at dispatch time, so handlers
+ * registered on the group after a bot was resolved still fire.  Views are
+ * not registered on the instance and live only as long as the resolution
+ * cache of the request that produced them.
+ * @internal
+ */
+export class GroupBotImpl<TContextData> extends BotImpl<TContextData> {
+  readonly group: BotGroupImpl<TContextData>;
+
+  constructor(
+    group: BotGroupImpl<TContextData>,
+    identifier: string,
+    profile: BotProfile<TContextData>,
+  ) {
+    super({
+      instance: group.instance,
+      transient: true,
+      identifier,
+      kv: group.instance.kv,
+      class: profile.class,
+      username: profile.username,
+      name: profile.name,
+      summary: profile.summary,
+      icon: profile.icon,
+      image: profile.image,
+      properties: profile.properties,
+      followerPolicy: profile.followerPolicy,
+    });
+    this.group = group;
+    for (const name of botEventHandlerNames) {
+      // Class fields would shadow prototype accessors, so the live views
+      // into the group's handlers are defined per instance:
+      globalThis.Object.defineProperty(this, name, {
+        get: () => group[name],
+        configurable: true,
+      });
+    }
   }
 }

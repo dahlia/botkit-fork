@@ -35,6 +35,7 @@ const concepts = {
   text: "Concepts",
   items: [
     { text: "Bot", link: "/concepts/bot.md" },
+    { text: "Instance", link: "/concepts/instance.md" },
     { text: "Session", link: "/concepts/session.md" },
     { text: "Events", link: "/concepts/events.md" },
     { text: "Message", link: "/concepts/message.md" },

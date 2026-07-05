@@ -13,11 +13,12 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import type {
-  Repository,
-  RepositoryGetFollowersOptions,
-  RepositoryGetMessagesOptions,
-  Uuid,
+import {
+  ActorScopedRepository,
+  type Repository,
+  type RepositoryGetFollowersOptions,
+  type RepositoryGetMessagesOptions,
+  type Uuid,
 } from "@fedify/botkit/repository";
 import { exportJwk, importJwk } from "@fedify/fedify/sig";
 import {
@@ -89,95 +90,356 @@ export class SqliteRepository implements Repository, Disposable {
     this.db.close();
   }
 
+  private tableExists(table: string): boolean {
+    const stmt = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type = 'table' AND name = ?
+    `);
+    const row = stmt.get(table) as { count: number };
+    return row.count > 0;
+  }
+
+  private hasBotIdColumn(table: string): boolean {
+    const stmt = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM pragma_table_info(?)
+      WHERE name = 'bot_id'
+    `);
+    const row = stmt.get(table) as { count: number };
+    return row.count > 0;
+  }
+
+  /**
+   * Rebuilds tables created by \@fedify/botkit-sqlite 0.4 or earlier, which
+   * had no `bot_id` column, into the bot-scoped schema.  Existing rows get
+   * the empty-string bot ID; use {@link SqliteRepository.migrate} to assign
+   * them to a bot actor identifier.
+   */
+  private rebuildLegacyTables(): void {
+    const tables = [
+      "key_pairs",
+      "messages",
+      "followers",
+      "follow_requests",
+      "sent_follows",
+      "followees",
+      "poll_votes",
+    ].filter((table) => this.tableExists(table) && !this.hasBotIdColumn(table));
+    if (tables.length < 1) return;
+    logger.info(
+      "Rebuilding legacy tables without a bot_id column: {tables}.",
+      { tables },
+    );
+    // The marker lets migrate() distinguish rows carried over from a legacy
+    // database (bot_id = '') from data legitimately stored under an
+    // empty-string identifier:
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS botkit_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+    // SQLite cannot add a column to a composite primary key, so the tables
+    // are rebuilt (create new, copy, drop, rename) in a single transaction.
+    // Foreign key enforcement is turned off during the rebuild since
+    // follow_requests references followers.
+    this.db.exec("PRAGMA foreign_keys = OFF;");
+    this.db.exec("BEGIN TRANSACTION");
+    try {
+      if (tables.includes("key_pairs")) {
+        // The primary key does not change; adding the column suffices:
+        this.db.exec(`
+          ALTER TABLE key_pairs ADD COLUMN bot_id TEXT NOT NULL DEFAULT ''
+        `);
+      }
+      if (tables.includes("messages")) {
+        this.db.exec(`
+          CREATE TABLE messages_new (
+            bot_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            activity_json TEXT NOT NULL,
+            published INTEGER,
+            PRIMARY KEY (bot_id, id)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO messages_new (bot_id, id, activity_json, published)
+          SELECT '', id, activity_json, published FROM messages
+        `);
+        this.db.exec("DROP TABLE messages");
+        this.db.exec("ALTER TABLE messages_new RENAME TO messages");
+      }
+      if (tables.includes("followers")) {
+        this.db.exec(`
+          CREATE TABLE followers_new (
+            bot_id TEXT NOT NULL,
+            follower_id TEXT NOT NULL,
+            actor_json TEXT NOT NULL,
+            PRIMARY KEY (bot_id, follower_id)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO followers_new (bot_id, follower_id, actor_json)
+          SELECT '', follower_id, actor_json FROM followers
+        `);
+        this.db.exec("DROP TABLE followers");
+        this.db.exec("ALTER TABLE followers_new RENAME TO followers");
+      }
+      if (tables.includes("follow_requests")) {
+        this.db.exec(`
+          CREATE TABLE follow_requests_new (
+            bot_id TEXT NOT NULL,
+            follow_request_id TEXT NOT NULL,
+            follower_id TEXT NOT NULL,
+            PRIMARY KEY (bot_id, follow_request_id),
+            FOREIGN KEY (bot_id, follower_id)
+              REFERENCES followers(bot_id, follower_id)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO follow_requests_new
+            (bot_id, follow_request_id, follower_id)
+          SELECT '', follow_request_id, follower_id FROM follow_requests
+        `);
+        this.db.exec("DROP TABLE follow_requests");
+        this.db.exec(
+          "ALTER TABLE follow_requests_new RENAME TO follow_requests",
+        );
+      }
+      if (tables.includes("sent_follows")) {
+        this.db.exec(`
+          CREATE TABLE sent_follows_new (
+            bot_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            follow_json TEXT NOT NULL,
+            PRIMARY KEY (bot_id, id)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO sent_follows_new (bot_id, id, follow_json)
+          SELECT '', id, follow_json FROM sent_follows
+        `);
+        this.db.exec("DROP TABLE sent_follows");
+        this.db.exec("ALTER TABLE sent_follows_new RENAME TO sent_follows");
+      }
+      if (tables.includes("followees")) {
+        this.db.exec(`
+          CREATE TABLE followees_new (
+            bot_id TEXT NOT NULL,
+            followee_id TEXT NOT NULL,
+            follow_json TEXT NOT NULL,
+            PRIMARY KEY (bot_id, followee_id)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO followees_new (bot_id, followee_id, follow_json)
+          SELECT '', followee_id, follow_json FROM followees
+        `);
+        this.db.exec("DROP TABLE followees");
+        this.db.exec("ALTER TABLE followees_new RENAME TO followees");
+      }
+      if (tables.includes("poll_votes")) {
+        this.db.exec(`
+          CREATE TABLE poll_votes_new (
+            bot_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            voter_id TEXT NOT NULL,
+            option TEXT NOT NULL,
+            PRIMARY KEY (bot_id, message_id, voter_id, option)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO poll_votes_new (bot_id, message_id, voter_id, option)
+          SELECT '', message_id, voter_id, option FROM poll_votes
+        `);
+        this.db.exec("DROP TABLE poll_votes");
+        this.db.exec("ALTER TABLE poll_votes_new RENAME TO poll_votes");
+      }
+      this.db.exec(`
+        INSERT OR REPLACE INTO botkit_metadata (key, value)
+        VALUES ('legacy_data', '1')
+      `);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      this.db.exec("PRAGMA foreign_keys = ON;");
+      throw error;
+    }
+    this.db.exec("PRAGMA foreign_keys = ON;");
+    logger.info("Finished rebuilding legacy tables.");
+  }
+
+  /**
+   * Migrates data stored by \@fedify/botkit-sqlite 0.4 or earlier, which was
+   * not scoped by bot actor identifiers, so that it belongs to the given
+   * identifier.  Rows carried over from a legacy database have the
+   * empty-string bot ID; this method assigns them to the identifier in
+   * a single transaction.  It only acts when the database was actually
+   * rebuilt from a legacy schema, so data legitimately stored under an
+   * empty-string identifier is never touched, and calling it again is
+   * a no-op.
+   * @param identifier The identifier of the bot actor that adopts the legacy
+   *                   data.
+   * @since 0.5.0
+   */
+  migrate(identifier: string): Promise<void> {
+    if (!this.tableExists("botkit_metadata")) return Promise.resolve();
+    const marker = this.db.prepare(
+      "SELECT value FROM botkit_metadata WHERE key = 'legacy_data'",
+    ).get() as { value: string } | undefined;
+    if (marker == null) return Promise.resolve();
+    this.db.exec("BEGIN TRANSACTION");
+    // Updating followers and follow_requests rows in tandem temporarily
+    // breaks the foreign key between them; defer the check to the commit:
+    this.db.exec("PRAGMA defer_foreign_keys = ON");
+    try {
+      for (
+        const table of [
+          "key_pairs",
+          "messages",
+          "followers",
+          "follow_requests",
+          "sent_follows",
+          "followees",
+          "poll_votes",
+        ]
+      ) {
+        this.db.prepare(`UPDATE ${table} SET bot_id = ? WHERE bot_id = ''`)
+          .run(identifier);
+      }
+      this.db.exec("DELETE FROM botkit_metadata WHERE key = 'legacy_data'");
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return Promise.resolve();
+  }
+
   private initializeTables(): void {
+    this.rebuildLegacyTables();
+
     // Key pairs table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS key_pairs (
         id INTEGER PRIMARY KEY,
+        bot_id TEXT NOT NULL,
         private_key_jwk TEXT NOT NULL,
         public_key_jwk TEXT NOT NULL
       )
     `);
 
+    // Create index on bot_id for efficient per-bot lookup
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_key_pairs_bot_id ON key_pairs(bot_id)
+    `);
+
     // Messages table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
+        bot_id TEXT NOT NULL,
+        id TEXT NOT NULL,
         activity_json TEXT NOT NULL,
-        published INTEGER
+        published INTEGER,
+        PRIMARY KEY (bot_id, id)
       )
     `);
 
     // Create index on published timestamp for efficient ordering
     this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_messages_published ON messages(published)
+      CREATE INDEX IF NOT EXISTS idx_messages_bot_published
+      ON messages(bot_id, published)
     `);
 
     // Followers table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS followers (
-        follower_id TEXT PRIMARY KEY,
-        actor_json TEXT NOT NULL
+        bot_id TEXT NOT NULL,
+        follower_id TEXT NOT NULL,
+        actor_json TEXT NOT NULL,
+        PRIMARY KEY (bot_id, follower_id)
       )
     `);
 
     // Follow requests mapping table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS follow_requests (
-        follow_request_id TEXT PRIMARY KEY,
+        bot_id TEXT NOT NULL,
+        follow_request_id TEXT NOT NULL,
         follower_id TEXT NOT NULL,
-        FOREIGN KEY (follower_id) REFERENCES followers(follower_id)
+        PRIMARY KEY (bot_id, follow_request_id),
+        FOREIGN KEY (bot_id, follower_id)
+          REFERENCES followers(bot_id, follower_id)
       )
     `);
 
     // Sent follows table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sent_follows (
-        id TEXT PRIMARY KEY,
-        follow_json TEXT NOT NULL
+        bot_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        follow_json TEXT NOT NULL,
+        PRIMARY KEY (bot_id, id)
       )
     `);
 
     // Followees table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS followees (
-        followee_id TEXT PRIMARY KEY,
-        follow_json TEXT NOT NULL
+        bot_id TEXT NOT NULL,
+        followee_id TEXT NOT NULL,
+        follow_json TEXT NOT NULL,
+        PRIMARY KEY (bot_id, followee_id)
       )
+    `);
+
+    // Create index for reverse lookup of bots following an actor
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_followees_followee_id
+      ON followees(followee_id)
     `);
 
     // Poll votes table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS poll_votes (
+        bot_id TEXT NOT NULL,
         message_id TEXT NOT NULL,
         voter_id TEXT NOT NULL,
         option TEXT NOT NULL,
-        PRIMARY KEY (message_id, voter_id, option)
+        PRIMARY KEY (bot_id, message_id, voter_id, option)
       )
     `);
 
     // Create index for efficient vote counting
     this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_poll_votes_message_option 
-      ON poll_votes(message_id, option)
+      CREATE INDEX IF NOT EXISTS idx_poll_votes_bot_message_option
+      ON poll_votes(bot_id, message_id, option)
     `);
   }
 
-  async setKeyPairs(keyPairs: CryptoKeyPair[]): Promise<void> {
-    const deleteStmt = this.db.prepare("DELETE FROM key_pairs");
+  async setKeyPairs(
+    identifier: string,
+    keyPairs: CryptoKeyPair[],
+  ): Promise<void> {
+    const deleteStmt = this.db.prepare(
+      "DELETE FROM key_pairs WHERE bot_id = ?",
+    );
     const insertStmt = this.db.prepare(`
-      INSERT INTO key_pairs (private_key_jwk, public_key_jwk) 
-      VALUES (?, ?)
+      INSERT INTO key_pairs (bot_id, private_key_jwk, public_key_jwk)
+      VALUES (?, ?, ?)
     `);
 
     this.db.exec("BEGIN TRANSACTION");
     try {
-      deleteStmt.run();
+      deleteStmt.run(identifier);
 
       for (const keyPair of keyPairs) {
         const privateJwk = await exportJwk(keyPair.privateKey);
         const publicJwk = await exportJwk(keyPair.publicKey);
-        insertStmt.run(JSON.stringify(privateJwk), JSON.stringify(publicJwk));
+        insertStmt.run(
+          identifier,
+          JSON.stringify(privateJwk),
+          JSON.stringify(publicJwk),
+        );
       }
 
       this.db.exec("COMMIT");
@@ -187,11 +449,12 @@ export class SqliteRepository implements Repository, Disposable {
     }
   }
 
-  async getKeyPairs(): Promise<CryptoKeyPair[] | undefined> {
+  async getKeyPairs(identifier: string): Promise<CryptoKeyPair[] | undefined> {
     const stmt = this.db.prepare(`
       SELECT private_key_jwk, public_key_jwk FROM key_pairs
+      WHERE bot_id = ? ORDER BY id
     `);
-    const rows = stmt.all() as Array<{
+    const rows = stmt.all(identifier) as Array<{
       private_key_jwk: string;
       public_key_jwk: string;
     }>;
@@ -212,10 +475,14 @@ export class SqliteRepository implements Repository, Disposable {
     return keyPairs;
   }
 
-  async addMessage(id: Uuid, activity: Create | Announce): Promise<void> {
+  async addMessage(
+    identifier: string,
+    id: Uuid,
+    activity: Create | Announce,
+  ): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT INTO messages (id, activity_json, published) 
-      VALUES (?, ?, ?)
+      INSERT INTO messages (bot_id, id, activity_json, published)
+      VALUES (?, ?, ?, ?)
     `);
 
     const activityJson = JSON.stringify(
@@ -223,19 +490,22 @@ export class SqliteRepository implements Repository, Disposable {
     );
     const published = activity.published?.epochMilliseconds ?? null;
 
-    stmt.run(id, activityJson, published);
+    stmt.run(identifier, id, activityJson, published);
   }
 
   async updateMessage(
+    identifier: string,
     id: Uuid,
     updater: (
       existing: Create | Announce,
     ) => Create | Announce | undefined | Promise<Create | Announce | undefined>,
   ): Promise<boolean> {
     const selectStmt = this.db.prepare(`
-      SELECT activity_json FROM messages WHERE id = ?
+      SELECT activity_json FROM messages WHERE bot_id = ? AND id = ?
     `);
-    const row = selectStmt.get(id) as { activity_json: string } | undefined;
+    const row = selectStmt.get(identifier, id) as
+      | { activity_json: string }
+      | undefined;
 
     if (!row) return false;
 
@@ -250,9 +520,9 @@ export class SqliteRepository implements Repository, Disposable {
     if (newActivity == null) return false;
 
     const updateStmt = this.db.prepare(`
-      UPDATE messages 
-      SET activity_json = ?, published = ? 
-      WHERE id = ?
+      UPDATE messages
+      SET activity_json = ?, published = ?
+      WHERE bot_id = ? AND id = ?
     `);
 
     const newActivityJson = JSON.stringify(
@@ -260,22 +530,27 @@ export class SqliteRepository implements Repository, Disposable {
     );
     const published = newActivity.published?.epochMilliseconds ?? null;
 
-    updateStmt.run(newActivityJson, published, id);
+    updateStmt.run(newActivityJson, published, identifier, id);
     return true;
   }
 
-  async removeMessage(id: Uuid): Promise<Create | Announce | undefined> {
+  async removeMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
     const selectStmt = this.db.prepare(`
-      SELECT activity_json FROM messages WHERE id = ?
+      SELECT activity_json FROM messages WHERE bot_id = ? AND id = ?
     `);
-    const row = selectStmt.get(id) as { activity_json: string } | undefined;
+    const row = selectStmt.get(identifier, id) as
+      | { activity_json: string }
+      | undefined;
 
     if (!row) return undefined;
 
     const deleteStmt = this.db.prepare(`
-      DELETE FROM messages WHERE id = ?
+      DELETE FROM messages WHERE bot_id = ? AND id = ?
     `);
-    deleteStmt.run(id);
+    deleteStmt.run(identifier, id);
 
     try {
       const activityData = JSON.parse(row.activity_json);
@@ -292,12 +567,13 @@ export class SqliteRepository implements Repository, Disposable {
   }
 
   async *getMessages(
+    identifier: string,
     options: RepositoryGetMessagesOptions = {},
   ): AsyncIterable<Create | Announce> {
     const { order = "newest", until, since, limit } = options;
 
-    let sql = "SELECT activity_json FROM messages WHERE 1=1";
-    const params: (number | string)[] = [];
+    let sql = "SELECT activity_json FROM messages WHERE bot_id = ?";
+    const params: (number | string)[] = [identifier];
 
     if (since != null) {
       sql += " AND published >= ?";
@@ -336,11 +612,16 @@ export class SqliteRepository implements Repository, Disposable {
     }
   }
 
-  async getMessage(id: Uuid): Promise<Create | Announce | undefined> {
+  async getMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
     const stmt = this.db.prepare(`
-      SELECT activity_json FROM messages WHERE id = ?
+      SELECT activity_json FROM messages WHERE bot_id = ? AND id = ?
     `);
-    const row = stmt.get(id) as { activity_json: string } | undefined;
+    const row = stmt.get(identifier, id) as
+      | { activity_json: string }
+      | undefined;
 
     if (!row) return undefined;
 
@@ -358,13 +639,19 @@ export class SqliteRepository implements Repository, Disposable {
     return undefined;
   }
 
-  countMessages(): Promise<number> {
-    const stmt = this.db.prepare("SELECT COUNT(*) as count FROM messages");
-    const row = stmt.get() as { count: number };
+  countMessages(identifier: string): Promise<number> {
+    const stmt = this.db.prepare(
+      "SELECT COUNT(*) as count FROM messages WHERE bot_id = ?",
+    );
+    const row = stmt.get(identifier) as { count: number };
     return Promise.resolve(row.count);
   }
 
-  async addFollower(followRequestId: URL, follower: Actor): Promise<void> {
+  async addFollower(
+    identifier: string,
+    followRequestId: URL,
+    follower: Actor,
+  ): Promise<void> {
     if (follower.id == null) {
       throw new TypeError("The follower ID is missing.");
     }
@@ -374,19 +661,24 @@ export class SqliteRepository implements Repository, Disposable {
     );
 
     const insertFollowerStmt = this.db.prepare(`
-      INSERT OR REPLACE INTO followers (follower_id, actor_json) 
-      VALUES (?, ?)
+      INSERT OR REPLACE INTO followers (bot_id, follower_id, actor_json)
+      VALUES (?, ?, ?)
     `);
 
     const insertRequestStmt = this.db.prepare(`
-      INSERT OR REPLACE INTO follow_requests (follow_request_id, follower_id) 
-      VALUES (?, ?)
+      INSERT OR REPLACE INTO follow_requests
+        (bot_id, follow_request_id, follower_id)
+      VALUES (?, ?, ?)
     `);
 
     this.db.exec("BEGIN TRANSACTION");
     try {
-      insertFollowerStmt.run(follower.id.href, followerJson);
-      insertRequestStmt.run(followRequestId.href, follower.id.href);
+      insertFollowerStmt.run(identifier, follower.id.href, followerJson);
+      insertRequestStmt.run(
+        identifier,
+        followRequestId.href,
+        follower.id.href,
+      );
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -395,37 +687,45 @@ export class SqliteRepository implements Repository, Disposable {
   }
 
   async removeFollower(
+    identifier: string,
     followRequestId: URL,
     actorId: URL,
   ): Promise<Actor | undefined> {
     // Check if the follow request exists and matches the actor
     const checkStmt = this.db.prepare(`
-      SELECT fr.follower_id, f.actor_json 
-      FROM follow_requests fr 
-      JOIN followers f ON fr.follower_id = f.follower_id 
-      WHERE fr.follow_request_id = ? AND fr.follower_id = ?
+      SELECT fr.follower_id, f.actor_json
+      FROM follow_requests fr
+      JOIN followers f
+        ON fr.bot_id = f.bot_id AND fr.follower_id = f.follower_id
+      WHERE fr.bot_id = ? AND fr.follow_request_id = ? AND fr.follower_id = ?
     `);
 
-    const row = checkStmt.get(followRequestId.href, actorId.href) as {
-      follower_id: string;
-      actor_json: string;
-    } | undefined;
+    const row = checkStmt.get(
+      identifier,
+      followRequestId.href,
+      actorId.href,
+    ) as
+      | {
+        follower_id: string;
+        actor_json: string;
+      }
+      | undefined;
 
     if (!row) return undefined;
 
     // Remove the follower and follow request
     const deleteRequestStmt = this.db.prepare(`
-      DELETE FROM follow_requests WHERE follow_request_id = ?
+      DELETE FROM follow_requests WHERE bot_id = ? AND follow_request_id = ?
     `);
 
     const deleteFollowerStmt = this.db.prepare(`
-      DELETE FROM followers WHERE follower_id = ?
+      DELETE FROM followers WHERE bot_id = ? AND follower_id = ?
     `);
 
     this.db.exec("BEGIN TRANSACTION");
     try {
-      deleteRequestStmt.run(followRequestId.href);
-      deleteFollowerStmt.run(actorId.href);
+      deleteRequestStmt.run(identifier, followRequestId.href);
+      deleteFollowerStmt.run(identifier, actorId.href);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -446,21 +746,23 @@ export class SqliteRepository implements Repository, Disposable {
     return undefined;
   }
 
-  hasFollower(followerId: URL): Promise<boolean> {
+  hasFollower(identifier: string, followerId: URL): Promise<boolean> {
     const stmt = this.db.prepare(`
-      SELECT 1 FROM followers WHERE follower_id = ?
+      SELECT 1 FROM followers WHERE bot_id = ? AND follower_id = ?
     `);
-    const row = stmt.get(followerId.href);
+    const row = stmt.get(identifier, followerId.href);
     return Promise.resolve(row != null);
   }
 
   async *getFollowers(
+    identifier: string,
     options: RepositoryGetFollowersOptions = {},
   ): AsyncIterable<Actor> {
     const { offset = 0, limit } = options;
 
-    let sql = "SELECT actor_json FROM followers ORDER BY follower_id";
-    const params: number[] = [];
+    let sql =
+      "SELECT actor_json FROM followers WHERE bot_id = ? ORDER BY follower_id";
+    const params: (number | string)[] = [identifier];
 
     if (limit != null) {
       sql += " LIMIT ? OFFSET ?";
@@ -488,40 +790,56 @@ export class SqliteRepository implements Repository, Disposable {
     }
   }
 
-  countFollowers(): Promise<number> {
-    const stmt = this.db.prepare("SELECT COUNT(*) as count FROM followers");
-    const row = stmt.get() as { count: number };
+  countFollowers(identifier: string): Promise<number> {
+    const stmt = this.db.prepare(
+      "SELECT COUNT(*) as count FROM followers WHERE bot_id = ?",
+    );
+    const row = stmt.get(identifier) as { count: number };
     return Promise.resolve(row.count);
   }
 
-  async addSentFollow(id: Uuid, follow: Follow): Promise<void> {
+  async addSentFollow(
+    identifier: string,
+    id: Uuid,
+    follow: Follow,
+  ): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO sent_follows (id, follow_json) 
-      VALUES (?, ?)
+      INSERT OR REPLACE INTO sent_follows (bot_id, id, follow_json)
+      VALUES (?, ?, ?)
     `);
 
     const followJson = JSON.stringify(
       await follow.toJsonLd({ format: "compact" }),
     );
 
-    stmt.run(id, followJson);
+    stmt.run(identifier, id, followJson);
   }
 
-  async removeSentFollow(id: Uuid): Promise<Follow | undefined> {
-    const follow = await this.getSentFollow(id);
+  async removeSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
+    const follow = await this.getSentFollow(identifier, id);
     if (follow == null) return undefined;
 
-    const stmt = this.db.prepare("DELETE FROM sent_follows WHERE id = ?");
-    stmt.run(id);
+    const stmt = this.db.prepare(
+      "DELETE FROM sent_follows WHERE bot_id = ? AND id = ?",
+    );
+    stmt.run(identifier, id);
 
     return follow;
   }
 
-  async getSentFollow(id: Uuid): Promise<Follow | undefined> {
+  async getSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
     const stmt = this.db.prepare(`
-      SELECT follow_json FROM sent_follows WHERE id = ?
+      SELECT follow_json FROM sent_follows WHERE bot_id = ? AND id = ?
     `);
-    const row = stmt.get(id) as { follow_json: string } | undefined;
+    const row = stmt.get(identifier, id) as
+      | { follow_json: string }
+      | undefined;
 
     if (!row) return undefined;
 
@@ -534,34 +852,46 @@ export class SqliteRepository implements Repository, Disposable {
     }
   }
 
-  async addFollowee(followeeId: URL, follow: Follow): Promise<void> {
+  async addFollowee(
+    identifier: string,
+    followeeId: URL,
+    follow: Follow,
+  ): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO followees (followee_id, follow_json) 
-      VALUES (?, ?)
+      INSERT OR REPLACE INTO followees (bot_id, followee_id, follow_json)
+      VALUES (?, ?, ?)
     `);
 
     const followJson = JSON.stringify(
       await follow.toJsonLd({ format: "compact" }),
     );
 
-    stmt.run(followeeId.href, followJson);
+    stmt.run(identifier, followeeId.href, followJson);
   }
 
-  async removeFollowee(followeeId: URL): Promise<Follow | undefined> {
-    const follow = await this.getFollowee(followeeId);
+  async removeFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
+    const follow = await this.getFollowee(identifier, followeeId);
     if (follow == null) return undefined;
 
-    const stmt = this.db.prepare("DELETE FROM followees WHERE followee_id = ?");
-    stmt.run(followeeId.href);
+    const stmt = this.db.prepare(
+      "DELETE FROM followees WHERE bot_id = ? AND followee_id = ?",
+    );
+    stmt.run(identifier, followeeId.href);
 
     return follow;
   }
 
-  async getFollowee(followeeId: URL): Promise<Follow | undefined> {
+  async getFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
     const stmt = this.db.prepare(`
-      SELECT follow_json FROM followees WHERE followee_id = ?
+      SELECT follow_json FROM followees WHERE bot_id = ? AND followee_id = ?
     `);
-    const row = stmt.get(followeeId.href) as
+    const row = stmt.get(identifier, followeeId.href) as
       | { follow_json: string }
       | undefined;
 
@@ -579,34 +909,50 @@ export class SqliteRepository implements Repository, Disposable {
     }
   }
 
-  vote(messageId: Uuid, voterId: URL, option: string): Promise<void> {
+  async *findFollowedBots(followeeId: URL): AsyncIterable<string> {
     const stmt = this.db.prepare(`
-      INSERT OR IGNORE INTO poll_votes (message_id, voter_id, option) 
-      VALUES (?, ?, ?)
+      SELECT bot_id FROM followees WHERE followee_id = ? ORDER BY bot_id
+    `);
+    const rows = stmt.all(followeeId.href) as { bot_id: string }[];
+    for (const row of rows) yield row.bot_id;
+  }
+
+  vote(
+    identifier: string,
+    messageId: Uuid,
+    voterId: URL,
+    option: string,
+  ): Promise<void> {
+    const stmt = this.db.prepare(`
+      INSERT OR IGNORE INTO poll_votes (bot_id, message_id, voter_id, option)
+      VALUES (?, ?, ?, ?)
     `);
 
-    stmt.run(messageId, voterId.href, option);
+    stmt.run(identifier, messageId, voterId.href, option);
     return Promise.resolve();
   }
 
-  countVoters(messageId: Uuid): Promise<number> {
+  countVoters(identifier: string, messageId: Uuid): Promise<number> {
     const stmt = this.db.prepare(`
-      SELECT COUNT(DISTINCT voter_id) as count 
-      FROM poll_votes 
-      WHERE message_id = ?
+      SELECT COUNT(DISTINCT voter_id) as count
+      FROM poll_votes
+      WHERE bot_id = ? AND message_id = ?
     `);
-    const row = stmt.get(messageId) as { count: number };
+    const row = stmt.get(identifier, messageId) as { count: number };
     return Promise.resolve(row.count);
   }
 
-  countVotes(messageId: Uuid): Promise<Readonly<Record<string, number>>> {
+  countVotes(
+    identifier: string,
+    messageId: Uuid,
+  ): Promise<Readonly<Record<string, number>>> {
     const stmt = this.db.prepare(`
-      SELECT option, COUNT(*) as count 
-      FROM poll_votes 
-      WHERE message_id = ? 
+      SELECT option, COUNT(*) as count
+      FROM poll_votes
+      WHERE bot_id = ? AND message_id = ?
       GROUP BY option
     `);
-    const rows = stmt.all(messageId) as Array<{
+    const rows = stmt.all(identifier, messageId) as Array<{
       option: string;
       count: number;
     }>;
@@ -617,5 +963,9 @@ export class SqliteRepository implements Repository, Disposable {
     }
 
     return Promise.resolve(result);
+  }
+
+  forIdentifier(identifier: string): ActorScopedRepository {
+    return new ActorScopedRepository(this, identifier);
   }
 }
