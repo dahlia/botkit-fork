@@ -130,26 +130,23 @@ export type PostgresRepositoryOptions =
  * @since 0.4.0
  */
 export async function initializePostgresRepositorySchema(
-  sql: Queryable,
+  sql: TransactionalQueryable,
   schema = "botkit",
   prepare = true,
 ): Promise<void> {
   const validatedSchema = validateSchemaName(schema);
-  if (hasTransaction(sql)) {
-    await sql.begin(async (tx) => {
-      await initializePostgresRepositorySchemaInTransaction(
-        tx,
-        validatedSchema,
-        prepare,
-      );
-    });
-    return;
+  if (!hasTransaction(sql)) {
+    throw new TypeError(
+      "The PostgreSQL client must support transactions.",
+    );
   }
-  await initializePostgresRepositorySchemaInTransaction(
-    sql,
-    validatedSchema,
-    prepare,
-  );
+  await sql.begin(async (tx) => {
+    await initializePostgresRepositorySchemaInTransaction(
+      tx,
+      validatedSchema,
+      prepare,
+    );
+  });
 }
 
 async function initializePostgresRepositorySchemaInTransaction(

@@ -219,6 +219,13 @@ if (postgresUrl == null) {
     test("does not emit unhandled rejections for schema initialization", async () => {
       const error = new Error("Schema initialization failed.");
       const sql = {
+        begin: async (
+          callback: (
+            transactionSql: { unsafe: () => Promise<never> },
+          ) => Promise<void>,
+        ) => {
+          await callback(sql);
+        },
         // deno-lint-ignore require-await
         unsafe: async () => {
           throw error;
