@@ -11,9 +11,25 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: botkit_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+        - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     permissions:
       checks: write
       pull-requests: write
+    env:
+      POSTGRES_URL: postgres://postgres:postgres@localhost:5432/botkit_test
     steps:
     - uses: actions/checkout@v4
     - uses: jdx/mise-action@v4
