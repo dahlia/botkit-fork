@@ -45,6 +45,7 @@ import {
   isMessageObject,
 } from "./message-impl.ts";
 import { MemoryRepository } from "./repository.ts";
+import { InstanceImpl } from "./instance-impl.ts";
 import { createMockContext } from "./session-impl.test.ts";
 import { SessionImpl } from "./session-impl.ts";
 import { text } from "./text.ts";
@@ -776,5 +777,57 @@ test("MessageImpl.react()", async (t) => {
     const urTags = await Array.fromAsync(urActivity.getTags());
     assert.deepStrictEqual(urTags.length, 1);
     assert.deepStrictEqual(urTags[0], tags[0]); // Should be the resolved CustomEmoji
+  });
+});
+
+test("AuthorizedMessage ignores other bots' messages", async (t) => {
+  const repository = new MemoryRepository();
+  const instance = new InstanceImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+  });
+  instance.createBot("alpha", { username: "alphabot" });
+  instance.createBot("beta", { username: "betabot" });
+  const alpha = instance.getBot("alpha")!;
+  const beta = instance.getBot("beta")!;
+
+  // alpha publishes a message:
+  const alphaCtx = createMockContext(alpha, "https://example.com");
+  const alphaSession = new SessionImpl(alpha, alphaCtx);
+  const published = await alphaSession.publish(text`Hello from alpha!`);
+  assert.deepStrictEqual(await repository.countMessages("alpha"), 1);
+
+  // An authorized view of alpha's message under beta's session must not be
+  // able to touch alpha's data, since the URI identifies alpha as the owner:
+  const betaCtx = createMockContext(beta, "https://example.com");
+  const betaSession = new SessionImpl(beta, betaCtx);
+  // The attribution is embedded so that no remote fetch is needed;
+  // the message URI still identifies alpha as the owner:
+  const rawWithActor = published.raw.clone({
+    attribution: await alphaSession.getActor(),
+  });
+  const crossBot = await createMessage(
+    rawWithActor,
+    betaSession,
+    {},
+    undefined,
+    undefined,
+    true,
+  );
+
+  await t.test("update() is a no-op", async () => {
+    betaCtx.sentActivities = [];
+    await crossBot.update(text`Hijacked!`);
+    assert.deepStrictEqual(betaCtx.sentActivities, []);
+    const [stored] = await Array.fromAsync(repository.getMessages("alpha"));
+    const object = await stored.getObject(alphaCtx);
+    assert.ok(object?.content?.toString().includes("Hello from alpha!"));
+  });
+
+  await t.test("delete() is a no-op", async () => {
+    betaCtx.sentActivities = [];
+    await crossBot.delete();
+    assert.deepStrictEqual(betaCtx.sentActivities, []);
+    assert.deepStrictEqual(await repository.countMessages("alpha"), 1);
   });
 });
