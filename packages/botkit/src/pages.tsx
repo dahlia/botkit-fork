@@ -616,7 +616,7 @@ multiApp.get("/", (c) => {
           rel="stylesheet"
           href={`https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/${cssFilename}`}
         />
-        <style>{instance.pages.css}</style>
+        <style dangerouslySetInnerHTML={{ __html: instance.pages.css }} />
       </head>
       <body>
         <header class="container">

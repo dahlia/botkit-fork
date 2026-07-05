@@ -225,3 +225,36 @@ describe("usernames requiring percent-encoding", () => {
     assert.ok(html.includes("weird+bot"));
   });
 });
+
+describe("custom CSS", () => {
+  const css = "main > p { color: red; }";
+
+  test("is not HTML-escaped on single-bot pages", async () => {
+    const bot = new BotImpl<void>({
+      kv: new MemoryKvStore(),
+      username: "mybot",
+      pages: { css },
+    });
+    const response = await bot.fetch(
+      new Request("https://example.com/"),
+      undefined,
+    );
+    const html = await response.text();
+    assert.ok(html.includes(css));
+  });
+
+  test("is not HTML-escaped on the instance index", async () => {
+    const instance = new InstanceImpl<void>({
+      kv: new MemoryKvStore(),
+      repository: new MemoryRepository(),
+      pages: { css },
+    });
+    instance.createBot("alpha", { username: "alphabot" });
+    const response = await instance.fetch(
+      new Request("https://example.com/"),
+      undefined,
+    );
+    const html = await response.text();
+    assert.ok(html.includes(css));
+  });
+});

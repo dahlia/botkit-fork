@@ -62,7 +62,7 @@ export function Layout(
           rel="stylesheet"
           href={`https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/${cssFilename}`}
         />
-        <style>{bot.pages.css}</style>
+        <style dangerouslySetInnerHTML={{ __html: bot.pages.css }} />
       </head>
       <body>
         {children}
