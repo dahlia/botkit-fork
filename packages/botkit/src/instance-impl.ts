@@ -1014,18 +1014,23 @@ export class InstanceImpl<TContextData>
         }
         throw error;
       }
-      const fileInfo = await file.stat();
-      return new Response(file.readableWebStream(), {
-        headers: {
-          "Content-Type": customEmoji.type,
-          "Content-Length": fileInfo.size.toString(),
-          "Cache-Control": "public, max-age=31536000, immutable",
-          "Last-Modified": (fileInfo.mtime ?? new Date()).toUTCString(),
-          "ETag": `"${fileInfo.mtime?.getTime().toString(36)}${
-            fileInfo.size.toString(36)
-          }"`,
-        },
-      });
+      try {
+        const fileInfo = await file.stat();
+        return new Response(file.readableWebStream(), {
+          headers: {
+            "Content-Type": customEmoji.type,
+            "Content-Length": fileInfo.size.toString(),
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Last-Modified": (fileInfo.mtime ?? new Date()).toUTCString(),
+            "ETag": `"${fileInfo.mtime?.getTime().toString(36)}${
+              fileInfo.size.toString(36)
+            }"`,
+          },
+        });
+      } catch (error) {
+        await file.close();
+        throw error;
+      }
     }
     if (this.compatMode) {
       const bot = this.#firstBot();
