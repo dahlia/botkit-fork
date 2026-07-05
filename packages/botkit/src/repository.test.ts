@@ -240,18 +240,18 @@ test("KvRepository deletes stale follower indexes", async () => {
   assert.deepStrictEqual(await kv.get(indexKey), undefined);
 });
 
-test("KvRepository rebuilds incomplete follower indexes", async () => {
+test("KvRepository rebuilds missing follower indexes", async () => {
   const kv = new MemoryKvStore();
   const repo = new KvRepository(kv);
   const follower = new Person({
-    id: new URL("https://example.com/ap/actor/rebuild-index"),
-    preferredUsername: "rebuild-index",
+    id: new URL("https://example.com/ap/actor/missing-index"),
+    preferredUsername: "missing-index",
   });
   const firstFollow = new URL(
-    "https://example.com/ap/follow/rebuild-index/1",
+    "https://example.com/ap/follow/missing-index/1",
   );
   const secondFollow = new URL(
-    "https://example.com/ap/follow/rebuild-index/2",
+    "https://example.com/ap/follow/missing-index/2",
   );
   const indexKey: KvKey = [
     "_botkit",
@@ -262,7 +262,7 @@ test("KvRepository rebuilds incomplete follower indexes", async () => {
 
   await repo.addFollower(firstFollow, follower);
   await repo.addFollower(secondFollow, follower);
-  await kv.set(indexKey, [firstFollow.href]);
+  await kv.delete(indexKey);
 
   assert.deepStrictEqual(
     await repo.removeFollower(firstFollow, follower.id!),
@@ -270,6 +270,26 @@ test("KvRepository rebuilds incomplete follower indexes", async () => {
   );
   assert.ok(await repo.hasFollower(follower.id!));
   assert.deepStrictEqual(await kv.get(indexKey), [secondFollow.href]);
+});
+
+test("KvRepository trusts empty follower indexes", async () => {
+  const kv = new RecordingListMemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/empty-index"),
+    preferredUsername: "empty-index",
+  });
+  const follow = new URL("https://example.com/ap/follow/empty-index");
+
+  await repo.addFollower(follow, follower);
+  kv.listCalls = 0;
+
+  assert.deepStrictEqual(
+    await repo.removeFollower(follow, follower.id!),
+    follower,
+  );
+  assert.deepStrictEqual(kv.listCalls, 0);
+  assert.ok(!await repo.hasFollower(follower.id!));
 });
 
 test("KvRepository uses follower indexes when adding requests", async () => {

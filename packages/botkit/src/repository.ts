@@ -658,7 +658,7 @@ export class KvRepository implements Repository {
     const followRequestIds = await this
       .getIndexedFollowRequestsForFollowerLocked(
         followerId,
-      );
+      ) ?? await this.rebuildFollowRequestsForFollowerLocked(followerId);
     if (!followRequestIds.includes(followRequestId)) {
       await this.kv.set(this.getFollowerFollowRequestsKey(followerId), [
         ...followRequestIds,
@@ -674,7 +674,7 @@ export class KvRepository implements Repository {
     const followRequestIds = await this
       .getIndexedFollowRequestsForFollowerLocked(
         followerId,
-      );
+      ) ?? await this.rebuildFollowRequestsForFollowerLocked(followerId);
     await this.kv.set(
       this.getFollowerFollowRequestsKey(followerId),
       followRequestIds.filter((id) => id !== followRequestId),
@@ -684,10 +684,34 @@ export class KvRepository implements Repository {
   private async hasFollowRequestForFollowerLocked(
     followerId: string,
   ): Promise<boolean> {
+    const indexKey = this.getFollowerFollowRequestsKey(followerId);
     const followRequestIds = await this
       .getIndexedFollowRequestsForFollowerLocked(
         followerId,
       );
+    if (followRequestIds != null) {
+      return await this.hasCurrentFollowRequestForFollowerLocked(
+        followerId,
+        followRequestIds,
+        indexKey,
+      );
+    }
+    const rebuiltFollowRequestIds = await this
+      .rebuildFollowRequestsForFollowerLocked(
+        followerId,
+      );
+    return await this.hasCurrentFollowRequestForFollowerLocked(
+      followerId,
+      rebuiltFollowRequestIds,
+      indexKey,
+    );
+  }
+
+  private async hasCurrentFollowRequestForFollowerLocked(
+    followerId: string,
+    followRequestIds: readonly string[],
+    indexKey: KvKey,
+  ): Promise<boolean> {
     const currentFollowRequestIds: string[] = [];
     for (const followRequestId of followRequestIds) {
       if (
@@ -706,36 +730,21 @@ export class KvRepository implements Repository {
       }
       return true;
     }
-    const rebuiltFollowRequestIds = await this
-      .rebuildFollowRequestsForFollowerLocked(
-        followerId,
-      );
-    const rebuiltCurrentFollowRequestIds: string[] = [];
-    for (const followRequestId of rebuiltFollowRequestIds) {
-      if (
-        await this.kv.get<string>(this.getFollowRequestKey(followRequestId)) ===
-          followerId
-      ) {
-        rebuiltCurrentFollowRequestIds.push(followRequestId);
-      }
-    }
-    if (
-      rebuiltCurrentFollowRequestIds.length !== rebuiltFollowRequestIds.length
-    ) {
+    if (currentFollowRequestIds.length !== followRequestIds.length) {
       await this.kv.set(
-        this.getFollowerFollowRequestsKey(followerId),
-        rebuiltCurrentFollowRequestIds,
+        indexKey,
+        currentFollowRequestIds,
       );
     }
-    return rebuiltCurrentFollowRequestIds.length > 0;
+    return false;
   }
 
   private async getIndexedFollowRequestsForFollowerLocked(
     followerId: string,
-  ): Promise<string[]> {
+  ): Promise<string[] | undefined> {
     return await this.kv.get<string[]>(
       this.getFollowerFollowRequestsKey(followerId),
-    ) ?? [];
+    );
   }
 
   private async rebuildFollowRequestsForFollowerLocked(
