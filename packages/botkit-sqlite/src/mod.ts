@@ -419,29 +419,37 @@ export class SqliteRepository implements Repository, Disposable {
     followRequestId: URL,
     actorId: URL,
   ): Promise<Actor | undefined> {
-    // Check if the follow request exists and matches the actor
     const checkStmt = this.db.prepare(`
-      SELECT fr.follower_id, f.actor_json 
-      FROM follow_requests fr 
-      JOIN followers f ON fr.follower_id = f.follower_id 
+      SELECT fr.follower_id, f.actor_json
+      FROM follow_requests fr
+      JOIN followers f ON fr.follower_id = f.follower_id
       WHERE fr.follow_request_id = ? AND fr.follower_id = ?
     `);
 
-    const row = checkStmt.get(followRequestId.href, actorId.href) as {
-      follower_id: string;
-      actor_json: string;
-    } | undefined;
-
-    if (!row) return undefined;
-
     const deleteRequestStmt = this.db.prepare(`
-      DELETE FROM follow_requests WHERE follow_request_id = ?
+      DELETE FROM follow_requests
+      WHERE follow_request_id = ? AND follower_id = ?
     `);
 
+    let row: { follower_id: string; actor_json: string } | undefined;
     let removed = false;
     this.db.exec("BEGIN TRANSACTION");
     try {
-      deleteRequestStmt.run(followRequestId.href);
+      row = checkStmt.get(followRequestId.href, actorId.href) as
+        | { follower_id: string; actor_json: string }
+        | undefined;
+      if (row == null) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      const deleteResult = deleteRequestStmt.run(
+        followRequestId.href,
+        actorId.href,
+      ) as { readonly changes: number };
+      if (deleteResult.changes < 1) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
       removed = this.cleanupFollower(actorId.href);
       this.db.exec("COMMIT");
     } catch (error) {
