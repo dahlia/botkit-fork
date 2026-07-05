@@ -616,6 +616,9 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
     quote: Message<MessageClass, TContextData> | URL,
   ): Promise<void> {
     const quoteId = quote instanceof URL ? quote : quote.id;
+    if (quoteId == null) {
+      throw new TypeError("The quote message ID is missing.");
+    }
     const authorization = await this.session.bot.repository
       .findQuoteAuthorization(quoteId);
     if (authorization == null || authorization.id == null) {

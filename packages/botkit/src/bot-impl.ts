@@ -829,16 +829,18 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     quoteVisibility: MessageVisibility,
     targetVisibility: MessageVisibility,
   ): boolean {
-    const ranks: Record<MessageVisibility, number | undefined> = {
+    if (targetVisibility === "unknown") return quoteVisibility !== "direct";
+    if (quoteVisibility === "unknown") {
+      return targetVisibility !== "public" && targetVisibility !== "unlisted";
+    }
+    const ranks: Record<MessageVisibility, number> = {
       public: 4,
       unlisted: 3,
       followers: 2,
       direct: 1,
-      unknown: undefined,
+      unknown: 0,
     };
-    const quoteRank = ranks[quoteVisibility];
-    const targetRank = ranks[targetVisibility];
-    return quoteRank != null && targetRank != null && quoteRank > targetRank;
+    return ranks[quoteVisibility] > ranks[targetVisibility];
   }
 
   async #matchesQuoteAcceptance(

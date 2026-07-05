@@ -53,6 +53,8 @@ export class QuoteRequestImpl<TContextData>
       throw new TypeError("The quote requester ID is missing.");
     } else if (quote.id == null) {
       throw new TypeError("The quote message ID is missing.");
+    } else if (target.id == null) {
+      throw new TypeError("The target message ID is missing.");
     }
     this.session = session;
     this.id = raw.id;
