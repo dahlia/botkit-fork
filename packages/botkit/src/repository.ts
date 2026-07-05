@@ -697,9 +697,6 @@ export class KvRepository implements Repository {
     followerId: string,
   ): Promise<string[]> {
     const indexKey = this.getFollowerFollowRequestsKey(followerId);
-    const followRequestIds = await this.kv.get<string[]>(indexKey);
-    if (followRequestIds != null) return followRequestIds;
-
     const indexedFollowRequestIds: string[] = [];
     const followRequestKeyLength = this.prefixes.followRequests.length + 1;
     for await (const entry of this.kv.list(this.prefixes.followRequests)) {

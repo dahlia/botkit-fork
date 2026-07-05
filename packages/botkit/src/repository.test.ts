@@ -197,6 +197,38 @@ test("KvRepository deletes stale follower indexes", async () => {
   assert.deepStrictEqual(await kv.get(indexKey), undefined);
 });
 
+test("KvRepository rebuilds incomplete follower indexes", async () => {
+  const kv = new MemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/rebuild-index"),
+    preferredUsername: "rebuild-index",
+  });
+  const firstFollow = new URL(
+    "https://example.com/ap/follow/rebuild-index/1",
+  );
+  const secondFollow = new URL(
+    "https://example.com/ap/follow/rebuild-index/2",
+  );
+  const indexKey: KvKey = [
+    "_botkit",
+    "followRequests",
+    "followers",
+    follower.id!.href,
+  ];
+
+  await repo.addFollower(firstFollow, follower);
+  await repo.addFollower(secondFollow, follower);
+  await kv.set(indexKey, [firstFollow.href]);
+
+  assert.deepStrictEqual(
+    await repo.removeFollower(firstFollow, follower.id!),
+    undefined,
+  );
+  assert.ok(await repo.hasFollower(follower.id!));
+  assert.deepStrictEqual(await kv.get(indexKey), [secondFollow.href]);
+});
+
 test("KvRepository recovers legacy follower locks", async () => {
   const kv = new MemoryKvStore();
   const repo = new KvRepository(kv);
