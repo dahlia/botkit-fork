@@ -550,11 +550,13 @@ export class KvRepository implements Repository {
         const followerJson = await follower.toJsonLd({ format: "compact" });
         await this.withKvLock(this.getFollowersLockKey(), async () => {
           const followerKey: KvKey = [...this.prefixes.followers, followerId];
+          const isNewFollower = await this.kv.get(followerKey) == null;
           await this.kv.set(followerKey, followerJson);
           await this.addFollowerIdLocked(followerId);
           await this.addFollowRequestForFollowerLocked(
             followerId,
             followRequestIdString,
+            isNewFollower,
           );
           await this.kv.set(followRequestKey, followerId);
           if (
@@ -653,11 +655,15 @@ export class KvRepository implements Repository {
   private async addFollowRequestForFollowerLocked(
     followerId: string,
     followRequestId: string,
+    isNewFollower = false,
   ): Promise<void> {
     const followRequestIds = await this
       .getIndexedFollowRequestsForFollowerLocked(
         followerId,
-      ) ?? await this.rebuildFollowRequestsForFollowerLocked(followerId);
+      ) ??
+      (isNewFollower
+        ? []
+        : await this.rebuildFollowRequestsForFollowerLocked(followerId));
     if (!followRequestIds.includes(followRequestId)) {
       await this.kv.set(this.getFollowerFollowRequestsKey(followerId), [
         ...followRequestIds,

@@ -369,6 +369,7 @@ test("KvRepository uses follower indexes when adding requests", async () => {
   ];
 
   await repo.addFollower(firstFollow, follower);
+  assert.deepStrictEqual(kv.listCalls, 0);
   kv.listCalls = 0;
   await repo.addFollower(secondFollow, follower);
 
