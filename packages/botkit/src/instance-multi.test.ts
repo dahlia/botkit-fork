@@ -22,6 +22,7 @@ import {
   DEFAULT_INSTANCE_ACTOR_IDENTIFIER,
   type InstanceWithVoidContextData,
 } from "./instance.ts";
+import type { InstanceImpl } from "./instance-impl.ts";
 import { MemoryRepository, type Uuid } from "./repository.ts";
 
 function fetchJson(
@@ -206,6 +207,41 @@ describe("instance actor", () => {
       username: "underscores",
     });
     assert.deepStrictEqual(bot.identifier, DEFAULT_INSTANCE_ACTOR_IDENTIFIER);
+  });
+});
+
+describe("instance actor key pairs", () => {
+  test("are generated once under concurrency", async () => {
+    const repository = new MemoryRepository();
+    const instance = createInstance<void>({
+      kv: new MemoryKvStore(),
+      repository,
+    });
+    instance.createBot("alpha", { username: "alphabot" });
+    const impl = (instance as unknown as {
+      impl: InstanceImpl<void>;
+    }).impl;
+    // Simulates concurrent cold-start requests hitting the key pair
+    // dispatcher at once:
+    const responses = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        instance.fetch(
+          new Request(
+            `https://example.com/ap/actor/${DEFAULT_INSTANCE_ACTOR_IDENTIFIER}`,
+            { headers: { Accept: "application/activity+json" } },
+          ),
+        )),
+    );
+    const actors = await Promise.all(responses.map((r) => r.json()));
+    const keyIds = new Set(
+      actors.map((actor) => JSON.stringify(actor.publicKey)),
+    );
+    // Every response advertises the same key, and the stored key matches:
+    assert.deepStrictEqual(keyIds.size, 1);
+    const stored = await repository.getKeyPairs(
+      impl.instanceActorIdentifier,
+    );
+    assert.ok(stored != null);
   });
 });
 

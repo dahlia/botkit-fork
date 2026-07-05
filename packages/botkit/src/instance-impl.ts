@@ -781,20 +781,39 @@ export class InstanceImpl<TContextData>
     });
   }
 
-  async #dispatchInstanceActorKeyPairs(): Promise<CryptoKeyPair[]> {
-    let keyPairs = await this.repository.getKeyPairs(
-      this.instanceActorIdentifier,
-    );
-    if (keyPairs == null) {
-      const rsa = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
-      const ed25519 = await generateCryptoKeyPair("Ed25519");
-      keyPairs = [rsa, ed25519];
-      await this.repository.setKeyPairs(
-        this.instanceActorIdentifier,
-        keyPairs,
-      );
+  #instanceActorKeyPairs?: Promise<CryptoKeyPair[]>;
+
+  #dispatchInstanceActorKeyPairs(): Promise<CryptoKeyPair[]> {
+    // Concurrent cold-start requests must not generate competing key pairs
+    // and overwrite each other, so the whole load-or-generate sequence is
+    // memoized in process:
+    if (this.#instanceActorKeyPairs != null) {
+      return this.#instanceActorKeyPairs;
     }
-    return keyPairs;
+    const promise = (async () => {
+      let keyPairs = await this.repository.getKeyPairs(
+        this.instanceActorIdentifier,
+      );
+      if (keyPairs == null) {
+        const rsa = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
+        const ed25519 = await generateCryptoKeyPair("Ed25519");
+        keyPairs = [rsa, ed25519];
+        await this.repository.setKeyPairs(
+          this.instanceActorIdentifier,
+          keyPairs,
+        );
+      }
+      return keyPairs;
+    })();
+    this.#instanceActorKeyPairs = promise;
+    // A failed attempt (e.g. a transient storage error) must not be cached
+    // forever:
+    promise.catch(() => {
+      if (this.#instanceActorKeyPairs === promise) {
+        this.#instanceActorKeyPairs = undefined;
+      }
+    });
+    return promise;
   }
 
   dispatchNodeInfo(_ctx: Context<TContextData>): NodeInfo {
