@@ -715,6 +715,20 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     });
     if (!isActor(actor) || actor.id == null) return;
     const session = this.getSession(ctx);
+    if (!await this.#canActorSeeObject(ctx, actor.id, targetObject)) {
+      await session.context.sendActivity(
+        this,
+        actor,
+        new Reject({
+          id: new URL(`/#reject/${request.id?.href}`, session.actorId),
+          actor: session.actorId,
+          to: actor.id,
+          object: request,
+        }),
+        { excludeBaseUris: [new URL(session.context.origin)] },
+      );
+      return;
+    }
     if (
       instrument.attributionId != null &&
       instrument.attributionId.href !== actor.id.href
@@ -777,6 +791,19 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       await quoteRequest.reject();
     }
     await this.onQuoteRequest?.(session, quoteRequest);
+  }
+
+  async #canActorSeeObject(
+    ctx: InboxContext<TContextData>,
+    actorId: URL,
+    object: Object,
+  ): Promise<boolean> {
+    if (actorId.href === ctx.getActorUri(this.identifier).href) return true;
+    const recipients = [...object.toIds, ...object.ccIds].map((u) => u.href);
+    if (recipients.includes(PUBLIC_COLLECTION.href)) return true;
+    if (recipients.includes(actorId.href)) return true;
+    return recipients.includes(ctx.getFollowersUri(this.identifier).href) &&
+      await this.repository.hasFollower(actorId);
   }
 
   async #matchesQuoteAcceptance(
