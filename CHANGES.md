@@ -65,8 +65,7 @@ To be released.
         a single `prefix` option, replacing the removed
         `KvStoreRepositoryPrefixes` interface.
      -  `createBot()` migrates data stored by BotKit 0.4 or earlier to the
-        bot-scoped layout on startup.  Categories without an index are
-        migrated lazily on first access.
+        bot-scoped layout on startup.
 
  -  Local object URIs now carry the identifier of the owning bot actor,
     e.g. `/ap/actor/{identifier}/note/{id}` instead of `/ap/note/{id}`.

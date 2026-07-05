@@ -13,13 +13,18 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import { MemoryKvStore } from "@fedify/fedify/federation";
+import {
+  type KvStoreListEntry,
+  MemoryKvStore,
+} from "@fedify/fedify/federation";
 import { exportJwk, importJwk } from "@fedify/fedify/sig";
 import { Create, Follow, Note, Person, PUBLIC_COLLECTION } from "@fedify/vocab";
 import assert from "node:assert";
 import { describe, test } from "node:test";
 import {
+  type KvKey,
   KvRepository,
+  type KvStore,
   MemoryCachedRepository,
   MemoryRepository,
   type Repository,
@@ -1318,32 +1323,23 @@ describe("KvRepository.migrate()", () => {
     assert.deepStrictEqual(await repo.getKeyPairs("bot"), [keyPairs[0]]);
   });
 
-  test("falls back to legacy keys for sent follows", async () => {
+  test("migrates sent follows eagerly", async () => {
     const kv = new MemoryKvStore();
     const seed = await seedLegacyData(kv);
     const repo = new KvRepository(kv);
     await repo.migrate("bot");
 
-    // Sent follows are keyed by UUID and have no index list, so they are
-    // migrated lazily on first access:
     const follow = await repo.getSentFollow("bot", seed.sentFollowId);
     assert.deepStrictEqual(
       await follow?.toJsonLd({ format: "compact" }),
       seed.sentFollowJson,
     );
-    // The record is moved to the scoped key:
-    assert.deepStrictEqual(
-      await kv.get(["_botkit", "follows", seed.sentFollowId]),
-      undefined,
-    );
-    assert.deepStrictEqual(
-      await (await repo.getSentFollow("bot", seed.sentFollowId))?.toJsonLd({
-        format: "compact",
-      }),
-      seed.sentFollowJson,
+    // Legacy keys are copied, not moved:
+    assert.ok(
+      await kv.get(["_botkit", "follows", seed.sentFollowId]) != null,
     );
 
-    // The fallback applies only to the migrated identifier:
+    // The adoption applies only to the migrating identifier:
     const kv2 = new MemoryKvStore();
     const seed2 = await seedLegacyData(kv2);
     const repo2 = new KvRepository(kv2);
@@ -1354,36 +1350,33 @@ describe("KvRepository.migrate()", () => {
     );
   });
 
-  test("falls back to legacy keys for followees", async () => {
+  test("migrates followees eagerly with their reverse index", async () => {
     const kv = new MemoryKvStore();
     const seed = await seedLegacyData(kv);
     const repo = new KvRepository(kv);
     await repo.migrate("bot");
 
+    // The reverse index is populated by the migration itself, before any
+    // followee is individually accessed, so timeline routing works right
+    // after an upgrade:
+    assert.deepStrictEqual(
+      await Array.fromAsync(repo.findFollowedBots(seed.followeeId)),
+      ["bot"],
+    );
     const follow = await repo.getFollowee("bot", seed.followeeId);
     assert.deepStrictEqual(
       await follow?.toJsonLd({ format: "compact" }),
       seed.followeeFollowJson,
     );
-    // The record is moved to the scoped key and indexed for reverse lookup:
-    assert.deepStrictEqual(
-      await kv.get(["_botkit", "followees", seed.followeeId.href]),
-      undefined,
-    );
-    assert.deepStrictEqual(
-      await Array.fromAsync(repo.findFollowedBots(seed.followeeId)),
-      ["bot"],
-    );
   });
 
-  test("falls back to legacy keys for follow requests", async () => {
+  test("migrates follow requests eagerly", async () => {
     const kv = new MemoryKvStore();
     const seed = await seedLegacyData(kv);
     const repo = new KvRepository(kv);
     await repo.migrate("bot");
 
-    // removeFollower() consults the follow request record, which is keyed by
-    // URL and migrated lazily:
+    // removeFollower() consults the migrated follow request record:
     const removed = await repo.removeFollower(
       "bot",
       seed.followRequestId,
@@ -1397,6 +1390,108 @@ describe("KvRepository.migrate()", () => {
     assert.deepStrictEqual(await repo.countFollowers("bot"), 0);
   });
 
+  test("migrates poll options named like lock keys", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    // Poll option names are user-controlled, so an option may collide with
+    // the transient "lock" suffix used by the message/follower index lists:
+    await kv.set(["_botkit", "polls", seed.messageId], ["lock", "open"]);
+    await kv.set(
+      ["_botkit", "polls", seed.messageId, "lock"],
+      ["https://example.com/ap/actor/voter1"],
+    );
+    await kv.set(
+      ["_botkit", "polls", seed.messageId, "open"],
+      ["https://example.com/ap/actor/voter2"],
+    );
+    const repo = new KvRepository(kv);
+    await repo.migrate("bot");
+
+    assert.deepStrictEqual(await repo.countVotes("bot", seed.messageId), {
+      lock: 1,
+      open: 1,
+    });
+  });
+
+  test("adopts legacy data for one identifier only", async () => {
+    const kv = new MemoryKvStore();
+    await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+
+    await repo.migrate("botA");
+    // A later migration for another identifier must not adopt the same
+    // legacy rows again; that would break cross-identifier isolation:
+    await repo.migrate("botB");
+
+    assert.deepStrictEqual(await repo.countMessages("botA"), 1);
+    assert.deepStrictEqual(await repo.countMessages("botB"), 0);
+    assert.deepStrictEqual(await repo.getKeyPairs("botB"), undefined);
+    assert.deepStrictEqual(await repo.countFollowers("botB"), 0);
+  });
+
+  test("claims the legacy data atomically under concurrency", async () => {
+    // Slows reads down so that two concurrent migrations overlap on the
+    // missing-marker check; the CAS-backed claim must still admit only one:
+    class SlowKvStore implements KvStore {
+      readonly #inner = new MemoryKvStore();
+      async get<T = unknown>(key: KvKey): Promise<T | undefined> {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return await this.#inner.get<T>(key);
+      }
+      set(key: KvKey, value: unknown): Promise<void> {
+        return this.#inner.set(key, value);
+      }
+      delete(key: KvKey): Promise<void> {
+        return this.#inner.delete(key);
+      }
+      cas(
+        key: KvKey,
+        expectedValue: unknown,
+        newValue: unknown,
+      ): Promise<boolean> {
+        return this.#inner.cas!(key, expectedValue, newValue);
+      }
+      list(prefix?: KvKey): AsyncIterable<KvStoreListEntry> {
+        return this.#inner.list(prefix);
+      }
+    }
+    const kv = new SlowKvStore();
+    // Seed legacy data through the inner store's interface:
+    const messageId: Uuid = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+    const message = createNote(messageId, "bot");
+    await kv.set(["_botkit", "messages"], [messageId]);
+    await kv.set(
+      ["_botkit", "messages", messageId],
+      await message.toJsonLd({ format: "compact" }),
+    );
+
+    const repo = new KvRepository(kv);
+    await Promise.all([repo.migrate("botA"), repo.migrate("botB")]);
+
+    const counts = [
+      await repo.countMessages("botA"),
+      await repo.countMessages("botB"),
+    ];
+    counts.sort();
+    // Exactly one identifier adopted the legacy data:
+    assert.deepStrictEqual(counts, [0, 1]);
+  });
+
+  test("keeps the legacy data with the adopting identifier", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+
+    await repo.migrate("botA");
+    await repo.migrate("botB");
+
+    assert.deepStrictEqual(
+      await repo.getSentFollow("botB", seed.sentFollowId),
+      undefined,
+    );
+    assert.ok(await repo.getSentFollow("botA", seed.sentFollowId) != null);
+  });
+
   test("forwards migration through MemoryCachedRepository", async () => {
     const kv = new MemoryKvStore();
     const seed = await seedLegacyData(kv);
@@ -1407,8 +1502,7 @@ describe("KvRepository.migrate()", () => {
     assert.deepStrictEqual(await repo.getKeyPairs("bot"), keyPairs);
     assert.deepStrictEqual(await repo.countMessages("bot"), 1);
     assert.ok(await repo.hasFollower("bot", seed.followerId));
-    // The lazy fallback of the underlying repository applies through
-    // the cache as well:
+    // Records keyed by UUIDs are migrated as well:
     assert.deepStrictEqual(
       await (await repo.getSentFollow("bot", seed.sentFollowId))?.toJsonLd({
         format: "compact",
@@ -1417,7 +1511,7 @@ describe("KvRepository.migrate()", () => {
     );
   });
 
-  test("does not fall back before migrate() is called", async () => {
+  test("does not expose legacy data before migrate() is called", async () => {
     const kv = new MemoryKvStore();
     const seed = await seedLegacyData(kv);
     const repo = new KvRepository(kv);
