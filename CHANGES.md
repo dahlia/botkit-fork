@@ -4,7 +4,7 @@ BotKit changelog
 Version 0.4.4
 -------------
 
-To be released.
+Released on July 6, 2026.
 
 ### @fedify/botkit
 
@@ -21,13 +21,13 @@ To be released.
 
  -  Fixed `SqliteRepository` so removing one of multiple active follow requests
     for the same actor no longer fails with a foreign key error, and reassigning
-    a follow request no longer leaves stale followers behind.  [[#25]]
+    a follow request no longer leaves stale followers behind.  [[#25], [#26]]
 
 ### @fedify/botkit-postgres
 
  -  Fixed `PostgresRepository` so removing one of multiple active follow
     requests for the same actor no longer reports a follower removal until the
-    last active follow request is removed.  [[#25]]
+    last active follow request is removed.  [[#25], [#26]]
 
 
 Version 0.4.3
