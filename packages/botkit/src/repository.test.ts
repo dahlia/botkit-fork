@@ -369,7 +369,6 @@ test("KvRepository uses follower indexes when adding requests", async () => {
   ];
 
   await repo.addFollower(firstFollow, follower);
-  assert.deepStrictEqual(kv.listCalls, 0);
   kv.listCalls = 0;
   await repo.addFollower(secondFollow, follower);
 
@@ -386,6 +385,40 @@ test("KvRepository uses follower indexes when adding requests", async () => {
   );
   assert.deepStrictEqual(kv.listCalls, 0);
   assert.deepStrictEqual(await kv.get(indexKey), [secondFollow.href]);
+});
+
+test("KvRepository rebuilds legacy requests for new follower rows", async () => {
+  const kv = new MemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/legacy-new-row"),
+    preferredUsername: "legacy-new-row",
+  });
+  const legacyFollow = new URL(
+    "https://example.com/ap/follow/legacy-new-row/1",
+  );
+  const newFollow = new URL(
+    "https://example.com/ap/follow/legacy-new-row/2",
+  );
+  const indexKey: KvKey = [
+    "_botkit",
+    "followRequests",
+    "followers",
+    follower.id!.href,
+  ];
+
+  await kv.set(
+    ["_botkit", "followRequests", legacyFollow.href],
+    follower.id!.href,
+  );
+  await repo.addFollower(newFollow, follower);
+
+  assert.deepStrictEqual(
+    await repo.removeFollower(newFollow, follower.id!),
+    undefined,
+  );
+  assert.ok(await repo.hasFollower(follower.id!));
+  assert.deepStrictEqual(await kv.get(indexKey), [legacyFollow.href]);
 });
 
 test("KvRepository recovers legacy follower locks", async () => {
