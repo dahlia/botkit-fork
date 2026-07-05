@@ -16,19 +16,21 @@ simple API for creating standalone ActivityPub servers that function as bots.
 Development commands
 --------------------
 
-### Primary commands (Deno-based)
+### Primary commands (mise-based)
 
- -  `deno task check` - Full codebase validation (type check, lint, format
+ -  `mise run check` - Full codebase validation (type check, lint, format
     check, publish dry-run, version check)
- -  `deno task test` - Run Deno tests with network access to hollo.social
- -  `deno task test:node` - Run Node.js tests via pnpm
- -  `deno task test-all` - Run all checks and tests (check + test + test:node)
- -  `deno task coverage` - Generate test coverage report in HTML format
+ -  `mise run test:deno` - Run Deno tests with network access to
+    hollo.social
+ -  `mise run test:node` - Run Node.js tests via pnpm
+ -  `mise run test` - Run all checks and tests (check + test:deno +
+    test:node)
+ -  `mise run coverage` - Generate test coverage report in HTML format
 
 ### Build commands
 
  -  `pnpm build` - Build via npm script (runs tsdown)
- -  `pnpm test` - Run Node.js tests after installing dependencies
+ -  `pnpm test` - Run Node.js tests after mise installs dependencies
 
 ### Code quality
 
@@ -36,6 +38,8 @@ Development commands
  -  `deno fmt` - Format code (excludes .md, .yaml, .yml files)
  -  `deno fmt --check` - Check code formatting without modifying files
  -  `deno check src/` - Type check source files
+ -  `hongdown --check` - Check Markdown formatting; installed by mise via
+    `aqua:dahlia/hongdown`
 
 ### Adding dependencies
 
@@ -129,17 +133,17 @@ This project follows test-driven development (TDD) practices:
 
 ### Running tests
 
- -  Deno tests: `*.test.ts` files, run with `deno task test`
+ -  Deno tests: `*.test.ts` files, run with `mise run test:deno`
  -  Node.js tests: Built output tested in *dist/* directory with Node's
     built-in test runner
- -  Coverage reports available via `deno task coverage`
+ -  Coverage reports available via `mise run coverage`
 
-Always run the full test suite with `deno task test-all` to ensure both Deno
+Always run the full test suite with `mise run test` to ensure both Deno
 and Node.js compatibility.
 
 ### When making changes
 
-1.  Run `deno task check` before committing to validate all aspects
+1.  Run `mise run check` before committing to validate all aspects
 2.  The build process (*tsdown*) generates dual outputs for both runtimes
 3.  Tests should work in both Deno and Node.js environments
 4.  *Update documentation*: New features must be documented in the *docs/*

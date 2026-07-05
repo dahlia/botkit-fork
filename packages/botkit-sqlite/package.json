@@ -57,7 +57,7 @@
   "scripts": {
     "build": "tsdown",
     "prepack": "tsdown",
-    "prepublish": "deno task check && tsdown",
+    "prepublish": "mise run check && tsdown",
     "test": "tsdown && cd src/ && node --test --experimental-transform-types"
   }
 }

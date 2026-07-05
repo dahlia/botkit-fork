@@ -41,17 +41,5 @@
       "*.yml",
       "src/static/*.ts"
     ]
-  },
-  "tasks": {
-    "test": "deno test --allow-env=NODE_V8_COVERAGE,JEST_WORKER_ID --allow-net=hollo.social --parallel",
-    "test:node": "pnpm install && pnpm test",
-    "test-all": {
-      "dependencies": [
-        "check",
-        "test",
-        "test:node"
-      ]
-    },
-    "coverage": "deno task test --coverage --clean && deno coverage --html"
   }
 }

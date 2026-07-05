@@ -20,17 +20,5 @@
       "*.yaml",
       "*.yml"
     ]
-  },
-  "tasks": {
-    "test": "deno test --allow-env --allow-net=localhost,127.0.0.1 --parallel",
-    "test:node": "pnpm install && pnpm test",
-    "test-all": {
-      "dependencies": [
-        "check",
-        "test",
-        "test:node"
-      ]
-    },
-    "coverage": "deno task test --coverage --clean && deno coverage --html"
   }
 }

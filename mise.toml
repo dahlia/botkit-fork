@@ -3,3 +3,85 @@ bun = "latest"
 deno = "2"
 node = "22"
 "npm:pnpm" = "latest"
+"aqua:dahlia/hongdown" = "0.5.1"
+
+[settings]
+experimental = true
+
+[hooks]
+postinstall = "mise generate git-pre-commit --write --task=check"
+
+[deps]
+disable = ["pnpm"]
+
+[deps.pnpm-install]
+auto = true
+description = "Install pnpm workspace dependencies"
+sources = [
+  "pnpm-workspace.yaml",
+  "pnpm-lock.yaml",
+  "packages/*/package.json",
+  "docs/package.json",
+]
+outputs = ["node_modules"]
+run = "pnpm install"
+
+[deps.deno-cache]
+auto = true
+description = "Cache Deno workspace dependencies"
+sources = [
+  "deno.json",
+  "deno.lock",
+  "packages/*/deno.json",
+  "examples/*/deno.json",
+]
+outputs = ["deno.lock"]
+run = "deno cache packages/*/src/*.ts"
+
+[tasks.check]
+description = "Run formatting, linting, type checking, and publish checks"
+depends = ["check-versions"]
+run = [
+  "deno check",
+  "deno lint",
+  "deno fmt --check",
+  "hongdown --check",
+  "deno publish --dry-run --allow-dirty",
+]
+
+[tasks.check-versions]
+description = "Check that workspace package versions match"
+raw_args = true
+run = "deno run --allow-read --allow-write scripts/check_versions.ts"
+
+[tasks.fmt]
+description = "Format source and Markdown files"
+run = [
+  "deno fmt",
+  "hongdown --write",
+]
+
+[tasks."test:deno"]
+description = "Run Deno tests"
+raw_args = true
+run = "deno test --allow-read --allow-write --allow-env --allow-net=hollo.social,localhost,127.0.0.1 --parallel"
+
+[tasks."test:node"]
+description = "Build packages and run Node.js tests"
+run = [
+  "pnpm --filter './packages/*' run build",
+  "pnpm run -r test",
+]
+
+[tasks.test]
+description = "Run all checks and tests"
+run = [
+  { tasks = ["check", "test:deno", "test:node"] },
+]
+
+[tasks.coverage]
+description = "Generate Deno test coverage report"
+run = [
+  "deno test --allow-read --allow-write --allow-env --allow-net=hollo.social,localhost,127.0.0.1 --parallel --coverage --clean",
+  "deno coverage --html",
+]
