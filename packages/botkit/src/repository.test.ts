@@ -292,6 +292,38 @@ test("KvRepository trusts empty follower indexes", async () => {
   assert.ok(!await repo.hasFollower(follower.id!));
 });
 
+test("KvRepository removes requests with missing followers", async () => {
+  const kv = new MemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/missing-follower"),
+    preferredUsername: "missing-follower",
+  });
+  const follow = new URL("https://example.com/ap/follow/missing-follower");
+  const followRequestKey: KvKey = [
+    "_botkit",
+    "followRequests",
+    follow.href,
+  ];
+  const indexKey: KvKey = [
+    "_botkit",
+    "followRequests",
+    "followers",
+    follower.id!.href,
+  ];
+
+  await repo.addFollower(follow, follower);
+  await kv.delete(["_botkit", "followers", follower.id!.href]);
+
+  assert.deepStrictEqual(
+    await repo.removeFollower(follow, follower.id!),
+    undefined,
+  );
+  assert.deepStrictEqual(await kv.get(followRequestKey), undefined);
+  assert.deepStrictEqual(await kv.get(indexKey), undefined);
+  assert.ok(!await repo.hasFollower(follower.id!));
+});
+
 test("KvRepository uses follower indexes when adding requests", async () => {
   const kv = new RecordingListMemoryKvStore();
   const repo = new KvRepository(kv);

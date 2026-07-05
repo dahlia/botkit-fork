@@ -591,6 +591,12 @@ export class KvRepository implements Repository {
           if (currentFollowerId !== followerId) return undefined;
           const followerKey: KvKey = [...this.prefixes.followers, followerId];
           const followerJson = await this.kv.get(followerKey);
+          await this.kv.delete(followRequestKey);
+          await this.removeFollowRequestForFollowerLocked(
+            followerId,
+            followRequestIdString,
+          );
+          const removed = await this.cleanupFollowerLocked(followerId);
           if (followerJson == null) return undefined;
           let follower: Object;
           try {
@@ -599,14 +605,7 @@ export class KvRepository implements Repository {
             return undefined;
           }
           if (!isActor(follower)) return undefined;
-          await this.kv.delete(followRequestKey);
-          await this.removeFollowRequestForFollowerLocked(
-            followerId,
-            followRequestIdString,
-          );
-          return await this.cleanupFollowerLocked(followerId)
-            ? follower
-            : undefined;
+          return removed ? follower : undefined;
         });
       },
     );
