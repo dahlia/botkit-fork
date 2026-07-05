@@ -45,6 +45,7 @@ const logger = getLogger(["botkit", "postgres"]);
 const schemaNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const followRequestAdvisoryLockNamespace = 0x4254;
 const followerAdvisoryLockNamespace = 0x4246;
+const schemaUpgradeAdvisoryLockNamespace = 0x424b;
 
 type Queryable = Pick<postgres.Sql, "unsafe">;
 type QueryParameter = postgres.SerializableParameter;
@@ -310,85 +311,137 @@ async function upgradeLegacySchema(
     "Upgrading legacy tables without a bot_id column: {tables}.",
     { tables },
   );
-  const statements: string[] = [];
-  if (tables.includes("follow_requests")) {
-    // The old foreign key referenced followers (follower_id) only; it has to
-    // go away before the followers primary key changes:
-    statements.push(
-      `ALTER TABLE "${schema}"."follow_requests"
-         DROP CONSTRAINT IF EXISTS "follow_requests_follower_id_fkey"`,
-    );
-  }
-  for (const table of tables) {
-    statements.push(
-      `ALTER TABLE "${schema}"."${table}"
-         ADD COLUMN bot_id TEXT NOT NULL DEFAULT ''`,
-      `ALTER TABLE "${schema}"."${table}" ALTER COLUMN bot_id DROP DEFAULT`,
-      `ALTER TABLE "${schema}"."${table}"
-         DROP CONSTRAINT IF EXISTS "${table}_pkey"`,
-    );
-  }
-  if (tables.includes("key_pairs")) {
-    statements.push(
-      `ALTER TABLE "${schema}"."key_pairs" ADD PRIMARY KEY (bot_id, position)`,
-    );
-  }
-  if (tables.includes("messages")) {
-    statements.push(
-      `ALTER TABLE "${schema}"."messages" ADD PRIMARY KEY (bot_id, id)`,
-      `DROP INDEX IF EXISTS "${schema}"."idx_messages_published"`,
-    );
-  }
-  if (tables.includes("followers")) {
-    statements.push(
-      `ALTER TABLE "${schema}"."followers"
-         ADD PRIMARY KEY (bot_id, follower_id)`,
-    );
-  }
-  if (tables.includes("follow_requests")) {
-    statements.push(
-      `ALTER TABLE "${schema}"."follow_requests"
-         ADD PRIMARY KEY (bot_id, follow_request_id)`,
-      `ALTER TABLE "${schema}"."follow_requests"
-         ADD FOREIGN KEY (bot_id, follower_id)
-         REFERENCES "${schema}"."followers" (bot_id, follower_id)
-         ON DELETE CASCADE
-         DEFERRABLE INITIALLY IMMEDIATE`,
-      `DROP INDEX IF EXISTS "${schema}"."idx_follow_requests_follower"`,
-    );
-  }
-  if (tables.includes("sent_follows")) {
-    statements.push(
-      `ALTER TABLE "${schema}"."sent_follows" ADD PRIMARY KEY (bot_id, id)`,
-    );
-  }
-  if (tables.includes("followees")) {
-    statements.push(
-      `ALTER TABLE "${schema}"."followees"
-         ADD PRIMARY KEY (bot_id, followee_id)`,
-    );
-  }
-  if (tables.includes("poll_votes")) {
-    statements.push(
-      `ALTER TABLE "${schema}"."poll_votes"
-         ADD PRIMARY KEY (bot_id, message_id, voter_id, option)`,
-      `DROP INDEX IF EXISTS "${schema}"."idx_poll_votes_message_option"`,
-    );
-  }
-  // The marker lets migrate() distinguish rows carried over from a legacy
-  // schema (bot_id = '') from data legitimately stored under an
-  // empty-string identifier:
-  statements.push(
-    `CREATE TABLE IF NOT EXISTS "${schema}"."botkit_metadata" (
-       "key" TEXT PRIMARY KEY,
-       value TEXT NOT NULL
-     )`,
-    `INSERT INTO "${schema}"."botkit_metadata" ("key", value)
-     VALUES ('legacy_data', '1')
-     ON CONFLICT ("key") DO NOTHING`,
-  );
-  // Multi-statement queries cannot be prepared:
-  await execute(sql, statements.join(";\n"), [], false);
+  // Multiple processes can start against the same legacy schema at once, so
+  // the whole upgrade runs inside one PL/pgSQL block: an advisory lock
+  // serializes it, and every table is re-checked under the lock, so the
+  // process that lost the race finds nothing left to do.  The detection
+  // query above is merely a fast path for already-upgraded schemas.
+  const legacyTable = (table: string) =>
+    `EXISTS (SELECT 1
+        FROM information_schema.tables t
+       WHERE t.table_schema = '${schema}' AND t.table_name = '${table}')
+     AND NOT EXISTS (SELECT 1
+        FROM information_schema.columns c
+       WHERE c.table_schema = '${schema}' AND c.table_name = '${table}'
+         AND c.column_name = 'bot_id')`;
+  const block = `
+    DO $botkit_upgrade$
+    DECLARE
+      upgraded boolean := false;
+    BEGIN
+      PERFORM pg_catalog.pg_advisory_xact_lock(
+        ${schemaUpgradeAdvisoryLockNamespace},
+        pg_catalog.hashtext('${schema}')
+      );
+
+      IF ${legacyTable("follow_requests")} THEN
+        -- The old foreign key referenced followers (follower_id) only; it
+        -- has to go away before the followers primary key changes:
+        ALTER TABLE "${schema}"."follow_requests"
+          DROP CONSTRAINT IF EXISTS "follow_requests_follower_id_fkey";
+      END IF;
+
+      IF ${legacyTable("key_pairs")} THEN
+        ALTER TABLE "${schema}"."key_pairs"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."key_pairs" ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."key_pairs"
+          DROP CONSTRAINT IF EXISTS "key_pairs_pkey";
+        ALTER TABLE "${schema}"."key_pairs" ADD PRIMARY KEY (bot_id, position);
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("messages")} THEN
+        ALTER TABLE "${schema}"."messages"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."messages" ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."messages"
+          DROP CONSTRAINT IF EXISTS "messages_pkey";
+        ALTER TABLE "${schema}"."messages" ADD PRIMARY KEY (bot_id, id);
+        DROP INDEX IF EXISTS "${schema}"."idx_messages_published";
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("followers")} THEN
+        ALTER TABLE "${schema}"."followers"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."followers" ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."followers"
+          DROP CONSTRAINT IF EXISTS "followers_pkey";
+        ALTER TABLE "${schema}"."followers"
+          ADD PRIMARY KEY (bot_id, follower_id);
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("follow_requests")} THEN
+        ALTER TABLE "${schema}"."follow_requests"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."follow_requests"
+          ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."follow_requests"
+          DROP CONSTRAINT IF EXISTS "follow_requests_pkey";
+        ALTER TABLE "${schema}"."follow_requests"
+          ADD PRIMARY KEY (bot_id, follow_request_id);
+        ALTER TABLE "${schema}"."follow_requests"
+          ADD FOREIGN KEY (bot_id, follower_id)
+          REFERENCES "${schema}"."followers" (bot_id, follower_id)
+          ON DELETE CASCADE
+          DEFERRABLE INITIALLY IMMEDIATE;
+        DROP INDEX IF EXISTS "${schema}"."idx_follow_requests_follower";
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("sent_follows")} THEN
+        ALTER TABLE "${schema}"."sent_follows"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."sent_follows"
+          ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."sent_follows"
+          DROP CONSTRAINT IF EXISTS "sent_follows_pkey";
+        ALTER TABLE "${schema}"."sent_follows" ADD PRIMARY KEY (bot_id, id);
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("followees")} THEN
+        ALTER TABLE "${schema}"."followees"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."followees" ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."followees"
+          DROP CONSTRAINT IF EXISTS "followees_pkey";
+        ALTER TABLE "${schema}"."followees"
+          ADD PRIMARY KEY (bot_id, followee_id);
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("poll_votes")} THEN
+        ALTER TABLE "${schema}"."poll_votes"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."poll_votes" ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."poll_votes"
+          DROP CONSTRAINT IF EXISTS "poll_votes_pkey";
+        ALTER TABLE "${schema}"."poll_votes"
+          ADD PRIMARY KEY (bot_id, message_id, voter_id, option);
+        DROP INDEX IF EXISTS "${schema}"."idx_poll_votes_message_option";
+        upgraded := true;
+      END IF;
+
+      IF upgraded THEN
+        -- The marker lets migrate() distinguish rows carried over from
+        -- a legacy schema (bot_id = '') from data legitimately stored under
+        -- an empty-string identifier:
+        CREATE TABLE IF NOT EXISTS "${schema}"."botkit_metadata" (
+          "key" TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        INSERT INTO "${schema}"."botkit_metadata" ("key", value)
+        VALUES ('legacy_data', '1')
+        ON CONFLICT ("key") DO NOTHING;
+      END IF;
+    END
+    $botkit_upgrade$
+  `;
+  // DO blocks cannot be prepared:
+  await execute(sql, block, [], false);
   logger.info("Finished upgrading legacy tables.");
 }
 

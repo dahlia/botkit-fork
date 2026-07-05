@@ -1353,6 +1353,45 @@ if (postgresUrl != null) {
       }
     });
 
+    test("survives concurrent initialization", async () => {
+      const sql = createSql(postgresUrl!);
+      const schema = createSchemaName();
+      try {
+        await createLegacySchema(sql, schema);
+        await seedLegacySchema(sql, schema);
+
+        // Two replicas starting at once against the same legacy schema must
+        // both come up; the upgrade is serialized by an advisory lock and
+        // guarded per table:
+        const sqlA = createSql(postgresUrl!);
+        const sqlB = createSql(postgresUrl!);
+        try {
+          await Promise.all([
+            initializePostgresRepositorySchema(sqlA, schema),
+            initializePostgresRepositorySchema(sqlB, schema),
+          ]);
+        } finally {
+          await sqlA.end();
+          await sqlB.end();
+        }
+
+        const repo = new PostgresRepository({
+          url: postgresUrl!,
+          schema,
+          maxConnections: 1,
+        });
+        try {
+          await repo.migrate("bot");
+          assert.equal(await repo.countMessages("bot"), 1);
+        } finally {
+          await repo.close();
+        }
+      } finally {
+        await sql.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+        await sql.end();
+      }
+    });
+
     test("does not reassign data stored under an empty identifier", async () => {
       const harness = createHarness();
       try {
