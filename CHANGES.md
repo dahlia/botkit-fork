@@ -48,7 +48,7 @@ To be released.
     at the root.
 
  -  Added inbound support for consent-respecting quote posts using
-    [FEP-044f].  [[#27], [#28], [#31]]
+    [FEP-044f].  [[#27]] [[#28]] [[#31]]
 
     BotKit now serializes quote policies on outgoing messages, handles
     incoming `QuoteRequest` activities, automatically accepts or rejects them
@@ -59,15 +59,17 @@ To be released.
     requests with the new `Bot.onQuoteRequest` event handler.
 
      -  Added `QuotePolicy`, `QuotePolicyOption`, `QuoteRequest`, and
-        `QuoteRequestEventHandler` types.
-     -  Added `Bot.onQuoteRequest` event handler.
+        `QuoteRequestEventHandler` types.  [[#27]] [[#28]] [[#31]]
+     -  Added `Bot.onQuoteRequest` event handler.  [[#27]] [[#28]] [[#31]]
      -  Added `ReadonlyBot.quotePolicy`, `CreateBotOptions.quotePolicy`, and
-        `BotProfile.quotePolicy` properties.
+        `BotProfile.quotePolicy` properties.  [[#27]] [[#28]] [[#31]]
      -  Added `SessionPublishOptions.quotePolicy` and
-        `AuthorizedMessageUpdateOptions.quotePolicy` options.
+        `AuthorizedMessageUpdateOptions.quotePolicy` options.  [[#27]]
+        [[#28]] [[#31]]
      -  Added `AuthorizedMessage.unauthorizeQuote()` method for revoking an
         existing quote authorization stamp by the quoted message or its URI.
-     -  Added `@fedify/botkit/quote` module.
+        [[#27]] [[#28]] [[#31]]
+     -  Added `@fedify/botkit/quote` module.  [[#27]] [[#28]] [[#31]]
 
  -  The `Repository` interface now stores data for multiple bot actors:
     every method takes the identifier of the owning bot actor as its first
@@ -122,7 +124,7 @@ To be released.
 ### @fedify/botkit-sqlite
 
  -  Added a `quote_authorizations` table for [FEP-044f] quote authorization
-    stamps.  [[#27], [#28], [#31]]
+    stamps.  [[#27]] [[#28]] [[#31]]
 
  -  All tables now have a `bot_id` column and composite primary keys, so
     a single database stores the data of multiple bots.  Opening a database
@@ -136,7 +138,7 @@ To be released.
 ### @fedify/botkit-postgres
 
  -  Added a `quote_authorizations` table for [FEP-044f] quote authorization
-    stamps.  [[#27], [#28], [#31]]
+    stamps.  [[#27]] [[#28]] [[#31]]
 
  -  All tables now have a `bot_id` column and composite primary keys, so
     a single schema stores the data of multiple bots.  Initializing a schema

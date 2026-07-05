@@ -91,15 +91,17 @@ export interface QuoteRequest<TContextData> {
 
   /**
    * Accepts the quote request.
+   * @param signal An abort signal.
    * @throws {TypeError} The quote request is not pending.
    */
-  accept(): Promise<void>;
+  accept(signal?: AbortSignal): Promise<void>;
 
   /**
    * Rejects the quote request.
+   * @param signal An abort signal.
    * @throws {TypeError} The quote request is not pending.
    */
-  reject(): Promise<void>;
+  reject(signal?: AbortSignal): Promise<void>;
 }
 
 /**
@@ -116,6 +118,15 @@ export function normalizeQuotePolicy(
   return policy;
 }
 
+/**
+ * Serializes a quote policy option into an interaction policy for outgoing
+ * messages.
+ * @param policy The quote policy option to serialize.
+ * @param actorUri The URI of the actor publishing the message.
+ * @param followersUri The URI of the actor's followers collection.
+ * @returns The serialized interaction policy.
+ * @since 0.5.0
+ */
 export function serializeQuotePolicy(
   policy: QuotePolicyOption | undefined,
   actorUri: URL,

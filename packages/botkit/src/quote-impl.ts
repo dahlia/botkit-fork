@@ -63,13 +63,15 @@ export class QuoteRequestImpl<TContextData>
     this.#state = "pending";
   }
 
-  async accept(): Promise<void> {
+  async accept(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (this.#state !== "pending") {
       throw new TypeError("The quote request is not pending.");
     }
     const existing = await this.session.bot.repository.findQuoteAuthorization(
       this.quote.id,
     );
+    signal?.throwIfAborted();
     const authorization = existing ?? await this.#createAuthorization();
     await this.session.context.sendActivity(
       this.session.bot,
@@ -86,10 +88,12 @@ export class QuoteRequestImpl<TContextData>
     this.#state = "accepted";
   }
 
-  async reject(): Promise<void> {
+  async reject(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (this.#state !== "pending") {
       throw new TypeError("The quote request is not pending.");
     }
+    signal?.throwIfAborted();
     await this.session.context.sendActivity(
       this.session.bot,
       this.actor,
