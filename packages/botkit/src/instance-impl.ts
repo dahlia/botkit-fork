@@ -1002,9 +1002,14 @@ export class InstanceImpl<TContextData>
       if (customEmoji == null || !("file" in customEmoji)) {
         return new Response("Not Found", { status: 404 });
       }
-      let file: fs.FileHandle;
+      // Custom emojis are small images, so reading them into memory avoids
+      // managing a file handle whose readableWebStream() does not close it
+      // on completion (leaking a descriptor per request):
+      let fileInfo: Awaited<ReturnType<typeof fs.stat>>;
+      let data: Uint8Array;
       try {
-        file = await fs.open(customEmoji.file, "r");
+        fileInfo = await fs.stat(customEmoji.file);
+        data = await fs.readFile(customEmoji.file);
       } catch (error) {
         if (
           typeof error === "object" && error != null && "code" in error &&
@@ -1014,23 +1019,17 @@ export class InstanceImpl<TContextData>
         }
         throw error;
       }
-      try {
-        const fileInfo = await file.stat();
-        return new Response(file.readableWebStream(), {
-          headers: {
-            "Content-Type": customEmoji.type,
-            "Content-Length": fileInfo.size.toString(),
-            "Cache-Control": "public, max-age=31536000, immutable",
-            "Last-Modified": (fileInfo.mtime ?? new Date()).toUTCString(),
-            "ETag": `"${fileInfo.mtime?.getTime().toString(36)}${
-              fileInfo.size.toString(36)
-            }"`,
-          },
-        });
-      } catch (error) {
-        await file.close();
-        throw error;
-      }
+      return new Response(data as Uint8Array<ArrayBuffer>, {
+        headers: {
+          "Content-Type": customEmoji.type,
+          "Content-Length": fileInfo.size.toString(),
+          "Cache-Control": "public, max-age=31536000, immutable",
+          "Last-Modified": (fileInfo.mtime ?? new Date()).toUTCString(),
+          "ETag": `"${fileInfo.mtime?.getTime().toString(36)}${
+            fileInfo.size.toString(36)
+          }"`,
+        },
+      });
     }
     if (this.compatMode) {
       const bot = this.#firstBot();
