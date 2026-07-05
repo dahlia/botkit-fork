@@ -193,6 +193,70 @@ describe("shared inbox routing", () => {
     assert.deepStrictEqual(liked, []);
   });
 
+  test("ignores Like on another bot's local object", async () => {
+    const { instance, alpha, beta } = createHarness();
+    const liked: string[] = [];
+    alpha.onLike = (session) => void (liked.push(session.bot.identifier));
+    beta.onLike = (session) => void (liked.push(session.bot.identifier));
+    // Delivered to beta's personal inbox, but the object is alpha's local
+    // note (embedded, so no dereference is needed to see it):
+    const ctx = createMockInboxContext(
+      instance,
+      "https://example.com/",
+      undefined,
+      "beta",
+    );
+    const messageId: Uuid = "01941f29-7c00-7fe8-ab0a-7b593990a3c1";
+    await instance.onLiked(
+      ctx,
+      new RawLike({
+        id: new URL("https://remote.example/likes/4"),
+        actor: remotePerson("john"),
+        object: new Note({
+          id: new URL(
+            `https://example.com/ap/actor/alpha/note/${messageId}`,
+          ),
+          attribution: new URL("https://example.com/ap/actor/alpha"),
+          to: PUBLIC_COLLECTION,
+          content: "Alpha's note",
+        }),
+      }),
+    );
+    assert.deepStrictEqual(liked, []);
+  });
+
+  test("ignores reactions on another bot's local object", async () => {
+    const { instance, alpha, beta } = createHarness();
+    const reacted: string[] = [];
+    alpha.onReact = (session) => void (reacted.push(session.bot.identifier));
+    beta.onReact = (session) => void (reacted.push(session.bot.identifier));
+    const ctx = createMockInboxContext(
+      instance,
+      "https://example.com/",
+      undefined,
+      "beta",
+    );
+    const messageId: Uuid = "01941f29-7c00-7fe8-ab0a-7b593990a3c2";
+    // A Like with a name is treated as an emoji reaction:
+    await instance.onLiked(
+      ctx,
+      new RawLike({
+        id: new URL("https://remote.example/reacts/1"),
+        actor: remotePerson("john"),
+        name: "👍",
+        object: new Note({
+          id: new URL(
+            `https://example.com/ap/actor/alpha/note/${messageId}`,
+          ),
+          attribution: new URL("https://example.com/ap/actor/alpha"),
+          to: PUBLIC_COLLECTION,
+          content: "Alpha's note",
+        }),
+      }),
+    );
+    assert.deepStrictEqual(reacted, []);
+  });
+
   test("routes Create replies to the replied bot", async () => {
     const { instance, repository, alpha, beta, ctx } = createHarness();
     const events: string[] = [];

@@ -937,9 +937,11 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     if (
       objectUri?.type === "object" &&
       // deno-lint-ignore no-explicit-any
-      messageClasses.includes(objectUri.class as any) &&
-      objectUri.values.identifier === this.identifier
+      messageClasses.includes(objectUri.class as any)
     ) {
+      // A local object owned by another bot is not this bot's to report;
+      // the owner receives the activity through its own routing:
+      if (objectUri.values.identifier !== this.identifier) return undefined;
       const msg = await this.repository.getMessage(objectUri.values.id as Uuid);
       if (msg instanceof Create) object = await msg.getObject(ctx);
     } else {
@@ -1018,9 +1020,11 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     if (
       objectUri?.type === "object" &&
       // deno-lint-ignore no-explicit-any
-      messageClasses.includes(objectUri.class as any) &&
-      objectUri.values.identifier === this.identifier
+      messageClasses.includes(objectUri.class as any)
     ) {
+      // A local object owned by another bot is not this bot's to report;
+      // the owner receives the activity through its own routing:
+      if (objectUri.values.identifier !== this.identifier) return undefined;
       const msg = await this.repository.getMessage(objectUri.values.id as Uuid);
       if (msg instanceof Create) object = await msg.getObject(ctx);
     } else {
