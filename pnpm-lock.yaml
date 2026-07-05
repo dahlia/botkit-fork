@@ -163,7 +163,7 @@ importers:
   packages/botkit-postgres:
     dependencies:
       '@fedify/botkit':
-        specifier: 'workspace:'
+        specifier: workspace:^
         version: link:../botkit
       '@fedify/fedify':
         specifier: ^2.1.2
@@ -188,7 +188,7 @@ importers:
   packages/botkit-sqlite:
     dependencies:
       '@fedify/botkit':
-        specifier: 'workspace:'
+        specifier: workspace:^
         version: link:../botkit
       '@fedify/fedify':
         specifier: 'catalog:'
