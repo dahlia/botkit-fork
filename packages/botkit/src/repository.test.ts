@@ -172,6 +172,46 @@ test("MemoryCachedRepository keeps duplicate quote authorizations out of cache",
   );
 });
 
+test("KvRepository serializes concurrent quote authorization inserts", async () => {
+  const repository = new KvRepository(new RacingQuoteAuthorizationKvStore());
+  const firstId = "01942976-3400-7f34-872e-2cbf0f9eeac4" as Uuid;
+  const secondId = "01942976-3400-7f34-872e-2cbf0f9eeac5" as Uuid;
+  const interactingObject = new URL("https://remote.example/notes/1");
+  const target = new URL("https://example.com/ap/note/1");
+  const first = new QuoteAuthorization({
+    id: new URL(
+      `https://example.com/ap/actor/bot/quote-authorization/${firstId}`,
+    ),
+    attribution: new URL("https://example.com/ap/actor/bot"),
+    interactingObject,
+    interactionTarget: target,
+  });
+  const second = new QuoteAuthorization({
+    id: new URL(
+      `https://example.com/ap/actor/bot/quote-authorization/${secondId}`,
+    ),
+    attribution: new URL("https://example.com/ap/actor/bot"),
+    interactingObject,
+    interactionTarget: target,
+  });
+
+  await Promise.all([
+    repository.addQuoteAuthorization("bot", firstId, first),
+    repository.addQuoteAuthorization("bot", secondId, second),
+  ]);
+
+  const indexed = await repository.findQuoteAuthorization(
+    "bot",
+    interactingObject,
+  );
+  const stored = [
+    await repository.getQuoteAuthorization("bot", firstId),
+    await repository.getQuoteAuthorization("bot", secondId),
+  ].filter((authorization) => authorization != null);
+  assert.deepStrictEqual(stored.length, 1);
+  assert.deepStrictEqual(indexed?.id?.href, stored[0].id?.href);
+});
+
 function scopedKvKey(...rest: readonly string[]): KvKey {
   return ["_botkit", "bots", "bot", ...rest];
 }
@@ -224,6 +264,29 @@ class RecordingListMemoryKvStore extends MemoryKvStore {
   override list(prefix?: KvKey): AsyncIterable<KvStoreListEntry> {
     this.listCalls++;
     return super.list(prefix);
+  }
+}
+
+class RacingQuoteAuthorizationKvStore extends MemoryKvStore {
+  #indexGets = 0;
+  #releaseIndexGets: (() => void) | undefined;
+  #indexGetBarrier = new Promise<void>((resolve) => {
+    this.#releaseIndexGets = resolve;
+  });
+
+  override async get<T = unknown>(key: KvKey): Promise<T | undefined> {
+    if (
+      key.includes("quoteAuthorizationsByInteractingObject") &&
+      !key.includes("lock")
+    ) {
+      const lock = await super.get([...key, "lock"]);
+      if (lock == null && this.#indexGets < 2) {
+        this.#indexGets++;
+        if (this.#indexGets === 2) this.#releaseIndexGets?.();
+        await this.#indexGetBarrier;
+      }
+    }
+    return await super.get<T>(key);
   }
 }
 

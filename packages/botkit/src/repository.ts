@@ -835,6 +835,18 @@ export class KvRepository implements Repository {
     );
   }
 
+  #quoteAuthorizationLockKey(
+    identifier: string,
+    interactingObject: URL,
+  ): KvKey {
+    return this.#key(
+      identifier,
+      "quoteAuthorizationsByInteractingObject",
+      interactingObject.href,
+      "lock",
+    );
+  }
+
   /**
    * Migrates data stored by BotKit 0.4 or earlier, which was not scoped by
    * bot actor identifiers, so that it belongs to the given identifier.
@@ -1571,17 +1583,22 @@ export class KvRepository implements Repository {
         "The quote authorization interacting object is missing.",
       );
     }
-    const existing = await this.kv.get<Uuid>(
-      this.#quoteAuthorizationIndexKey(identifier, interactingObject),
-    );
-    if (existing != null) return;
-    await this.kv.set(
-      this.#key(identifier, "quoteAuthorizations", id),
-      await authorization.toJsonLd({ format: "compact" }),
-    );
-    await this.kv.set(
-      this.#quoteAuthorizationIndexKey(identifier, interactingObject),
-      id,
+    await this.#withKvLock(
+      this.#quoteAuthorizationLockKey(identifier, interactingObject),
+      async () => {
+        const existing = await this.kv.get<Uuid>(
+          this.#quoteAuthorizationIndexKey(identifier, interactingObject),
+        );
+        if (existing != null) return;
+        await this.kv.set(
+          this.#key(identifier, "quoteAuthorizations", id),
+          await authorization.toJsonLd({ format: "compact" }),
+        );
+        await this.kv.set(
+          this.#quoteAuthorizationIndexKey(identifier, interactingObject),
+          id,
+        );
+      },
     );
   }
 
@@ -1623,13 +1640,25 @@ export class KvRepository implements Repository {
   ): Promise<QuoteAuthorization | undefined> {
     const authorization = await this.getQuoteAuthorization(identifier, id);
     if (authorization == null) return undefined;
-    await this.kv.delete(this.#key(identifier, "quoteAuthorizations", id));
     const interactingObject = authorization.interactingObjectId;
-    if (interactingObject != null) {
-      await this.kv.delete(
-        this.#quoteAuthorizationIndexKey(identifier, interactingObject),
-      );
+    if (interactingObject == null) {
+      await this.kv.delete(this.#key(identifier, "quoteAuthorizations", id));
+      return authorization;
     }
+    await this.#withKvLock(
+      this.#quoteAuthorizationLockKey(identifier, interactingObject),
+      async () => {
+        await this.kv.delete(this.#key(identifier, "quoteAuthorizations", id));
+        const indexedId = await this.kv.get<Uuid>(
+          this.#quoteAuthorizationIndexKey(identifier, interactingObject),
+        );
+        if (indexedId === id) {
+          await this.kv.delete(
+            this.#quoteAuthorizationIndexKey(identifier, interactingObject),
+          );
+        }
+      },
+    );
     return authorization;
   }
 
