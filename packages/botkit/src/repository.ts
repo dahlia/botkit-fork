@@ -29,6 +29,27 @@ export type { KvKey, KvStore } from "@fedify/fedify/federation";
 export { Announce, Create } from "@fedify/vocab";
 
 const logger = getLogger(["botkit", "repository"]);
+const kvLockPollIntervalMs = 100;
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+interface KvLock {
+  readonly id: string;
+  readonly released?: boolean;
+}
+
+function isKvLock(value: unknown): value is KvLock {
+  return typeof value === "object" && value != null && "id" in value &&
+    typeof value.id === "string";
+}
+
+function isReleasedKvLock(value: unknown): value is KvLock {
+  return isKvLock(value) && value.released === true;
+}
+
+function isLegacyKvLock(value: unknown): value is string {
+  return typeof value === "string" && !uuidPattern.test(value);
+}
 
 /**
  * A UUID (universally unique identifier).
@@ -123,8 +144,9 @@ export interface Repository {
    * Removes a follower from the repository.
    * @param followId The URL of the follow request.
    * @param followerId The ID of the actor to remove.
-   * @returns The removed actor.  If the follower does not exist or the follow
-   *          request is not about the follower, `undefined` will be returned.
+   * @returns The removed actor.  If the follower does not exist, the follow
+   *          request is not about the follower, or the actor still has another
+   *          active follow request, `undefined` will be returned.
    */
   removeFollower(followId: URL, followerId: URL): Promise<Actor | undefined>;
 
@@ -334,6 +356,7 @@ export interface KvStoreRepositoryPrefixes {
 export class KvRepository implements Repository {
   readonly kv: KvStore;
   readonly prefixes: KvStoreRepositoryPrefixes;
+  private readonly nonCasLocks = new Map<string, Promise<void>>();
 
   /**
    * Creates a new key-value store repository.
@@ -511,58 +534,287 @@ export class KvRepository implements Repository {
     if (follower.id == null) {
       throw new TypeError("The follower ID is missing.");
     }
-    const followerKey: KvKey = [...this.prefixes.followers, follower.id.href];
-    await this.kv.set(
-      followerKey,
-      await follower.toJsonLd({ format: "compact" }),
+    const followRequestIdString = followRequestId.href;
+    const followerId = follower.id.href;
+    await this.withKvLock(
+      this.getFollowRequestLockKey(followRequestIdString),
+      async () => {
+        const followRequestKey = this.getFollowRequestKey(
+          followRequestIdString,
+        );
+        const previousFollowerId = await this.kv.get<string>(followRequestKey);
+        const followerJson = await follower.toJsonLd({ format: "compact" });
+        await this.withKvLock(this.getFollowersLockKey(), async () => {
+          const followerKey: KvKey = [...this.prefixes.followers, followerId];
+          await this.kv.set(followerKey, followerJson);
+          await this.addFollowerIdLocked(followerId);
+          await this.addFollowRequestForFollowerLocked(
+            followerId,
+            followRequestIdString,
+          );
+          await this.kv.set(followRequestKey, followerId);
+          if (
+            previousFollowerId != null && previousFollowerId !== followerId
+          ) {
+            await this.removeFollowRequestForFollowerLocked(
+              previousFollowerId,
+              followRequestIdString,
+            );
+            await this.cleanupFollowerLocked(previousFollowerId);
+          }
+        });
+      },
     );
-    const lockKey: KvKey = [...this.prefixes.followers, "lock"];
-    const listKey: KvKey = this.prefixes.followers;
-    do {
-      await this.kv.set(lockKey, follower.id.href);
-      const list = await this.kv.get<string[]>(listKey) ?? [];
-      if (!list.includes(follower.id.href)) list.push(follower.id.href);
-      await this.kv.set(listKey, list);
-    } while (await this.kv.get(lockKey) !== follower.id.href);
-    const followRequestKey: KvKey = [
-      ...this.prefixes.followRequests,
-      followRequestId.href,
-    ];
-    await this.kv.set(followRequestKey, follower.id.href);
   }
 
   async removeFollower(
     followRequestId: URL,
     actorId: URL,
   ): Promise<Actor | undefined> {
-    const followRequestKey: KvKey = [
-      ...this.prefixes.followRequests,
-      followRequestId.href,
-    ];
-    const followerId = await this.kv.get<string>(followRequestKey);
-    if (followerId == null) return undefined;
-    const followerKey: KvKey = [...this.prefixes.followers, followerId];
-    if (followerId !== actorId.href) return undefined;
-    const followerJson = await this.kv.get(followerKey);
-    if (followerJson == null) return undefined;
-    let follower: Object;
-    try {
-      follower = await Object.fromJsonLd(followerJson);
-    } catch {
-      return undefined;
-    }
-    if (!isActor(follower)) return undefined;
-    const lockKey: KvKey = [...this.prefixes.followers, "lock"];
+    const followRequestIdString = followRequestId.href;
+    return await this.withKvLock(
+      this.getFollowRequestLockKey(followRequestIdString),
+      async () => {
+        const followRequestKey = this.getFollowRequestKey(
+          followRequestIdString,
+        );
+        const followerId = await this.kv.get<string>(followRequestKey);
+        if (followerId == null || followerId !== actorId.href) {
+          return undefined;
+        }
+        return await this.withKvLock(this.getFollowersLockKey(), async () => {
+          const currentFollowerId = await this.kv.get<string>(followRequestKey);
+          if (currentFollowerId !== followerId) return undefined;
+          const followerKey: KvKey = [...this.prefixes.followers, followerId];
+          const followerJson = await this.kv.get(followerKey);
+          await this.kv.delete(followRequestKey);
+          await this.removeFollowRequestForFollowerLocked(
+            followerId,
+            followRequestIdString,
+          );
+          const removed = await this.cleanupFollowerLocked(followerId);
+          if (followerJson == null) return undefined;
+          let follower: Object;
+          try {
+            follower = await Object.fromJsonLd(followerJson);
+          } catch {
+            return undefined;
+          }
+          if (!isActor(follower)) return undefined;
+          return removed ? follower : undefined;
+        });
+      },
+    );
+  }
+
+  private async addFollowerIdLocked(followerId: string): Promise<void> {
     const listKey: KvKey = this.prefixes.followers;
-    do {
-      await this.kv.set(lockKey, followerId);
-      let list = await this.kv.get<string[]>(listKey) ?? [];
-      list = list.filter((id) => id !== followerId);
-      await this.kv.set(listKey, list);
-    } while (await this.kv.get(lockKey) !== followerId);
-    await this.kv.delete(followerKey);
-    await this.kv.delete(followRequestKey);
-    return follower;
+    const list = await this.kv.get<string[]>(listKey) ?? [];
+    if (!list.includes(followerId)) {
+      await this.kv.set(listKey, [...list, followerId]);
+    }
+  }
+
+  private async cleanupFollowerLocked(followerId: string): Promise<boolean> {
+    if (await this.hasFollowRequestForFollowerLocked(followerId)) {
+      return false;
+    }
+    const listKey: KvKey = this.prefixes.followers;
+    const list = await this.kv.get<string[]>(listKey) ?? [];
+    await this.kv.set(
+      listKey,
+      list.filter((id) => id !== followerId),
+    );
+    await this.kv.delete([...this.prefixes.followers, followerId]);
+    await this.kv.delete(this.getFollowerFollowRequestsKey(followerId));
+    return true;
+  }
+
+  private getFollowRequestKey(followRequestId: string): KvKey {
+    return [...this.prefixes.followRequests, followRequestId];
+  }
+
+  private getFollowRequestLockKey(followRequestId: string): KvKey {
+    return [...this.prefixes.followRequests, "lock", followRequestId];
+  }
+
+  private getFollowerFollowRequestsKey(followerId: string): KvKey {
+    return [...this.prefixes.followRequests, "followers", followerId];
+  }
+
+  private getFollowersLockKey(): KvKey {
+    return [...this.prefixes.followers, "lock"];
+  }
+
+  private async addFollowRequestForFollowerLocked(
+    followerId: string,
+    followRequestId: string,
+  ): Promise<void> {
+    const followRequestIds = await this
+      .getIndexedFollowRequestsForFollowerLocked(
+        followerId,
+      ) ?? await this.rebuildFollowRequestsForFollowerLocked(followerId);
+    if (!followRequestIds.includes(followRequestId)) {
+      await this.kv.set(this.getFollowerFollowRequestsKey(followerId), [
+        ...followRequestIds,
+        followRequestId,
+      ]);
+    }
+  }
+
+  private async removeFollowRequestForFollowerLocked(
+    followerId: string,
+    followRequestId: string,
+  ): Promise<void> {
+    const followRequestIds = await this
+      .getIndexedFollowRequestsForFollowerLocked(
+        followerId,
+      ) ?? await this.rebuildFollowRequestsForFollowerLocked(followerId);
+    await this.kv.set(
+      this.getFollowerFollowRequestsKey(followerId),
+      followRequestIds.filter((id) => id !== followRequestId),
+    );
+  }
+
+  private async hasFollowRequestForFollowerLocked(
+    followerId: string,
+  ): Promise<boolean> {
+    const indexKey = this.getFollowerFollowRequestsKey(followerId);
+    const followRequestIds = await this
+      .getIndexedFollowRequestsForFollowerLocked(
+        followerId,
+      );
+    if (followRequestIds != null) {
+      return await this.hasCurrentFollowRequestForFollowerLocked(
+        followerId,
+        followRequestIds,
+        indexKey,
+      );
+    }
+    const rebuiltFollowRequestIds = await this
+      .rebuildFollowRequestsForFollowerLocked(
+        followerId,
+      );
+    return await this.hasCurrentFollowRequestForFollowerLocked(
+      followerId,
+      rebuiltFollowRequestIds,
+      indexKey,
+    );
+  }
+
+  private async hasCurrentFollowRequestForFollowerLocked(
+    followerId: string,
+    followRequestIds: readonly string[],
+    indexKey: KvKey,
+  ): Promise<boolean> {
+    const currentFollowRequestIds: string[] = [];
+    for (const followRequestId of followRequestIds) {
+      if (
+        await this.kv.get<string>(this.getFollowRequestKey(followRequestId)) ===
+          followerId
+      ) {
+        currentFollowRequestIds.push(followRequestId);
+      }
+    }
+    if (currentFollowRequestIds.length !== followRequestIds.length) {
+      await this.kv.set(
+        indexKey,
+        currentFollowRequestIds,
+      );
+    }
+    return currentFollowRequestIds.length > 0;
+  }
+
+  private async getIndexedFollowRequestsForFollowerLocked(
+    followerId: string,
+  ): Promise<string[] | undefined> {
+    return await this.kv.get<string[]>(
+      this.getFollowerFollowRequestsKey(followerId),
+    );
+  }
+
+  private async rebuildFollowRequestsForFollowerLocked(
+    followerId: string,
+  ): Promise<string[]> {
+    const indexKey = this.getFollowerFollowRequestsKey(followerId);
+    const indexedFollowRequestIds: string[] = [];
+    const followRequestKeyLength = this.prefixes.followRequests.length + 1;
+    for await (const entry of this.kv.list(this.prefixes.followRequests)) {
+      if (entry.key.length !== followRequestKeyLength) continue;
+      const followRequestId = entry.key[this.prefixes.followRequests.length];
+      if (typeof followRequestId !== "string") continue;
+      if (entry.value === followerId) {
+        indexedFollowRequestIds.push(followRequestId);
+      }
+    }
+    await this.kv.set(indexKey, indexedFollowRequestIds);
+    return indexedFollowRequestIds;
+  }
+
+  private async withKvLock<T>(
+    lockKey: KvKey,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const cas = this.kv.cas?.bind(this.kv);
+    if (cas == null) {
+      return await this.withNonCasKvLock(lockKey, operation);
+    }
+    const lock: KvLock = { id: crypto.randomUUID() };
+    const lockTtl = Temporal.Duration.from({ minutes: 5 });
+    const lockReleaseTtl = Temporal.Duration.from({
+      milliseconds: kvLockPollIntervalMs,
+    });
+    while (true) {
+      if (await cas(lockKey, undefined, lock, { ttl: lockTtl })) {
+        break;
+      }
+      const currentLock = await this.kv.get(lockKey);
+      if (
+        (isLegacyKvLock(currentLock) || isReleasedKvLock(currentLock)) &&
+        await cas(lockKey, currentLock, lock, { ttl: lockTtl })
+      ) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, kvLockPollIntervalMs));
+    }
+    try {
+      return await operation();
+    } finally {
+      try {
+        const currentLock = await this.kv.get(lockKey);
+        if (isKvLock(currentLock) && currentLock.id === lock.id) {
+          await cas(lockKey, currentLock, { ...currentLock, released: true }, {
+            ttl: lockReleaseTtl,
+          });
+        }
+      } catch (error) {
+        logger.warn("Failed to release KV lock: {error}", { error });
+      }
+    }
+  }
+
+  private async withNonCasKvLock<T>(
+    lockKey: KvKey,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const encodedLockKey = JSON.stringify(lockKey);
+    const previousLock = this.nonCasLocks.get(encodedLockKey) ??
+      Promise.resolve();
+    let releaseLock: () => void;
+    const lock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const tail = previousLock.then(() => lock, () => lock);
+    this.nonCasLocks.set(encodedLockKey, tail);
+    await previousLock.catch(() => {});
+    try {
+      return await operation();
+    } finally {
+      releaseLock!();
+      if (this.nonCasLocks.get(encodedLockKey) === tail) {
+        this.nonCasLocks.delete(encodedLockKey);
+      }
+    }
   }
 
   async hasFollower(followerId: URL): Promise<boolean> {
@@ -851,8 +1103,14 @@ export class MemoryRepository implements Repository {
     if (follower.id == null) {
       throw new TypeError("The follower ID is missing.");
     }
+    const previousFollowerId = this.followRequests[followId.href];
     this.followers.set(follower.id.href, follower);
     this.followRequests[followId.href] = follower.id.href;
+    if (
+      previousFollowerId != null && previousFollowerId !== follower.id.href
+    ) {
+      this.cleanupFollower(previousFollowerId);
+    }
     return Promise.resolve();
   }
 
@@ -863,8 +1121,16 @@ export class MemoryRepository implements Repository {
     }
     delete this.followRequests[followId.href];
     const follower = this.followers.get(followerId.href);
-    this.followers.delete(followerId.href);
-    return Promise.resolve(follower);
+    const removed = this.cleanupFollower(followerId.href);
+    return Promise.resolve(removed ? follower : undefined);
+  }
+
+  private cleanupFollower(followerId: string): boolean {
+    if (globalThis.Object.values(this.followRequests).includes(followerId)) {
+      return false;
+    }
+    this.followers.delete(followerId);
+    return true;
   }
 
   hasFollower(followerId: URL): Promise<boolean> {
@@ -1060,9 +1326,7 @@ export class MemoryCachedRepository implements Repository {
       followId,
       followerId,
     );
-    if (removedFollower !== undefined) {
-      await this.cache.removeFollower(followId, followerId);
-    }
+    await this.cache.removeFollower(followId, followerId);
     return removedFollower;
   }
 

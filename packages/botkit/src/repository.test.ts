@@ -13,7 +13,13 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import { MemoryKvStore } from "@fedify/fedify/federation";
+import {
+  type KvKey,
+  type KvStore,
+  type KvStoreListEntry,
+  type KvStoreSetOptions,
+  MemoryKvStore,
+} from "@fedify/fedify/federation";
 import { importJwk } from "@fedify/fedify/sig";
 import { Create, Follow, Note, Person, PUBLIC_COLLECTION } from "@fedify/vocab";
 import assert from "node:assert";
@@ -42,6 +48,109 @@ const factories: Record<string, () => Repository> = {
   MemoryRepository: createMemoryRepository,
   MemoryCachedRepository: createMemoryCachedRepository,
 };
+
+class RecordingMemoryKvStore extends MemoryKvStore {
+  readonly lockOptions: KvStoreSetOptions[] = [];
+  readonly lockReleaseOptions: KvStoreSetOptions[] = [];
+  readonly undefinedLockReleases: KvKey[] = [];
+  releasedLockAcquisitions = 0;
+
+  override set(
+    key: KvKey,
+    value: unknown,
+    options?: KvStoreSetOptions,
+  ): Promise<void> {
+    if (key.includes("lock")) this.lockOptions.push(options ?? {});
+    return super.set(key, value, options);
+  }
+
+  override cas(
+    key: KvKey,
+    expectedValue: unknown,
+    newValue: unknown,
+    options?: KvStoreSetOptions,
+  ): Promise<boolean> {
+    if (key.includes("lock")) {
+      if (newValue === undefined) {
+        this.undefinedLockReleases.push(key);
+      } else if (
+        typeof newValue === "object" && newValue != null &&
+        "released" in newValue
+      ) {
+        this.lockReleaseOptions.push(options ?? {});
+      } else if (
+        typeof expectedValue === "object" && expectedValue != null &&
+        "released" in expectedValue
+      ) {
+        this.releasedLockAcquisitions++;
+      } else {
+        this.lockOptions.push(options ?? {});
+      }
+    }
+    return super.cas(key, expectedValue, newValue, options);
+  }
+}
+
+class RecordingListMemoryKvStore extends MemoryKvStore {
+  listCalls = 0;
+
+  override list(prefix?: KvKey): AsyncIterable<KvStoreListEntry> {
+    this.listCalls++;
+    return super.list(prefix);
+  }
+}
+
+class NonCasMemoryKvStore implements KvStore {
+  readonly #kv = new MemoryKvStore();
+
+  get<T = unknown>(key: KvKey): Promise<T | undefined> {
+    return this.#kv.get<T>(key);
+  }
+
+  set(
+    key: KvKey,
+    value: unknown,
+    options?: KvStoreSetOptions,
+  ): Promise<void> {
+    return this.#kv.set(key, value, options);
+  }
+
+  delete(key: KvKey): Promise<void> {
+    return this.#kv.delete(key);
+  }
+
+  list(prefix?: KvKey): AsyncIterable<KvStoreListEntry> {
+    return this.#kv.list(prefix);
+  }
+}
+
+class FailingReleaseMemoryKvStore extends MemoryKvStore {
+  override set(
+    key: KvKey,
+    value: unknown,
+    options?: KvStoreSetOptions,
+  ): Promise<void> {
+    if (!key.includes("lock")) {
+      throw new TypeError("Write failed.");
+    }
+    return super.set(key, value, options);
+  }
+
+  override cas(
+    key: KvKey,
+    expectedValue: unknown,
+    newValue: unknown,
+    options?: KvStoreSetOptions,
+  ): Promise<boolean> {
+    if (
+      key.includes("lock") && typeof newValue === "object" &&
+      newValue != null && "released" in newValue
+    ) {
+      throw new TypeError("Release failed.");
+    }
+    return super.cas(key, expectedValue, newValue, options);
+  }
+}
 
 const keyPairs: CryptoKeyPair[] = [
   {
@@ -96,6 +205,274 @@ const keyPairs: CryptoKeyPair[] = [
     }, "public"),
   },
 ];
+
+test("KvRepository uses expiring follower locks", async () => {
+  const kv = new RecordingMemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/lock-test"),
+    preferredUsername: "lock-test",
+  });
+
+  await repo.addFollower(
+    new URL("https://example.com/ap/follow/lock-test"),
+    follower,
+  );
+
+  assert.ok(kv.lockOptions.length > 0);
+  assert.ok(kv.lockOptions.every((options) => options.ttl != null));
+  assert.ok(kv.lockReleaseOptions.length > 0);
+  assert.ok(kv.lockReleaseOptions.every((options) => options.ttl != null));
+  assert.deepStrictEqual(kv.undefinedLockReleases, []);
+});
+
+test("KvRepository reacquires released follower locks", async () => {
+  const kv = new RecordingMemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/released-lock"),
+    preferredUsername: "released-lock",
+  });
+
+  await repo.addFollower(
+    new URL("https://example.com/ap/follow/released-lock/1"),
+    follower,
+  );
+  await repo.addFollower(
+    new URL("https://example.com/ap/follow/released-lock/2"),
+    follower,
+  );
+
+  assert.ok(kv.releasedLockAcquisitions > 0);
+});
+
+test("KvRepository deletes stale follower indexes", async () => {
+  const kv = new MemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/index-test"),
+    preferredUsername: "index-test",
+  });
+  const follow = new URL("https://example.com/ap/follow/index-test");
+  const indexKey: KvKey = [
+    "_botkit",
+    "followRequests",
+    "followers",
+    follower.id!.href,
+  ];
+
+  await repo.addFollower(follow, follower);
+  assert.deepStrictEqual(await kv.get(indexKey), [follow.href]);
+
+  await repo.removeFollower(follow, follower.id!);
+  assert.deepStrictEqual(await kv.get(indexKey), undefined);
+});
+
+test("KvRepository rebuilds missing follower indexes", async () => {
+  const kv = new MemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/missing-index"),
+    preferredUsername: "missing-index",
+  });
+  const firstFollow = new URL(
+    "https://example.com/ap/follow/missing-index/1",
+  );
+  const secondFollow = new URL(
+    "https://example.com/ap/follow/missing-index/2",
+  );
+  const indexKey: KvKey = [
+    "_botkit",
+    "followRequests",
+    "followers",
+    follower.id!.href,
+  ];
+
+  await repo.addFollower(firstFollow, follower);
+  await repo.addFollower(secondFollow, follower);
+  await kv.delete(indexKey);
+
+  assert.deepStrictEqual(
+    await repo.removeFollower(firstFollow, follower.id!),
+    undefined,
+  );
+  assert.ok(await repo.hasFollower(follower.id!));
+  assert.deepStrictEqual(await kv.get(indexKey), [secondFollow.href]);
+});
+
+test("KvRepository trusts empty follower indexes", async () => {
+  const kv = new RecordingListMemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/empty-index"),
+    preferredUsername: "empty-index",
+  });
+  const follow = new URL("https://example.com/ap/follow/empty-index");
+
+  await repo.addFollower(follow, follower);
+  kv.listCalls = 0;
+
+  assert.deepStrictEqual(
+    await repo.removeFollower(follow, follower.id!),
+    follower,
+  );
+  assert.deepStrictEqual(kv.listCalls, 0);
+  assert.ok(!await repo.hasFollower(follower.id!));
+});
+
+test("KvRepository removes requests with missing followers", async () => {
+  const kv = new MemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/missing-follower"),
+    preferredUsername: "missing-follower",
+  });
+  const follow = new URL("https://example.com/ap/follow/missing-follower");
+  const followRequestKey: KvKey = [
+    "_botkit",
+    "followRequests",
+    follow.href,
+  ];
+  const indexKey: KvKey = [
+    "_botkit",
+    "followRequests",
+    "followers",
+    follower.id!.href,
+  ];
+
+  await repo.addFollower(follow, follower);
+  await kv.delete(["_botkit", "followers", follower.id!.href]);
+
+  assert.deepStrictEqual(
+    await repo.removeFollower(follow, follower.id!),
+    undefined,
+  );
+  assert.deepStrictEqual(await kv.get(followRequestKey), undefined);
+  assert.deepStrictEqual(await kv.get(indexKey), undefined);
+  assert.ok(!await repo.hasFollower(follower.id!));
+});
+
+test("KvRepository uses follower indexes when adding requests", async () => {
+  const kv = new RecordingListMemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/index-add"),
+    preferredUsername: "index-add",
+  });
+  const firstFollow = new URL("https://example.com/ap/follow/index-add/1");
+  const secondFollow = new URL("https://example.com/ap/follow/index-add/2");
+  const indexKey: KvKey = [
+    "_botkit",
+    "followRequests",
+    "followers",
+    follower.id!.href,
+  ];
+
+  await repo.addFollower(firstFollow, follower);
+  kv.listCalls = 0;
+  await repo.addFollower(secondFollow, follower);
+
+  assert.deepStrictEqual(await kv.get(indexKey), [
+    firstFollow.href,
+    secondFollow.href,
+  ]);
+  assert.deepStrictEqual(kv.listCalls, 0);
+
+  kv.listCalls = 0;
+  assert.deepStrictEqual(
+    await repo.removeFollower(firstFollow, follower.id!),
+    undefined,
+  );
+  assert.deepStrictEqual(kv.listCalls, 0);
+  assert.deepStrictEqual(await kv.get(indexKey), [secondFollow.href]);
+});
+
+test("KvRepository rebuilds legacy requests for new follower rows", async () => {
+  const kv = new MemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/legacy-new-row"),
+    preferredUsername: "legacy-new-row",
+  });
+  const legacyFollow = new URL(
+    "https://example.com/ap/follow/legacy-new-row/1",
+  );
+  const newFollow = new URL(
+    "https://example.com/ap/follow/legacy-new-row/2",
+  );
+  const indexKey: KvKey = [
+    "_botkit",
+    "followRequests",
+    "followers",
+    follower.id!.href,
+  ];
+
+  await kv.set(
+    ["_botkit", "followRequests", legacyFollow.href],
+    follower.id!.href,
+  );
+  await repo.addFollower(newFollow, follower);
+
+  assert.deepStrictEqual(
+    await repo.removeFollower(newFollow, follower.id!),
+    undefined,
+  );
+  assert.ok(await repo.hasFollower(follower.id!));
+  assert.deepStrictEqual(await kv.get(indexKey), [legacyFollow.href]);
+});
+
+test("KvRepository recovers legacy follower locks", async () => {
+  const kv = new MemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/legacy-lock"),
+    preferredUsername: "legacy-lock",
+  });
+  const lockKey: KvKey = ["_botkit", "followers", "lock"];
+
+  await kv.set(lockKey, follower.id!.href);
+  await repo.addFollower(
+    new URL("https://example.com/ap/follow/legacy-lock"),
+    follower,
+  );
+
+  assert.ok(await repo.hasFollower(follower.id!));
+  assert.notDeepStrictEqual(await kv.get(lockKey), follower.id!.href);
+});
+
+test("KvRepository supports non-CAS follower mutations", async () => {
+  const repo = new KvRepository(new NonCasMemoryKvStore());
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/no-cas"),
+    preferredUsername: "no-cas",
+  });
+  const follow = new URL("https://example.com/ap/follow/no-cas");
+
+  await repo.addFollower(follow, follower);
+  assert.ok(await repo.hasFollower(follower.id!));
+  assert.deepStrictEqual(
+    await repo.removeFollower(follow, follower.id!),
+    follower,
+  );
+  assert.ok(!await repo.hasFollower(follower.id!));
+});
+
+test("KvRepository preserves errors when lock release fails", async () => {
+  const repo = new KvRepository(new FailingReleaseMemoryKvStore());
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/release-failure"),
+    preferredUsername: "release-failure",
+  });
+
+  await assert.rejects(
+    () =>
+      repo.addFollower(
+        new URL("https://example.com/ap/follow/release-failure"),
+        follower,
+      ),
+    { name: "TypeError", message: "Write failed." },
+  );
+});
 
 for (const name in factories) {
   const factory = factories[name];
@@ -632,6 +1009,85 @@ for (const name in factories) {
       assert.deepStrictEqual(await repo.countFollowers(), 0);
       assert.deepStrictEqual(await repo.hasFollower(followerA.id!), false);
       assert.deepStrictEqual(await repo.hasFollower(followerB.id!), false);
+    });
+
+    test("followers with multiple follow requests", async () => {
+      const follower = new Person({
+        id: new URL("https://example.com/ap/actor/alice"),
+        preferredUsername: "alice",
+      });
+      const followA = new URL(
+        "https://example.com/ap/follow/f2fb7255-d3ad-4fef-8f9a-1d0f2c2ec0b4",
+      );
+      const followB = new URL(
+        "https://example.com/ap/follow/a3d4cc4f-af93-4a9f-a7b3-0b7c0fe4901d",
+      );
+
+      await repo.addFollower(followA, follower);
+      await repo.addFollower(followB, follower);
+      assert.deepStrictEqual(await repo.countFollowers(), 1);
+      assert.ok(await repo.hasFollower(follower.id!));
+
+      assert.deepStrictEqual(
+        await repo.removeFollower(followA, follower.id!),
+        undefined,
+      );
+      assert.deepStrictEqual(await repo.countFollowers(), 1);
+      assert.ok(await repo.hasFollower(follower.id!));
+
+      assert.deepStrictEqual(
+        await (await repo.removeFollower(followB, follower.id!))?.toJsonLd(),
+        await follower.toJsonLd(),
+      );
+      assert.deepStrictEqual(await repo.countFollowers(), 0);
+      assert.deepStrictEqual(await repo.hasFollower(follower.id!), false);
+    });
+
+    test("followers with reassigned follow requests", async () => {
+      const oldFollower = new Person({
+        id: new URL("https://example.com/ap/actor/alice"),
+        preferredUsername: "alice",
+      });
+      const newFollower = new Person({
+        id: new URL("https://example.com/ap/actor/bob"),
+        preferredUsername: "bob",
+      });
+      const followA = new URL(
+        "https://example.com/ap/follow/f2fb7255-d3ad-4fef-8f9a-1d0f2c2ec0b4",
+      );
+      const followB = new URL(
+        "https://example.com/ap/follow/a3d4cc4f-af93-4a9f-a7b3-0b7c0fe4901d",
+      );
+
+      await repo.addFollower(followA, oldFollower);
+      await repo.addFollower(followB, oldFollower);
+      await repo.addFollower(followA, newFollower);
+
+      assert.deepStrictEqual(await repo.countFollowers(), 2);
+      assert.ok(await repo.hasFollower(oldFollower.id!));
+      assert.ok(await repo.hasFollower(newFollower.id!));
+
+      assert.deepStrictEqual(
+        await (await repo.removeFollower(followB, oldFollower.id!))
+          ?.toJsonLd(),
+        await oldFollower.toJsonLd(),
+      );
+      assert.deepStrictEqual(await repo.countFollowers(), 1);
+      assert.deepStrictEqual(await repo.hasFollower(oldFollower.id!), false);
+      assert.ok(await repo.hasFollower(newFollower.id!));
+
+      await repo.addFollower(followA, oldFollower);
+      assert.deepStrictEqual(await repo.countFollowers(), 1);
+      assert.ok(await repo.hasFollower(oldFollower.id!));
+      assert.deepStrictEqual(await repo.hasFollower(newFollower.id!), false);
+      assert.deepStrictEqual(
+        await Promise.all(
+          (await Array.fromAsync(repo.getFollowers())).map((follower) =>
+            follower.toJsonLd()
+          ),
+        ),
+        [await oldFollower.toJsonLd()],
+      );
     });
 
     test("sent follows", async () => {
