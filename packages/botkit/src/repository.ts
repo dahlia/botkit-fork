@@ -708,7 +708,10 @@ export class KvRepository implements Repository {
     if (this.kv.cas == null) {
       while (true) {
         await this.kv.set(lockKey, lockId, { ttl: kvLockTtl });
-        if (await this.kv.get(lockKey) !== lockId) continue;
+        if (await this.kv.get(lockKey) !== lockId) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          continue;
+        }
         try {
           return await operation();
         } finally {
