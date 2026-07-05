@@ -124,6 +124,34 @@ class NonCasMemoryKvStore implements KvStore {
   }
 }
 
+class FailingReleaseMemoryKvStore extends MemoryKvStore {
+  override set(
+    key: KvKey,
+    value: unknown,
+    options?: KvStoreSetOptions,
+  ): Promise<void> {
+    if (!key.includes("lock")) {
+      throw new TypeError("Write failed.");
+    }
+    return super.set(key, value, options);
+  }
+
+  override cas(
+    key: KvKey,
+    expectedValue: unknown,
+    newValue: unknown,
+    options?: KvStoreSetOptions,
+  ): Promise<boolean> {
+    if (
+      key.includes("lock") && typeof newValue === "object" &&
+      newValue != null && "released" in newValue
+    ) {
+      throw new TypeError("Release failed.");
+    }
+    return super.cas(key, expectedValue, newValue, options);
+  }
+}
+
 const keyPairs: CryptoKeyPair[] = [
   {
     publicKey: await importJwk({
@@ -393,6 +421,23 @@ test("KvRepository supports non-CAS follower mutations", async () => {
     follower,
   );
   assert.ok(!await repo.hasFollower(follower.id!));
+});
+
+test("KvRepository preserves errors when lock release fails", async () => {
+  const repo = new KvRepository(new FailingReleaseMemoryKvStore());
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/release-failure"),
+    preferredUsername: "release-failure",
+  });
+
+  await assert.rejects(
+    () =>
+      repo.addFollower(
+        new URL("https://example.com/ap/follow/release-failure"),
+        follower,
+      ),
+    { name: "TypeError", message: "Write failed." },
+  );
 });
 
 for (const name in factories) {

@@ -789,11 +789,15 @@ export class KvRepository implements Repository {
     try {
       return await operation();
     } finally {
-      const currentLock = await this.kv.get(lockKey);
-      if (isKvLock(currentLock) && currentLock.id === lock.id) {
-        await cas(lockKey, currentLock, { ...currentLock, released: true }, {
-          ttl: kvLockReleaseTtl,
-        });
+      try {
+        const currentLock = await this.kv.get(lockKey);
+        if (isKvLock(currentLock) && currentLock.id === lock.id) {
+          await cas(lockKey, currentLock, { ...currentLock, released: true }, {
+            ttl: kvLockReleaseTtl,
+          });
+        }
+      } catch (error) {
+        logger.warn("Failed to release KV lock: {error}", { error });
       }
     }
   }
