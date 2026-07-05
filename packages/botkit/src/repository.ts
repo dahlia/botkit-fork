@@ -30,11 +30,16 @@ export { Announce, Create } from "@fedify/vocab";
 
 const logger = getLogger(["botkit", "repository"]);
 const kvLockTtl = Temporal.Duration.from({ minutes: 5 });
+const kvLockPollIntervalMs = 100;
+const kvLockReleaseTtl = Temporal.Duration.from({
+  milliseconds: kvLockPollIntervalMs,
+});
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface KvLock {
   readonly id: string;
+  readonly released?: boolean;
 }
 
 function isKvLock(value: unknown): value is KvLock {
@@ -645,9 +650,10 @@ export class KvRepository implements Repository {
     followerId: string,
     followRequestId: string,
   ): Promise<void> {
-    const followRequestIds = await this.getFollowRequestsForFollowerLocked(
-      followerId,
-    );
+    const followRequestIds = await this
+      .getIndexedFollowRequestsForFollowerLocked(
+        followerId,
+      );
     if (!followRequestIds.includes(followRequestId)) {
       await this.kv.set(this.getFollowerFollowRequestsKey(followerId), [
         ...followRequestIds,
@@ -660,9 +666,10 @@ export class KvRepository implements Repository {
     followerId: string,
     followRequestId: string,
   ): Promise<void> {
-    const followRequestIds = await this.getFollowRequestsForFollowerLocked(
-      followerId,
-    );
+    const followRequestIds = await this
+      .getIndexedFollowRequestsForFollowerLocked(
+        followerId,
+      );
     await this.kv.set(
       this.getFollowerFollowRequestsKey(followerId),
       followRequestIds.filter((id) => id !== followRequestId),
@@ -672,7 +679,7 @@ export class KvRepository implements Repository {
   private async hasFollowRequestForFollowerLocked(
     followerId: string,
   ): Promise<boolean> {
-    const followRequestIds = await this.getFollowRequestsForFollowerLocked(
+    const followRequestIds = await this.rebuildFollowRequestsForFollowerLocked(
       followerId,
     );
     const currentFollowRequestIds: string[] = [];
@@ -693,7 +700,15 @@ export class KvRepository implements Repository {
     return currentFollowRequestIds.length > 0;
   }
 
-  private async getFollowRequestsForFollowerLocked(
+  private async getIndexedFollowRequestsForFollowerLocked(
+    followerId: string,
+  ): Promise<string[]> {
+    return await this.kv.get<string[]>(
+      this.getFollowerFollowRequestsKey(followerId),
+    ) ?? [];
+  }
+
+  private async rebuildFollowRequestsForFollowerLocked(
     followerId: string,
   ): Promise<string[]> {
     const indexKey = this.getFollowerFollowRequestsKey(followerId);
@@ -733,14 +748,16 @@ export class KvRepository implements Repository {
       ) {
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, kvLockPollIntervalMs));
     }
     try {
       return await operation();
     } finally {
       const currentLock = await this.kv.get(lockKey);
       if (isKvLock(currentLock) && currentLock.id === lock.id) {
-        await cas(lockKey, currentLock, undefined);
+        await cas(lockKey, currentLock, { ...currentLock, released: true }, {
+          ttl: kvLockReleaseTtl,
+        });
       }
     }
   }

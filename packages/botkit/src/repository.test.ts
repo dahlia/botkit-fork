@@ -51,7 +51,8 @@ const factories: Record<string, () => Repository> = {
 
 class RecordingMemoryKvStore extends MemoryKvStore {
   readonly lockOptions: KvStoreSetOptions[] = [];
-  readonly lockReleases: KvKey[] = [];
+  readonly lockReleaseOptions: KvStoreSetOptions[] = [];
+  readonly undefinedLockReleases: KvKey[] = [];
 
   override set(
     key: KvKey,
@@ -70,12 +71,26 @@ class RecordingMemoryKvStore extends MemoryKvStore {
   ): Promise<boolean> {
     if (key.includes("lock")) {
       if (newValue === undefined) {
-        this.lockReleases.push(key);
+        this.undefinedLockReleases.push(key);
+      } else if (
+        typeof newValue === "object" && newValue != null &&
+        "released" in newValue
+      ) {
+        this.lockReleaseOptions.push(options ?? {});
       } else {
         this.lockOptions.push(options ?? {});
       }
     }
     return super.cas(key, expectedValue, newValue, options);
+  }
+}
+
+class RecordingListMemoryKvStore extends MemoryKvStore {
+  listCalls = 0;
+
+  override list(prefix?: KvKey): AsyncIterable<KvStoreListEntry> {
+    this.listCalls++;
+    return super.list(prefix);
   }
 }
 
@@ -172,7 +187,9 @@ test("KvRepository uses expiring follower locks", async () => {
 
   assert.ok(kv.lockOptions.length > 0);
   assert.ok(kv.lockOptions.every((options) => options.ttl != null));
-  assert.ok(kv.lockReleases.length > 0);
+  assert.ok(kv.lockReleaseOptions.length > 0);
+  assert.ok(kv.lockReleaseOptions.every((options) => options.ttl != null));
+  assert.deepStrictEqual(kv.undefinedLockReleases, []);
 });
 
 test("KvRepository deletes stale follower indexes", async () => {
@@ -229,6 +246,33 @@ test("KvRepository rebuilds incomplete follower indexes", async () => {
   assert.deepStrictEqual(await kv.get(indexKey), [secondFollow.href]);
 });
 
+test("KvRepository uses follower indexes when adding requests", async () => {
+  const kv = new RecordingListMemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/index-add"),
+    preferredUsername: "index-add",
+  });
+  const firstFollow = new URL("https://example.com/ap/follow/index-add/1");
+  const secondFollow = new URL("https://example.com/ap/follow/index-add/2");
+  const indexKey: KvKey = [
+    "_botkit",
+    "followRequests",
+    "followers",
+    follower.id!.href,
+  ];
+
+  await repo.addFollower(firstFollow, follower);
+  kv.listCalls = 0;
+  await repo.addFollower(secondFollow, follower);
+
+  assert.deepStrictEqual(await kv.get(indexKey), [
+    firstFollow.href,
+    secondFollow.href,
+  ]);
+  assert.deepStrictEqual(kv.listCalls, 0);
+});
+
 test("KvRepository recovers legacy follower locks", async () => {
   const kv = new MemoryKvStore();
   const repo = new KvRepository(kv);
@@ -245,7 +289,7 @@ test("KvRepository recovers legacy follower locks", async () => {
   );
 
   assert.ok(await repo.hasFollower(follower.id!));
-  assert.deepStrictEqual(await kv.get(lockKey), undefined);
+  assert.notDeepStrictEqual(await kv.get(lockKey), follower.id!.href);
 });
 
 test("KvRepository requires CAS for follower mutations", async () => {
