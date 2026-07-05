@@ -21,7 +21,14 @@ import {
   MemoryKvStore,
 } from "@fedify/fedify/federation";
 import { exportJwk, importJwk } from "@fedify/fedify/sig";
-import { Create, Follow, Note, Person, PUBLIC_COLLECTION } from "@fedify/vocab";
+import {
+  Create,
+  Follow,
+  Note,
+  Person,
+  PUBLIC_COLLECTION,
+  QuoteAuthorization,
+} from "@fedify/vocab";
 import assert from "node:assert";
 import { describe, test } from "node:test";
 import {
@@ -49,6 +56,121 @@ const factories: Record<string, () => Repository> = {
   MemoryRepository: createMemoryRepository,
   MemoryCachedRepository: createMemoryCachedRepository,
 };
+
+for (const [name, factory] of Object.entries(factories)) {
+  test(`${name} stores quote authorizations`, async () => {
+    const repository = factory();
+    const id = "01942976-3400-7f34-872e-2cbf0f9eeac4" as Uuid;
+    const interactingObject = new URL("https://remote.example/notes/1");
+    const authorization = new QuoteAuthorization({
+      id: new URL(
+        `https://example.com/ap/actor/bot/quote-authorization/${id}`,
+      ),
+      attribution: new URL("https://example.com/ap/actor/bot"),
+      interactingObject,
+      interactionTarget: new URL("https://example.com/ap/note/1"),
+    });
+
+    await repository.addQuoteAuthorization("bot", id, authorization);
+
+    assert.deepStrictEqual(
+      (await repository.getQuoteAuthorization("bot", id))?.id?.href,
+      authorization.id?.href,
+    );
+    assert.deepStrictEqual(
+      (await repository.findQuoteAuthorization("bot", interactingObject))?.id
+        ?.href,
+      authorization.id?.href,
+    );
+    assert.deepStrictEqual(
+      (await repository.removeQuoteAuthorization("bot", id))?.id?.href,
+      authorization.id?.href,
+    );
+    assert.deepStrictEqual(
+      await repository.getQuoteAuthorization("bot", id),
+      undefined,
+    );
+    assert.deepStrictEqual(
+      await repository.findQuoteAuthorization("bot", interactingObject),
+      undefined,
+    );
+  });
+
+  test(`${name} keeps the first quote authorization for a quote`, async () => {
+    const repository = factory();
+    const firstId = "01942976-3400-7f34-872e-2cbf0f9eeac4" as Uuid;
+    const secondId = "01942976-3400-7f34-872e-2cbf0f9eeac5" as Uuid;
+    const interactingObject = new URL("https://remote.example/notes/1");
+    const target = new URL("https://example.com/ap/note/1");
+    const first = new QuoteAuthorization({
+      id: new URL(
+        `https://example.com/ap/actor/bot/quote-authorization/${firstId}`,
+      ),
+      attribution: new URL("https://example.com/ap/actor/bot"),
+      interactingObject,
+      interactionTarget: target,
+    });
+    const second = new QuoteAuthorization({
+      id: new URL(
+        `https://example.com/ap/actor/bot/quote-authorization/${secondId}`,
+      ),
+      attribution: new URL("https://example.com/ap/actor/bot"),
+      interactingObject,
+      interactionTarget: target,
+    });
+
+    await repository.addQuoteAuthorization("bot", firstId, first);
+    await repository.addQuoteAuthorization("bot", secondId, second);
+
+    assert.deepStrictEqual(
+      (await repository.findQuoteAuthorization("bot", interactingObject))?.id
+        ?.href,
+      first.id?.href,
+    );
+    assert.deepStrictEqual(
+      await repository.getQuoteAuthorization("bot", secondId),
+      undefined,
+    );
+  });
+}
+
+test("MemoryCachedRepository keeps duplicate quote authorizations out of cache", async () => {
+  const underlying = createKvRepository();
+  const repository = new MemoryCachedRepository(underlying);
+  const firstId = "01942976-3400-7f34-872e-2cbf0f9eeac4" as Uuid;
+  const secondId = "01942976-3400-7f34-872e-2cbf0f9eeac5" as Uuid;
+  const interactingObject = new URL("https://remote.example/notes/1");
+  const target = new URL("https://example.com/ap/note/1");
+  const first = new QuoteAuthorization({
+    id: new URL(
+      `https://example.com/ap/actor/bot/quote-authorization/${firstId}`,
+    ),
+    attribution: new URL("https://example.com/ap/actor/bot"),
+    interactingObject,
+    interactionTarget: target,
+  });
+  const second = new QuoteAuthorization({
+    id: new URL(
+      `https://example.com/ap/actor/bot/quote-authorization/${secondId}`,
+    ),
+    attribution: new URL("https://example.com/ap/actor/bot"),
+    interactingObject,
+    interactionTarget: target,
+  });
+
+  await underlying.addQuoteAuthorization("bot", firstId, first);
+  await repository.addQuoteAuthorization("bot", secondId, second);
+
+  assert.deepStrictEqual(
+    (await repository.findQuoteAuthorization("bot", interactingObject))?.id
+      ?.href,
+    first.id?.href,
+  );
+  assert.deepStrictEqual(
+    await repository.getQuoteAuthorization("bot", secondId),
+    undefined,
+  );
+});
 
 function scopedKvKey(...rest: readonly string[]): KvKey {
   return ["_botkit", "bots", "bot", ...rest];

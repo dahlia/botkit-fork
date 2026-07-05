@@ -18,7 +18,14 @@ import {
   type SqliteRepositoryOptions,
 } from "@fedify/botkit-sqlite";
 import { importJwk } from "@fedify/fedify/sig";
-import { Create, Follow, Note, Person, PUBLIC_COLLECTION } from "@fedify/vocab";
+import {
+  Create,
+  Follow,
+  Note,
+  Person,
+  PUBLIC_COLLECTION,
+  QuoteAuthorization,
+} from "@fedify/vocab";
 import assert from "node:assert";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -318,6 +325,46 @@ describe("SqliteRepository", () => {
         "option1": 2,
         "option2": 1,
       });
+    } finally {
+      repo.close();
+    }
+  });
+
+  test("keeps the first quote authorization for a quote", async () => {
+    const repo = createSqliteRepository();
+    try {
+      const firstId = "01942976-3400-7f34-872e-2cbf0f9eeac4";
+      const secondId = "01942976-3400-7f34-872e-2cbf0f9eeac5";
+      const quote = new URL("https://remote.example/notes/quote");
+      const target = new URL("https://example.com/ap/note/1");
+      const first = new QuoteAuthorization({
+        id: new URL(
+          `https://example.com/ap/actor/bot/quote-authorization/${firstId}`,
+        ),
+        attribution: new URL("https://example.com/ap/actor/bot"),
+        interactingObject: quote,
+        interactionTarget: target,
+      });
+      const second = new QuoteAuthorization({
+        id: new URL(
+          `https://example.com/ap/actor/bot/quote-authorization/${secondId}`,
+        ),
+        attribution: new URL("https://example.com/ap/actor/bot"),
+        interactingObject: quote,
+        interactionTarget: target,
+      });
+
+      await repo.addQuoteAuthorization("bot", firstId, first);
+      await repo.addQuoteAuthorization("bot", secondId, second);
+
+      assert.deepStrictEqual(
+        (await repo.findQuoteAuthorization("bot", quote))?.id?.href,
+        first.id?.href,
+      );
+      assert.deepStrictEqual(
+        await repo.getQuoteAuthorization("bot", secondId),
+        undefined,
+      );
     } finally {
       repo.close();
     }

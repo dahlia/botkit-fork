@@ -30,6 +30,7 @@ import {
   Follow,
   isActor,
   Object,
+  QuoteAuthorization,
 } from "@fedify/vocab";
 import { getLogger } from "@logtape/logtape";
 import postgres from "postgres";
@@ -48,6 +49,7 @@ const followerAdvisoryLockNamespace = 0x4246;
 const schemaUpgradeAdvisoryLockNamespace = 0x424b;
 
 type Queryable = Pick<postgres.Sql, "unsafe">;
+type TransactionalQueryable = Queryable & Pick<postgres.Sql, "begin">;
 type QueryParameter = postgres.SerializableParameter;
 
 /**
@@ -133,6 +135,37 @@ export async function initializePostgresRepositorySchema(
   prepare = true,
 ): Promise<void> {
   const validatedSchema = validateSchemaName(schema);
+  if (hasTransaction(sql)) {
+    await sql.begin(async (tx) => {
+      await initializePostgresRepositorySchemaInTransaction(
+        tx,
+        validatedSchema,
+        prepare,
+      );
+    });
+    return;
+  }
+  await initializePostgresRepositorySchemaInTransaction(
+    sql,
+    validatedSchema,
+    prepare,
+  );
+}
+
+async function initializePostgresRepositorySchemaInTransaction(
+  sql: Queryable,
+  validatedSchema: string,
+  prepare: boolean,
+): Promise<void> {
+  await execute(
+    sql,
+    `SELECT pg_catalog.pg_advisory_xact_lock(
+       $1,
+       pg_catalog.hashtext($2)
+     )`,
+    [schemaUpgradeAdvisoryLockNamespace, validatedSchema],
+    prepare,
+  );
   await execute(
     sql,
     `CREATE SCHEMA IF NOT EXISTS "${validatedSchema}"`,
@@ -244,6 +277,19 @@ export async function initializePostgresRepositorySchema(
   );
   await execute(
     sql,
+    `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."quote_authorizations" (
+       bot_id TEXT NOT NULL,
+       id TEXT NOT NULL,
+       interacting_object TEXT NOT NULL,
+       authorization_json JSONB NOT NULL,
+       PRIMARY KEY (bot_id, id),
+       UNIQUE (bot_id, interacting_object)
+     )`,
+    [],
+    prepare,
+  );
+  await execute(
+    sql,
     `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."poll_votes" (
        bot_id TEXT NOT NULL,
        message_id TEXT NOT NULL,
@@ -270,6 +316,7 @@ const upgradableTables = [
   "follow_requests",
   "sent_follows",
   "followees",
+  "quote_authorizations",
   "poll_votes",
 ] as const;
 
@@ -410,6 +457,20 @@ async function upgradeLegacySchema(
           DROP CONSTRAINT IF EXISTS "followees_pkey";
         ALTER TABLE "${schema}"."followees"
           ADD PRIMARY KEY (bot_id, followee_id);
+        upgraded := true;
+      END IF;
+
+      IF ${legacyTable("quote_authorizations")} THEN
+        ALTER TABLE "${schema}"."quote_authorizations"
+          ADD COLUMN bot_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${schema}"."quote_authorizations"
+          ALTER COLUMN bot_id DROP DEFAULT;
+        ALTER TABLE "${schema}"."quote_authorizations"
+          DROP CONSTRAINT IF EXISTS "quote_authorizations_pkey";
+        ALTER TABLE "${schema}"."quote_authorizations"
+          ADD PRIMARY KEY (bot_id, id);
+        ALTER TABLE "${schema}"."quote_authorizations"
+          ADD UNIQUE (bot_id, interacting_object);
         upgraded := true;
       END IF;
 
@@ -964,6 +1025,78 @@ export class PostgresRepository implements Repository, AsyncDisposable {
     for (const row of rows) yield row.bot_id;
   }
 
+  async addQuoteAuthorization(
+    identifier: string,
+    id: Uuid,
+    authorization: QuoteAuthorization,
+  ): Promise<void> {
+    await this.ensureReady();
+    const interactingObject = authorization.interactingObjectId;
+    if (interactingObject == null) {
+      throw new TypeError(
+        "The quote authorization interacting object is missing.",
+      );
+    }
+    await this.query(
+      this.sql,
+      `INSERT INTO ${this.table("quote_authorizations")}
+         (bot_id, id, interacting_object, authorization_json)
+       VALUES ($1, $2, $3, $4::jsonb)
+       ON CONFLICT (bot_id, interacting_object) DO NOTHING`,
+      [
+        identifier,
+        id,
+        interactingObject.href,
+        serializeJson(await authorization.toJsonLd({ format: "compact" })),
+      ],
+    );
+  }
+
+  async getQuoteAuthorization(
+    identifier: string,
+    id: Uuid,
+  ): Promise<QuoteAuthorization | undefined> {
+    await this.ensureReady();
+    const rows = await this.query<{ readonly authorization_json: unknown }>(
+      this.sql,
+      `SELECT authorization_json
+         FROM ${this.table("quote_authorizations")}
+        WHERE bot_id = $1 AND id = $2`,
+      [identifier, id],
+    );
+    return await parseQuoteAuthorization(rows[0]?.authorization_json);
+  }
+
+  async findQuoteAuthorization(
+    identifier: string,
+    interactingObject: URL,
+  ): Promise<QuoteAuthorization | undefined> {
+    await this.ensureReady();
+    const rows = await this.query<{ readonly authorization_json: unknown }>(
+      this.sql,
+      `SELECT authorization_json
+         FROM ${this.table("quote_authorizations")}
+        WHERE bot_id = $1 AND interacting_object = $2`,
+      [identifier, interactingObject.href],
+    );
+    return await parseQuoteAuthorization(rows[0]?.authorization_json);
+  }
+
+  async removeQuoteAuthorization(
+    identifier: string,
+    id: Uuid,
+  ): Promise<QuoteAuthorization | undefined> {
+    await this.ensureReady();
+    const rows = await this.query<{ readonly authorization_json: unknown }>(
+      this.sql,
+      `DELETE FROM ${this.table("quote_authorizations")}
+        WHERE bot_id = $1 AND id = $2
+    RETURNING authorization_json`,
+      [identifier, id],
+    );
+    return await parseQuoteAuthorization(rows[0]?.authorization_json);
+  }
+
   async vote(
     identifier: string,
     messageId: Uuid,
@@ -1154,6 +1287,10 @@ function validateSchemaName(schema: string): string {
   return schema;
 }
 
+function hasTransaction(sql: Queryable): sql is TransactionalQueryable {
+  return typeof (sql as Partial<TransactionalQueryable>).begin === "function";
+}
+
 async function execute<TRow extends object>(
   sql: Queryable,
   query: string,
@@ -1210,6 +1347,19 @@ async function parseFollow(json: unknown): Promise<Follow | undefined> {
     return await Follow.fromJsonLd(normalized);
   } catch (error) {
     logger.warn("Failed to parse follow activity.", { error });
+  }
+  return undefined;
+}
+
+async function parseQuoteAuthorization(
+  json: unknown,
+): Promise<QuoteAuthorization | undefined> {
+  const normalized = normalizeJsonObject(json);
+  if (normalized == null) return undefined;
+  try {
+    return await QuoteAuthorization.fromJsonLd(normalized);
+  } catch (error) {
+    logger.warn("Failed to parse quote authorization.", { error });
   }
   return undefined;
 }

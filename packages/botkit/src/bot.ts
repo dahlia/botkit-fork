@@ -30,6 +30,7 @@ import type {
   MentionEventHandler,
   MessageEventHandler,
   QuoteEventHandler,
+  QuoteRequestEventHandler,
   ReactionEventHandler,
   RejectEventHandler,
   ReplyEventHandler,
@@ -39,6 +40,7 @@ import type {
   UnlikeEventHandler,
   VoteEventHandler,
 } from "./events.ts";
+import type { QuotePolicyOption } from "./quote.ts";
 import type { Repository } from "./repository.ts";
 import type { Session } from "./session.ts";
 import type { Text } from "./text.ts";
@@ -87,6 +89,12 @@ export interface BotEventHandlers<TContextData> {
    * @since 0.2.0
    */
   onQuote?: QuoteEventHandler<TContextData>;
+
+  /**
+   * An event handler for a quote request to the bot.
+   * @since 0.5.0
+   */
+  onQuoteRequest?: QuoteRequestEventHandler<TContextData>;
 
   /**
    * An event handler for a message shown to the bot's timeline.  To listen
@@ -180,6 +188,12 @@ export interface ReadonlyBot {
    * How the bot handles incoming follow requests.
    */
   readonly followerPolicy: "accept" | "reject" | "manual";
+
+  /**
+   * How the bot handles incoming quote requests for its messages.
+   * @since 0.5.0
+   */
+  readonly quotePolicy: QuotePolicyOption;
 }
 
 /**
@@ -349,6 +363,16 @@ export interface CreateBotOptions<TContextData> {
    * @default `"accept"`
    */
   readonly followerPolicy?: "accept" | "reject" | "manual";
+
+  /**
+   * Who can quote messages published by the bot.
+   *
+   * This policy is advertised on outgoing messages and is used as the
+   * fallback for older messages that do not have a serialized quote policy.
+   * @default `"public"`
+   * @since 0.5.0
+   */
+  readonly quotePolicy?: QuotePolicyOption;
 
   /**
    * The underlying key-value store to use for storing data.

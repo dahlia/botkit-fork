@@ -226,6 +226,51 @@ It can be changed after the bot is federated.
 > or `FollowRequest.reject()` in the [`Bot.onFollow`](./events.md#follow) event
 > handler.
 
+### `~CreateBotOptions.quotePolicy`
+
+Who can quote messages published by the bot by default.  BotKit serializes the
+policy into each outgoing message and uses it as the fallback for older stored
+messages that do not have a quote policy yet.
+
+The shorthand values are:
+
+`"public"` (default)
+:   Accept every quote request automatically.
+
+`"followers"`
+:   Accept quote requests from followers automatically.
+
+`"manual"`
+:   Leave every quote request pending for the
+    [`Bot.onQuoteRequest`](./events.md#quote-request) event handler.
+
+`"nobody"`
+:   Reject every quote request except the bot's own requests.
+
+You can also use the full two-axis policy object:
+
+~~~~ typescript twoslash
+import type { KvStore } from "@fedify/fedify";
+
+declare const kv: KvStore;
+// ---cut-before---
+import { createBot } from "@fedify/botkit";
+
+const bot = createBot({
+  username: "mybot",
+  name: "My Bot",
+  kv,
+  quotePolicy: {
+    automatic: "followers",
+    manual: "public",
+  },
+});
+~~~~
+
+This accepts followers automatically and sends other quote requests to
+`Bot.onQuoteRequest` for manual moderation.  A publish call can override the
+default with `Session.publish()`'s `quotePolicy` option.
+
 ### `~CreateBotOptions.queue`
 
 The message queue for handling incoming and outgoing activities.  If omitted,

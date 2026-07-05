@@ -8,6 +8,7 @@
     "jsr:@fedify/markdown-it-mention@0.3": "0.3.0",
     "jsr:@fedify/uri-template@^2.3.1": "2.3.1",
     "jsr:@fedify/vocab-runtime@^2.3.1": "2.3.1",
+    "jsr:@fedify/vocab@2.3.1": "2.3.1",
     "jsr:@fedify/vocab@^2.3.1": "2.3.1",
     "jsr:@fedify/webfinger@^2.3.1": "2.3.1",
     "jsr:@hongminhee/x-forwarded-fetch@0.2": "0.2.0",

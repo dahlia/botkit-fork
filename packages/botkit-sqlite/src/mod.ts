@@ -29,6 +29,7 @@ import {
   Follow,
   isActor,
   Object,
+  QuoteAuthorization,
 } from "@fedify/vocab";
 import { getLogger } from "@logtape/logtape";
 import { DatabaseSync } from "node:sqlite";
@@ -122,6 +123,7 @@ export class SqliteRepository implements Repository, Disposable {
       "follow_requests",
       "sent_follows",
       "followees",
+      "quote_authorizations",
       "poll_votes",
     ].filter((table) => this.tableExists(table) && !this.hasBotIdColumn(table));
     if (tables.length < 1) return;
@@ -237,6 +239,28 @@ export class SqliteRepository implements Repository, Disposable {
         this.db.exec("DROP TABLE followees");
         this.db.exec("ALTER TABLE followees_new RENAME TO followees");
       }
+      if (tables.includes("quote_authorizations")) {
+        this.db.exec(`
+          CREATE TABLE quote_authorizations_new (
+            bot_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            interacting_object TEXT NOT NULL,
+            authorization_json TEXT NOT NULL,
+            PRIMARY KEY (bot_id, id),
+            UNIQUE (bot_id, interacting_object)
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO quote_authorizations_new
+            (bot_id, id, interacting_object, authorization_json)
+          SELECT '', id, interacting_object, authorization_json
+          FROM quote_authorizations
+        `);
+        this.db.exec("DROP TABLE quote_authorizations");
+        this.db.exec(
+          "ALTER TABLE quote_authorizations_new RENAME TO quote_authorizations",
+        );
+      }
       if (tables.includes("poll_votes")) {
         this.db.exec(`
           CREATE TABLE poll_votes_new (
@@ -300,6 +324,7 @@ export class SqliteRepository implements Repository, Disposable {
           "follow_requests",
           "sent_follows",
           "followees",
+          "quote_authorizations",
           "poll_votes",
         ]
       ) {
@@ -401,6 +426,17 @@ export class SqliteRepository implements Repository, Disposable {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_followees_followee_id
       ON followees(followee_id)
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS quote_authorizations (
+        bot_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        interacting_object TEXT NOT NULL,
+        authorization_json TEXT NOT NULL,
+        PRIMARY KEY (bot_id, id),
+        UNIQUE (bot_id, interacting_object)
+      )
     `);
 
     // Poll votes table
@@ -966,6 +1002,72 @@ export class SqliteRepository implements Repository, Disposable {
     for (const row of rows) yield row.bot_id;
   }
 
+  async addQuoteAuthorization(
+    identifier: string,
+    id: Uuid,
+    authorization: QuoteAuthorization,
+  ): Promise<void> {
+    const interactingObject = authorization.interactingObjectId;
+    if (interactingObject == null) {
+      throw new TypeError(
+        "The quote authorization interacting object is missing.",
+      );
+    }
+    const stmt = this.db.prepare(`
+      INSERT INTO quote_authorizations
+        (bot_id, id, interacting_object, authorization_json)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(bot_id, interacting_object) DO NOTHING
+    `);
+    stmt.run(
+      identifier,
+      id,
+      interactingObject.href,
+      JSON.stringify(await authorization.toJsonLd({ format: "compact" })),
+    );
+  }
+
+  async getQuoteAuthorization(
+    identifier: string,
+    id: Uuid,
+  ): Promise<QuoteAuthorization | undefined> {
+    const stmt = this.db.prepare(`
+      SELECT authorization_json FROM quote_authorizations
+      WHERE bot_id = ? AND id = ?
+    `);
+    const row = stmt.get(identifier, id) as
+      | { authorization_json: string }
+      | undefined;
+    return await parseQuoteAuthorizationJson(row?.authorization_json);
+  }
+
+  async findQuoteAuthorization(
+    identifier: string,
+    interactingObject: URL,
+  ): Promise<QuoteAuthorization | undefined> {
+    const stmt = this.db.prepare(`
+      SELECT authorization_json FROM quote_authorizations
+      WHERE bot_id = ? AND interacting_object = ?
+    `);
+    const row = stmt.get(identifier, interactingObject.href) as
+      | { authorization_json: string }
+      | undefined;
+    return await parseQuoteAuthorizationJson(row?.authorization_json);
+  }
+
+  async removeQuoteAuthorization(
+    identifier: string,
+    id: Uuid,
+  ): Promise<QuoteAuthorization | undefined> {
+    const authorization = await this.getQuoteAuthorization(identifier, id);
+    if (authorization == null) return undefined;
+    const stmt = this.db.prepare(
+      "DELETE FROM quote_authorizations WHERE bot_id = ? AND id = ?",
+    );
+    stmt.run(identifier, id);
+    return authorization;
+  }
+
   vote(
     identifier: string,
     messageId: Uuid,
@@ -1016,5 +1118,17 @@ export class SqliteRepository implements Repository, Disposable {
 
   forIdentifier(identifier: string): ActorScopedRepository {
     return new ActorScopedRepository(this, identifier);
+  }
+}
+
+async function parseQuoteAuthorizationJson(
+  json: string | undefined,
+): Promise<QuoteAuthorization | undefined> {
+  if (json == null) return undefined;
+  try {
+    return await QuoteAuthorization.fromJsonLd(JSON.parse(json));
+  } catch (error) {
+    logger.warn("Failed to parse quote authorization", { error });
+    return undefined;
   }
 }

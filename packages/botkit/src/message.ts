@@ -30,6 +30,7 @@ import type {
   SessionPublishOptions,
   SessionPublishOptionsWithClass,
 } from "./session.ts";
+import type { QuotePolicyOption } from "./quote.ts";
 import type { Text } from "./text.ts";
 export {
   Article,
@@ -227,8 +228,12 @@ export interface AuthorizedMessage<T extends MessageClass, TContextData>
   /**
    * Updates the message with new content.
    * @param text The new content of the message.
+   * @param options The options for updating the message.
    */
-  update(text: Text<"block", TContextData>): Promise<void>;
+  update(
+    text: Text<"block", TContextData>,
+    options?: AuthorizedMessageUpdateOptions,
+  ): Promise<void>;
 
   /**
    * Deletes the message, if possible.
@@ -236,6 +241,27 @@ export interface AuthorizedMessage<T extends MessageClass, TContextData>
    * If the message is already deleted, it will be a no-op.
    */
   delete(): Promise<void>;
+
+  /**
+   * Revokes the authorization stamp issued to a quote of this message.
+   * @param quote The quoted message or its URI.
+   * @throws {TypeError} The quote authorization does not exist.
+   * @since 0.5.0
+   */
+  unauthorizeQuote(
+    quote: Message<MessageClass, TContextData> | URL,
+  ): Promise<void>;
+}
+
+/**
+ * Options for updating an authorized message.
+ * @since 0.5.0
+ */
+export interface AuthorizedMessageUpdateOptions {
+  /**
+   * Who can quote the updated message.
+   */
+  readonly quotePolicy?: QuotePolicyOption;
 }
 
 /**

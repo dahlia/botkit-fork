@@ -36,6 +36,7 @@ import {
   PropertyValue,
   PUBLIC_COLLECTION,
   Question,
+  QuoteRequest,
   type Recipient,
   Reject,
   Service,
@@ -47,7 +48,12 @@ import { describe, test } from "node:test";
 import { BotImpl } from "./bot-impl.ts";
 import type { CustomEmoji } from "./emoji.ts";
 import type { FollowRequest } from "./follow.ts";
-import type { Message, MessageClass, SharedMessage } from "./message.ts";
+import type {
+  AuthorizedMessage,
+  Message,
+  MessageClass,
+  SharedMessage,
+} from "./message.ts";
 import type { Vote } from "./poll.ts";
 import type { Like, Reaction } from "./reaction.ts";
 import { MemoryRepository } from "./repository.ts";
@@ -3288,5 +3294,311 @@ test("BotImpl.onLiked() with legacy message URIs", async () => {
   assert.deepStrictEqual(
     likes[0].message.id,
     new URL(`https://example.com/ap/actor/bot/note/${messageId}`),
+  );
+});
+
+test("BotImpl.onQuoteRequested() accepts public quote requests", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  let targetMessage: AuthorizedMessage<MessageClass, void> | undefined;
+  let quoteMessage: Message<MessageClass, void> | undefined;
+  bot.onQuoteRequest = (_session, request) => {
+    targetMessage = request.target;
+    quoteMessage = request.quote;
+  };
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const target = await session.publish(text`Quote me`);
+  ctx.sentActivities = [];
+  const actor = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const quote = new Note({
+    id: new URL("https://remote.example/notes/quote"),
+    attribution: actor.id,
+    quoteUrl: target.id,
+    content: "Quoted.",
+    to: PUBLIC_COLLECTION,
+  });
+  const request = new QuoteRequest({
+    id: new URL("https://remote.example/quote-requests/1"),
+    actor,
+    object: target.id,
+    instrument: quote,
+  });
+
+  await bot.onQuoteRequested(ctx, request);
+
+  assert.deepStrictEqual(ctx.sentActivities.length, 1);
+  const { recipients, activity } = ctx.sentActivities[0];
+  assert.deepStrictEqual(recipients, [actor]);
+  assert.ok(activity instanceof Accept);
+  assert.deepStrictEqual(
+    activity.resultId?.href.startsWith(
+      "https://example.com/ap/actor/bot/quote-authorization/",
+    ),
+    true,
+  );
+  const authorization = await repository.findQuoteAuthorization(
+    "bot",
+    quote.id!,
+  );
+  assert.deepStrictEqual(authorization?.interactingObjectId, quote.id);
+  assert.deepStrictEqual(authorization?.interactionTargetId, target.id);
+  assert.ok(authorization?.id != null);
+
+  ctx.sentActivities = [];
+  await bot.onQuoteRequested(
+    ctx,
+    new QuoteRequest({
+      id: new URL("https://remote.example/quote-requests/1-again"),
+      actor,
+      object: target.id,
+      instrument: quote,
+    }),
+  );
+  assert.deepStrictEqual(ctx.sentActivities.length, 1);
+  assert.ok(ctx.sentActivities[0].activity instanceof Accept);
+  assert.deepStrictEqual(
+    ctx.sentActivities[0].activity.resultId?.href,
+    authorization.id.href,
+  );
+
+  assert.ok(targetMessage != null);
+  assert.ok(quoteMessage != null);
+  ctx.sentActivities = [];
+  await targetMessage.unauthorizeQuote(quoteMessage);
+
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorization("bot", quote.id!),
+    undefined,
+  );
+  assert.deepStrictEqual(ctx.sentActivities.length, 2);
+  const { recipients: deleteRecipients, activity: deleteActivity } =
+    ctx.sentActivities[0];
+  assert.deepStrictEqual(deleteRecipients, [actor]);
+  assert.ok(deleteActivity instanceof Delete);
+  assert.deepStrictEqual(deleteActivity.objectId, authorization.id);
+  assert.deepStrictEqual(ctx.sentActivities[1].recipients, "followers");
+});
+
+test("BotImpl.onQuoteRequested() rejects disallowed quote requests", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+    quotePolicy: "nobody",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const target = await session.publish(text`Do not quote`, {
+    quotePolicy: "nobody",
+  });
+  ctx.sentActivities = [];
+  const actor = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  await repository.addFollower(
+    "bot",
+    new URL("https://remote.example/activities/follow"),
+    actor,
+  );
+  const quote = new Note({
+    id: new URL("https://remote.example/notes/rejected-quote"),
+    attribution: actor.id,
+    quoteUrl: target.id,
+    content: "Quoted.",
+    to: PUBLIC_COLLECTION,
+  });
+
+  await bot.onQuoteRequested(
+    ctx,
+    new QuoteRequest({
+      id: new URL("https://remote.example/quote-requests/2"),
+      actor,
+      object: target.id,
+      instrument: quote,
+    }),
+  );
+
+  assert.deepStrictEqual(ctx.sentActivities.length, 1);
+  assert.ok(ctx.sentActivities[0].activity instanceof Reject);
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorization("bot", quote.id!),
+    undefined,
+  );
+});
+
+test("AuthorizedMessage.unauthorizeQuote() checks the target message", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  let quoteMessage: Message<MessageClass, void> | undefined;
+  bot.onQuoteRequest = (_session, request) => {
+    quoteMessage = request.quote;
+  };
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const firstTarget = await session.publish(text`Quote this`);
+  const secondTarget = await session.publish(text`Not this`);
+  ctx.sentActivities = [];
+  const actor = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const quote = new Note({
+    id: new URL("https://remote.example/notes/quote"),
+    attribution: actor.id,
+    quoteUrl: firstTarget.id,
+    content: "Quoted.",
+    to: PUBLIC_COLLECTION,
+  });
+
+  await bot.onQuoteRequested(
+    ctx,
+    new QuoteRequest({
+      id: new URL("https://remote.example/quote-requests/3"),
+      actor,
+      object: firstTarget.id,
+      instrument: quote,
+    }),
+  );
+
+  const authorization = await repository.findQuoteAuthorization(
+    "bot",
+    quote.id!,
+  );
+  assert.ok(quoteMessage != null);
+  assert.ok(authorization != null);
+  const authorizedQuote = quoteMessage;
+  ctx.sentActivities = [];
+  await assert.rejects(
+    () => secondTarget.unauthorizeQuote(authorizedQuote),
+    /does not belong to this message/,
+  );
+
+  assert.deepStrictEqual(
+    (await repository.findQuoteAuthorization("bot", quote.id!))?.id?.href,
+    authorization.id?.href,
+  );
+  assert.deepStrictEqual(ctx.sentActivities, []);
+});
+
+test("AuthorizedMessage.unauthorizeQuote() revokes when quote lookup fails", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const target = await new SessionImpl(bot, ctx).publish(text`Quote this`);
+  ctx.sentActivities = [];
+  const actor = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const quote = new Note({
+    id: new URL("https://remote.example/notes/deleted-quote"),
+    attribution: actor.id,
+    quoteUrl: target.id,
+    content: "Quoted.",
+    to: PUBLIC_COLLECTION,
+  });
+
+  await bot.onQuoteRequested(
+    ctx,
+    new QuoteRequest({
+      id: new URL("https://remote.example/quote-requests/4"),
+      actor,
+      object: target.id,
+      instrument: quote,
+    }),
+  );
+
+  const authorization = await repository.findQuoteAuthorization(
+    "bot",
+    quote.id!,
+  );
+  assert.ok(authorization != null);
+  Object.defineProperty(ctx, "lookupObject", {
+    value: () => Promise.reject(new TypeError("Remote quote is gone.")),
+    configurable: true,
+  });
+  ctx.sentActivities = [];
+
+  await target.unauthorizeQuote(quote.id!);
+
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorization("bot", quote.id!),
+    undefined,
+  );
+  assert.deepStrictEqual(ctx.sentActivities.length, 1);
+  const { recipients, activity } = ctx.sentActivities[0];
+  assert.deepStrictEqual(recipients, "followers");
+  assert.ok(activity instanceof Delete);
+  assert.deepStrictEqual(activity.objectId, authorization.id);
+});
+
+test("BotImpl.onQuoteRequested() rejects another actor's quote", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+    quotePolicy: "followers",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const target = await session.publish(text`Followers may quote me`);
+  ctx.sentActivities = [];
+  const requester = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const quoteAuthor = new Person({
+    id: new URL("https://remote.example/users/mallory"),
+    preferredUsername: "mallory",
+  });
+  await repository.addFollower(
+    "bot",
+    new URL("https://remote.example/activities/follow"),
+    requester,
+  );
+  const quote = new Note({
+    id: new URL("https://remote.example/notes/borrowed-quote"),
+    attribution: quoteAuthor.id,
+    quoteUrl: target.id,
+    content: "Quoted by somebody else.",
+    to: PUBLIC_COLLECTION,
+  });
+
+  await bot.onQuoteRequested(
+    ctx,
+    new QuoteRequest({
+      id: new URL("https://remote.example/quote-requests/3"),
+      actor: requester,
+      object: target.id,
+      instrument: quote,
+    }),
+  );
+
+  assert.deepStrictEqual(ctx.sentActivities.length, 1);
+  const { recipients, activity } = ctx.sentActivities[0];
+  assert.deepStrictEqual(recipients, [requester]);
+  assert.ok(activity instanceof Reject);
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorization("bot", quote.id!),
+    undefined,
   );
 });

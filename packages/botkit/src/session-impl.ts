@@ -41,6 +41,7 @@ import {
   Question,
 } from "./message.ts";
 import type { Uuid } from "./repository.ts";
+import { serializeQuotePolicy } from "./quote.ts";
 import type {
   Session,
   SessionGetOutboxOptions,
@@ -322,6 +323,11 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
       replyTarget: options.replyTarget?.id,
       quoteUrl: options.quoteTarget?.id,
       tags,
+      interactionPolicy: serializeQuotePolicy(
+        options.quotePolicy ?? this.bot.quotePolicy,
+        this.context.getActorUri(this.bot.identifier),
+        this.context.getFollowersUri(this.bot.identifier),
+      ),
       attribution: this.context.getActorUri(this.bot.identifier),
       attachments: options.attachments ?? [],
       inclusiveOptions,

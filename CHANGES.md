@@ -47,6 +47,28 @@ To be released.
     deployments and preserves their behavior, including the web pages served
     at the root.
 
+ -  Added inbound support for consent-respecting quote posts using
+    [FEP-044f].  [[#27], [#28], [#31]]
+
+    BotKit now serializes quote policies on outgoing messages, handles
+    incoming `QuoteRequest` activities, automatically accepts or rejects them
+    according to each message's policy, and stores `QuoteAuthorization` stamps
+    for accepted quotes.  Applications can set a default
+    `CreateBotOptions.quotePolicy`, override it per message with
+    `Session.publish()` or `AuthorizedMessage.update()`, and moderate pending
+    requests with the new `Bot.onQuoteRequest` event handler.
+
+     -  Added `QuotePolicy`, `QuotePolicyOption`, `QuoteRequest`, and
+        `QuoteRequestEventHandler` types.
+     -  Added `Bot.onQuoteRequest` event handler.
+     -  Added `ReadonlyBot.quotePolicy`, `CreateBotOptions.quotePolicy`, and
+        `BotProfile.quotePolicy` properties.
+     -  Added `SessionPublishOptions.quotePolicy` and
+        `AuthorizedMessageUpdateOptions.quotePolicy` options.
+     -  Added `AuthorizedMessage.unauthorizeQuote()` method for revoking an
+        existing quote authorization stamp by the quoted message or its URI.
+     -  Added `@fedify/botkit/quote` module.
+
  -  The `Repository` interface now stores data for multiple bot actors:
     every method takes the identifier of the owning bot actor as its first
     parameter, and data belonging to different identifiers are isolated from
@@ -56,6 +78,11 @@ To be released.
      -  Added `identifier` parameter to all `Repository` methods.
      -  Added `Repository.findFollowedBots()` method, a reverse lookup
         answering which bots follow a given actor.
+     -  Added quote authorization storage methods:
+        `Repository.addQuoteAuthorization()`,
+        `Repository.getQuoteAuthorization()`,
+        `Repository.findQuoteAuthorization()`, and
+        `Repository.removeQuoteAuthorization()`.
      -  Added optional `Repository.migrate()` method for adopting data
         stored by BotKit 0.4 or earlier.
      -  Added `Repository.forIdentifier()` method and `ActorScopedRepository`
@@ -85,10 +112,17 @@ To be released.
  -  Upgraded Fedify to 2.3.1, Hono to 4.12.27, LogTape to 2.2.3,
     and Markdown It to 14.3.0.
 
+[FEP-044f]: https://w3id.org/fep/044f
 [#16]: https://github.com/fedify-dev/botkit/issues/16
 [#24]: https://github.com/fedify-dev/botkit/pull/24
+[#27]: https://github.com/fedify-dev/botkit/issues/27
+[#28]: https://github.com/fedify-dev/botkit/issues/28
+[#31]: https://github.com/fedify-dev/botkit/pull/31
 
 ### @fedify/botkit-sqlite
+
+ -  Added a `quote_authorizations` table for [FEP-044f] quote authorization
+    stamps.  [[#27], [#28], [#31]]
 
  -  All tables now have a `bot_id` column and composite primary keys, so
     a single database stores the data of multiple bots.  Opening a database
@@ -100,6 +134,9 @@ To be released.
  -  Upgraded Fedify to 2.3.1 and LogTape to 2.2.3.
 
 ### @fedify/botkit-postgres
+
+ -  Added a `quote_authorizations` table for [FEP-044f] quote authorization
+    stamps.  [[#27], [#28], [#31]]
 
  -  All tables now have a `bot_id` column and composite primary keys, so
     a single schema stores the data of multiple bots.  Initializing a schema

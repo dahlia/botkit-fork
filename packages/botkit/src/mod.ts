@@ -74,6 +74,13 @@ export type {
   SharedMessage,
 } from "./message.ts";
 export type { Poll, Vote } from "./poll.ts";
+export type {
+  QuoteAcceptance,
+  QuotePolicy,
+  QuotePolicyOption,
+  QuoteRequest,
+} from "./quote.ts";
+export { normalizeQuotePolicy } from "./quote.ts";
 export {
   type AuthorizedLike,
   type AuthorizedReaction,

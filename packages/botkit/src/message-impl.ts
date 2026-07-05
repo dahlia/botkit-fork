@@ -33,6 +33,7 @@ import {
   type Object,
   PUBLIC_COLLECTION,
   Question,
+  QuoteAuthorization,
   Tombstone,
   Undo,
   Update,
@@ -44,6 +45,7 @@ import xss from "xss";
 import type { DeferredCustomEmoji, Emoji } from "./emoji.ts";
 import type {
   AuthorizedMessage,
+  AuthorizedMessageUpdateOptions,
   AuthorizedSharedMessage,
   Message,
   MessageClass,
@@ -52,6 +54,7 @@ import type {
 } from "./message.ts";
 import type { AuthorizedLike, AuthorizedReaction } from "./reaction.ts";
 import type { Uuid } from "./repository.ts";
+import { serializeQuotePolicy } from "./quote.ts";
 import type { SessionImpl } from "./session-impl.ts";
 import type {
   SessionPublishOptions,
@@ -376,7 +379,10 @@ export class MessageImpl<T extends MessageClass, TContextData>
 export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
   extends MessageImpl<T, TContextData>
   implements AuthorizedMessage<T, TContextData> {
-  async update(text: Text<"block", TContextData>): Promise<void> {
+  async update(
+    text: Text<"block", TContextData>,
+    options: AuthorizedMessageUpdateOptions = {},
+  ): Promise<void> {
     const parsed = parseLocalUri(
       this.session.context,
       this.id,
@@ -459,6 +465,15 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
             ? [PUBLIC_COLLECTION]
             : [],
           updated,
+          interactionPolicy: options.quotePolicy == null
+            ? message.interactionPolicy
+            : serializeQuotePolicy(
+              options.quotePolicy,
+              this.session.actorId,
+              this.session.context.getFollowersUri(
+                this.session.bot.identifier,
+              ),
+            ),
         });
         this.raw = newMessage as T;
         create = create.clone({ object: newMessage, updated });
@@ -596,6 +611,84 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
       );
     }
   }
+
+  async unauthorizeQuote(
+    quote: Message<MessageClass, TContextData> | URL,
+  ): Promise<void> {
+    const quoteId = quote instanceof URL ? quote : quote.id;
+    const authorization = await this.session.bot.repository
+      .findQuoteAuthorization(quoteId);
+    if (authorization == null || authorization.id == null) {
+      throw new TypeError("The quote authorization does not exist.");
+    }
+    if (authorization.interactionTargetId?.href !== this.id.href) {
+      throw new TypeError(
+        "The quote authorization does not belong to this message.",
+      );
+    }
+    const parsed = parseLocalUri(
+      this.session.context,
+      authorization.id,
+      this.session.bot.legacyObjectUrisIdentifier,
+    );
+    if (
+      parsed?.type !== "object" ||
+      parsed.class !== QuoteAuthorization ||
+      parsed.values.identifier !== this.session.bot.identifier
+    ) {
+      throw new TypeError("The quote authorization is not local.");
+    }
+    await this.session.bot.repository.removeQuoteAuthorization(
+      parsed.values.id as Uuid,
+    );
+    const quoteActor = quote instanceof URL
+      ? await this.#getQuoteActor(quote).catch(() => undefined)
+      : quote.actor;
+    const followersUri = this.session.context.getFollowersUri(
+      this.session.bot.identifier,
+    );
+    const del = new Delete({
+      id: new URL("#delete", authorization.id),
+      actor: this.session.actorId,
+      object: authorization.id,
+      to: quoteActor?.id ?? followersUri,
+      cc: quoteActor?.id == null ? undefined : followersUri,
+    });
+    if (quoteActor?.id != null) {
+      await this.session.context.sendActivity(
+        this.session.bot,
+        quoteActor,
+        del,
+        {
+          preferSharedInbox: true,
+          excludeBaseUris: [new URL(this.session.context.origin)],
+          fanout: "skip",
+        },
+      );
+    }
+    await this.session.context.sendActivity(
+      this.session.bot,
+      "followers",
+      del,
+      {
+        preferSharedInbox: true,
+        excludeBaseUris: [new URL(this.session.context.origin)],
+      },
+    );
+  }
+
+  async #getQuoteActor(quoteId: URL): Promise<Actor> {
+    const documentLoader = await this.session.context.getDocumentLoader(
+      this.session.bot,
+    );
+    const object = await this.session.context.lookupObject(quoteId, {
+      documentLoader,
+    });
+    if (!isMessageObject(object)) {
+      throw new TypeError("The quote message does not exist.");
+    }
+    return (await createMessage(object, this.session, {})).actor;
+  }
 }
 
 // @ts-ignore: The `xss` module has `getDefaultWhiteList` function.
@@ -647,12 +740,17 @@ export async function createMessage<T extends MessageClass, TContextData>(
     documentLoader,
     suppressError: true,
   };
-  const actor = raw.attributionId?.href === session.actorId?.href
+  const rawActor = raw.attributionId?.href === session.actorId?.href
     ? await session.getActor()
-    : await raw.getAttribution(options);
-  if (actor == null) {
+    : raw.attributionId == null
+    ? null
+    : cachedObjects[raw.attributionId.href] == null
+    ? await raw.getAttribution(options)
+    : cachedObjects[raw.attributionId.href];
+  if (!isActor(rawActor)) {
     throw new TypeError("The raw.attributionId is required.");
   }
+  const actor = rawActor;
   const content = raw.content.toString();
   const text = textXss.process(content);
   const html = htmlXss.process(content);
