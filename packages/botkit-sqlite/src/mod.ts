@@ -372,6 +372,11 @@ export class SqliteRepository implements Repository, Disposable {
       )
     `);
 
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_follow_requests_follower
+      ON follow_requests(follower_id)
+    `);
+
     // Sent follows table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sent_follows (
@@ -661,24 +666,45 @@ export class SqliteRepository implements Repository, Disposable {
     );
 
     const insertFollowerStmt = this.db.prepare(`
-      INSERT OR REPLACE INTO followers (bot_id, follower_id, actor_json)
+      INSERT INTO followers (bot_id, follower_id, actor_json)
       VALUES (?, ?, ?)
+      ON CONFLICT(bot_id, follower_id)
+      DO UPDATE SET actor_json = excluded.actor_json
     `);
 
     const insertRequestStmt = this.db.prepare(`
-      INSERT OR REPLACE INTO follow_requests
+      INSERT INTO follow_requests
         (bot_id, follow_request_id, follower_id)
       VALUES (?, ?, ?)
+      ON CONFLICT(bot_id, follow_request_id)
+      DO UPDATE SET follower_id = excluded.follower_id
     `);
 
-    this.db.exec("BEGIN TRANSACTION");
+    const previousFollowerStmt = this.db.prepare(`
+      SELECT follower_id
+      FROM follow_requests
+      WHERE bot_id = ? AND follow_request_id = ?
+    `);
+
+    this.db.exec("BEGIN IMMEDIATE TRANSACTION");
     try {
+      const previousRow = previousFollowerStmt.get(
+        identifier,
+        followRequestId.href,
+      ) as
+        | { follower_id: string }
+        | undefined;
       insertFollowerStmt.run(identifier, follower.id.href, followerJson);
       insertRequestStmt.run(
         identifier,
         followRequestId.href,
         follower.id.href,
       );
+      if (
+        previousRow != null && previousRow.follower_id !== follower.id.href
+      ) {
+        this.cleanupFollower(identifier, previousRow.follower_id);
+      }
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -691,7 +717,6 @@ export class SqliteRepository implements Repository, Disposable {
     followRequestId: URL,
     actorId: URL,
   ): Promise<Actor | undefined> {
-    // Check if the follow request exists and matches the actor
     const checkStmt = this.db.prepare(`
       SELECT fr.follower_id, f.actor_json
       FROM follow_requests fr
@@ -700,37 +725,39 @@ export class SqliteRepository implements Repository, Disposable {
       WHERE fr.bot_id = ? AND fr.follow_request_id = ? AND fr.follower_id = ?
     `);
 
-    const row = checkStmt.get(
-      identifier,
-      followRequestId.href,
-      actorId.href,
-    ) as
-      | {
-        follower_id: string;
-        actor_json: string;
-      }
-      | undefined;
-
-    if (!row) return undefined;
-
-    // Remove the follower and follow request
     const deleteRequestStmt = this.db.prepare(`
-      DELETE FROM follow_requests WHERE bot_id = ? AND follow_request_id = ?
+      DELETE FROM follow_requests
+      WHERE bot_id = ? AND follow_request_id = ? AND follower_id = ?
     `);
 
-    const deleteFollowerStmt = this.db.prepare(`
-      DELETE FROM followers WHERE bot_id = ? AND follower_id = ?
-    `);
-
-    this.db.exec("BEGIN TRANSACTION");
+    let row: { follower_id: string; actor_json: string } | undefined;
+    let removed = false;
+    this.db.exec("BEGIN IMMEDIATE TRANSACTION");
     try {
-      deleteRequestStmt.run(identifier, followRequestId.href);
-      deleteFollowerStmt.run(identifier, actorId.href);
+      row = checkStmt.get(identifier, followRequestId.href, actorId.href) as
+        | { follower_id: string; actor_json: string }
+        | undefined;
+      if (row == null) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      const deleteResult = deleteRequestStmt.run(
+        identifier,
+        followRequestId.href,
+        actorId.href,
+      ) as { readonly changes: number };
+      if (deleteResult.changes < 1) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      removed = this.cleanupFollower(identifier, actorId.href);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
     }
+
+    if (!removed || row == null) return undefined;
 
     try {
       const actorData = JSON.parse(row.actor_json);
@@ -744,6 +771,28 @@ export class SqliteRepository implements Repository, Disposable {
     }
 
     return undefined;
+  }
+
+  private cleanupFollower(identifier: string, followerId: string): boolean {
+    const deleteFollowerStmt = this.db.prepare(`
+      DELETE FROM followers
+      WHERE bot_id = ? AND follower_id = ?
+        AND NOT EXISTS (
+          SELECT 1
+          FROM follow_requests
+          WHERE bot_id = ? AND follower_id = ?
+        )
+    `);
+
+    const result = deleteFollowerStmt.run(
+      identifier,
+      followerId,
+      identifier,
+      followerId,
+    ) as {
+      readonly changes: number;
+    };
+    return result.changes > 0;
   }
 
   hasFollower(identifier: string, followerId: URL): Promise<boolean> {

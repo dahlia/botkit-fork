@@ -907,9 +907,8 @@ if (postgresUrl == null) {
         assert.deepStrictEqual(await repo.countFollowers("bot"), 2);
         assert.ok(await repo.hasFollower("bot", followerA.id!));
         assert.deepStrictEqual(
-          await (await repo.removeFollower("bot", followA, followerA.id!))
-            ?.toJsonLd(),
-          await followerA.toJsonLd(),
+          await repo.removeFollower("bot", followA, followerA.id!),
+          undefined,
         );
         assert.ok(await repo.hasFollower("bot", followerA.id!));
         assert.deepStrictEqual(await repo.countFollowers("bot"), 2);

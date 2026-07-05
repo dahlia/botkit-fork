@@ -180,6 +180,105 @@ describe("SqliteRepository", () => {
     }
   });
 
+  test("followers with multiple follow requests", async () => {
+    const repo = createSqliteRepository();
+    try {
+      const follower = new Person({
+        id: new URL("https://example.com/ap/actor/alice"),
+        preferredUsername: "alice",
+      });
+      const followA = new URL(
+        "https://example.com/ap/follow/f2fb7255-d3ad-4fef-8f9a-1d0f2c2ec0b4",
+      );
+      const followB = new URL(
+        "https://example.com/ap/follow/a3d4cc4f-af93-4a9f-a7b3-0b7c0fe4901d",
+      );
+
+      await repo.addFollower("bot", followA, follower);
+      await repo.addFollower("bot", followB, follower);
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+      assert.ok(await repo.hasFollower("bot", follower.id!));
+
+      assert.deepStrictEqual(
+        await repo.removeFollower("bot", followA, follower.id!),
+        undefined,
+      );
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+      assert.ok(await repo.hasFollower("bot", follower.id!));
+
+      assert.deepStrictEqual(
+        await (await repo.removeFollower("bot", followB, follower.id!))
+          ?.toJsonLd(),
+        await follower.toJsonLd(),
+      );
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 0);
+      assert.deepStrictEqual(
+        await repo.hasFollower("bot", follower.id!),
+        false,
+      );
+    } finally {
+      repo.close();
+    }
+  });
+
+  test("followers with reassigned follow requests", async () => {
+    const repo = createSqliteRepository();
+    try {
+      const oldFollower = new Person({
+        id: new URL("https://example.com/ap/actor/alice"),
+        preferredUsername: "alice",
+      });
+      const newFollower = new Person({
+        id: new URL("https://example.com/ap/actor/bob"),
+        preferredUsername: "bob",
+      });
+      const followA = new URL(
+        "https://example.com/ap/follow/f2fb7255-d3ad-4fef-8f9a-1d0f2c2ec0b4",
+      );
+      const followB = new URL(
+        "https://example.com/ap/follow/a3d4cc4f-af93-4a9f-a7b3-0b7c0fe4901d",
+      );
+
+      await repo.addFollower("bot", followA, oldFollower);
+      await repo.addFollower("bot", followB, oldFollower);
+      await repo.addFollower("bot", followA, newFollower);
+
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 2);
+      assert.ok(await repo.hasFollower("bot", oldFollower.id!));
+      assert.ok(await repo.hasFollower("bot", newFollower.id!));
+
+      assert.deepStrictEqual(
+        await (await repo.removeFollower("bot", followB, oldFollower.id!))
+          ?.toJsonLd(),
+        await oldFollower.toJsonLd(),
+      );
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+      assert.deepStrictEqual(
+        await repo.hasFollower("bot", oldFollower.id!),
+        false,
+      );
+      assert.ok(await repo.hasFollower("bot", newFollower.id!));
+
+      await repo.addFollower("bot", followA, oldFollower);
+      assert.deepStrictEqual(await repo.countFollowers("bot"), 1);
+      assert.ok(await repo.hasFollower("bot", oldFollower.id!));
+      assert.deepStrictEqual(
+        await repo.hasFollower("bot", newFollower.id!),
+        false,
+      );
+      assert.deepStrictEqual(
+        await Promise.all(
+          (await Array.fromAsync(repo.getFollowers("bot"))).map((follower) =>
+            follower.toJsonLd()
+          ),
+        ),
+        [await oldFollower.toJsonLd()],
+      );
+    } finally {
+      repo.close();
+    }
+  });
+
   test("poll voting", async () => {
     const repo = createSqliteRepository();
     try {

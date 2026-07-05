@@ -788,8 +788,12 @@ export class PostgresRepository implements Repository, AsyncDisposable {
           WHERE bot_id = $1 AND follow_request_id = $2`,
         [identifier, followId.href],
       );
-      await this.cleanupFollower(sql, identifier, followerId.href);
-      return await parseActor(row.actor_json);
+      const removed = await this.cleanupFollower(
+        sql,
+        identifier,
+        followerId.href,
+      );
+      return removed ? await parseActor(row.actor_json) : undefined;
     });
   }
 
@@ -1111,9 +1115,9 @@ export class PostgresRepository implements Repository, AsyncDisposable {
     sql: Queryable,
     identifier: string,
     followerId: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     await this.lockFollower(sql, identifier, followerId);
-    await this.query(
+    const rows = await this.query<{ readonly follower_id: string }>(
       sql,
       `DELETE FROM ${this.table("followers")}
         WHERE bot_id = $1
@@ -1123,9 +1127,11 @@ export class PostgresRepository implements Repository, AsyncDisposable {
               FROM ${this.table("follow_requests")}
              WHERE bot_id = $1
                AND follower_id = $2
-          )`,
+          )
+        RETURNING follower_id`,
       [identifier, followerId],
     );
+    return rows.length > 0;
   }
 
   private async ensureReady(): Promise<void> {

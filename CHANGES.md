@@ -112,6 +112,35 @@ To be released.
     3.4.9.
 
 
+Version 0.4.4
+-------------
+
+Released on July 6, 2026.
+
+### @fedify/botkit
+
+ -  Fixed `MemoryRepository`, `KvRepository`, and `MemoryCachedRepository` so
+    removing one of multiple active follow requests for the same actor no
+    longer deletes the follower too early or fires a premature unfollow event,
+    and reassigning a follow request no longer leaves stale followers behind.
+    [[#25], [#26]]
+
+[#25]: https://github.com/fedify-dev/botkit/issues/25
+[#26]: https://github.com/fedify-dev/botkit/pull/26
+
+### @fedify/botkit-sqlite
+
+ -  Fixed `SqliteRepository` so removing one of multiple active follow requests
+    for the same actor no longer fails with a foreign key error, and reassigning
+    a follow request no longer leaves stale followers behind.  [[#25], [#26]]
+
+### @fedify/botkit-postgres
+
+ -  Fixed `PostgresRepository` so removing one of multiple active follow
+    requests for the same actor no longer reports a follower removal until the
+    last active follow request is removed.  [[#25], [#26]]
+
+
 Version 0.4.3
 -------------
 
