@@ -53,6 +53,7 @@ class RecordingMemoryKvStore extends MemoryKvStore {
   readonly lockOptions: KvStoreSetOptions[] = [];
   readonly lockReleaseOptions: KvStoreSetOptions[] = [];
   readonly undefinedLockReleases: KvKey[] = [];
+  releasedLockAcquisitions = 0;
 
   override set(
     key: KvKey,
@@ -77,6 +78,11 @@ class RecordingMemoryKvStore extends MemoryKvStore {
         "released" in newValue
       ) {
         this.lockReleaseOptions.push(options ?? {});
+      } else if (
+        typeof expectedValue === "object" && expectedValue != null &&
+        "released" in expectedValue
+      ) {
+        this.releasedLockAcquisitions++;
       } else {
         this.lockOptions.push(options ?? {});
       }
@@ -190,6 +196,26 @@ test("KvRepository uses expiring follower locks", async () => {
   assert.ok(kv.lockReleaseOptions.length > 0);
   assert.ok(kv.lockReleaseOptions.every((options) => options.ttl != null));
   assert.deepStrictEqual(kv.undefinedLockReleases, []);
+});
+
+test("KvRepository reacquires released follower locks", async () => {
+  const kv = new RecordingMemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/released-lock"),
+    preferredUsername: "released-lock",
+  });
+
+  await repo.addFollower(
+    new URL("https://example.com/ap/follow/released-lock/1"),
+    follower,
+  );
+  await repo.addFollower(
+    new URL("https://example.com/ap/follow/released-lock/2"),
+    follower,
+  );
+
+  assert.ok(kv.releasedLockAcquisitions > 0);
 });
 
 test("KvRepository deletes stale follower indexes", async () => {

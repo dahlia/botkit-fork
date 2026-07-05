@@ -47,6 +47,10 @@ function isKvLock(value: unknown): value is KvLock {
     typeof value.id === "string";
 }
 
+function isReleasedKvLock(value: unknown): value is KvLock {
+  return isKvLock(value) && value.released === true;
+}
+
 function isLegacyKvLock(value: unknown): value is string {
   return typeof value === "string" && !uuidPattern.test(value);
 }
@@ -767,7 +771,7 @@ export class KvRepository implements Repository {
       }
       const currentLock = await this.kv.get(lockKey);
       if (
-        isLegacyKvLock(currentLock) &&
+        (isLegacyKvLock(currentLock) || isReleasedKvLock(currentLock)) &&
         await cas(lockKey, currentLock, lock, { ttl: kvLockTtl })
       ) {
         break;
