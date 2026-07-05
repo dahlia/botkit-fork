@@ -29,11 +29,7 @@ export type { KvKey, KvStore } from "@fedify/fedify/federation";
 export { Announce, Create } from "@fedify/vocab";
 
 const logger = getLogger(["botkit", "repository"]);
-const kvLockTtl = Temporal.Duration.from({ minutes: 5 });
 const kvLockPollIntervalMs = 100;
-const kvLockReleaseTtl = Temporal.Duration.from({
-  milliseconds: kvLockPollIntervalMs,
-});
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -764,14 +760,18 @@ export class KvRepository implements Repository {
       return await this.withNonCasKvLock(lockKey, operation);
     }
     const lock: KvLock = { id: crypto.randomUUID() };
+    const lockTtl = Temporal.Duration.from({ minutes: 5 });
+    const lockReleaseTtl = Temporal.Duration.from({
+      milliseconds: kvLockPollIntervalMs,
+    });
     while (true) {
-      if (await cas(lockKey, undefined, lock, { ttl: kvLockTtl })) {
+      if (await cas(lockKey, undefined, lock, { ttl: lockTtl })) {
         break;
       }
       const currentLock = await this.kv.get(lockKey);
       if (
         (isLegacyKvLock(currentLock) || isReleasedKvLock(currentLock)) &&
-        await cas(lockKey, currentLock, lock, { ttl: kvLockTtl })
+        await cas(lockKey, currentLock, lock, { ttl: lockTtl })
       ) {
         break;
       }
@@ -784,7 +784,7 @@ export class KvRepository implements Repository {
         const currentLock = await this.kv.get(lockKey);
         if (isKvLock(currentLock) && currentLock.id === lock.id) {
           await cas(lockKey, currentLock, { ...currentLock, released: true }, {
-            ttl: kvLockReleaseTtl,
+            ttl: lockReleaseTtl,
           });
         }
       } catch (error) {
