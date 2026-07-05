@@ -46,11 +46,11 @@
     "@fedify/botkit": "workspace:^"
   },
   "dependencies": {
-    "@fedify/fedify": "^2.1.2",
-    "@fedify/vocab": "^2.1.2",
+    "@fedify/fedify": "^2.3.1",
+    "@fedify/vocab": "^2.3.1",
     "@js-temporal/polyfill": "^0.5.1",
-    "@logtape/logtape": "^1.3.5",
-    "postgres": "^3.4.8"
+    "@logtape/logtape": "^2.2.3",
+    "postgres": "^3.4.9"
   },
   "devDependencies": {
     "tsdown": "^0.12.8"

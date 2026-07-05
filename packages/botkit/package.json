@@ -97,7 +97,7 @@
     "@logtape/logtape": "catalog:",
     "hono": "catalog:",
     "html-entities": "^2.6.0",
-    "markdown-it": "^14.1.0",
+    "markdown-it": "^14.3.0",
     "mime-db": "^1.54.0",
     "url-template": "^3.1.1",
     "uuid": "^11.1.0",

@@ -82,6 +82,9 @@ To be released.
 
      -  Added `ReadonlyBot` interface.
 
+ -  Upgraded Fedify to 2.3.1, Hono to 4.12.27, LogTape to 2.2.3,
+    and Markdown It to 14.3.0.
+
 [#16]: https://github.com/fedify-dev/botkit/issues/16
 [#24]: https://github.com/fedify-dev/botkit/pull/24
 
@@ -94,6 +97,8 @@ To be released.
     actor identifier; `createBot()` calls it automatically on startup.
     [[#16], [#24]]
 
+ -  Upgraded Fedify to 2.3.1 and LogTape to 2.2.3.
+
 ### @fedify/botkit-postgres
 
  -  All tables now have a `bot_id` column and composite primary keys, so
@@ -102,6 +107,9 @@ To be released.
     `PostgresRepository.migrate()` assigns the carried-over rows to a bot
     actor identifier; `createBot()` calls it automatically on startup.
     [[#16], [#24]]
+
+ -  Upgraded Fedify to 2.3.1, LogTape to 2.2.3, and Postgres.js to
+    3.4.9.
 
 
 Version 0.4.3
