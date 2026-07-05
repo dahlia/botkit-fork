@@ -356,6 +356,7 @@ export interface KvStoreRepositoryPrefixes {
 export class KvRepository implements Repository {
   readonly kv: KvStore;
   readonly prefixes: KvStoreRepositoryPrefixes;
+  private readonly nonCasLocks = new Map<string, Promise<void>>();
 
   /**
    * Creates a new key-value store repository.
@@ -547,11 +548,11 @@ export class KvRepository implements Repository {
           const followerKey: KvKey = [...this.prefixes.followers, followerId];
           await this.kv.set(followerKey, followerJson);
           await this.addFollowerIdLocked(followerId);
-          await this.kv.set(followRequestKey, followerId);
           await this.addFollowRequestForFollowerLocked(
             followerId,
             followRequestIdString,
           );
+          await this.kv.set(followRequestKey, followerId);
           if (
             previousFollowerId != null && previousFollowerId !== followerId
           ) {
@@ -679,9 +680,10 @@ export class KvRepository implements Repository {
   private async hasFollowRequestForFollowerLocked(
     followerId: string,
   ): Promise<boolean> {
-    const followRequestIds = await this.rebuildFollowRequestsForFollowerLocked(
-      followerId,
-    );
+    const followRequestIds = await this
+      .getIndexedFollowRequestsForFollowerLocked(
+        followerId,
+      );
     const currentFollowRequestIds: string[] = [];
     for (const followRequestId of followRequestIds) {
       if (
@@ -691,13 +693,37 @@ export class KvRepository implements Repository {
         currentFollowRequestIds.push(followRequestId);
       }
     }
-    if (currentFollowRequestIds.length !== followRequestIds.length) {
+    if (currentFollowRequestIds.length > 0) {
+      if (currentFollowRequestIds.length !== followRequestIds.length) {
+        await this.kv.set(
+          this.getFollowerFollowRequestsKey(followerId),
+          currentFollowRequestIds,
+        );
+      }
+      return true;
+    }
+    const rebuiltFollowRequestIds = await this
+      .rebuildFollowRequestsForFollowerLocked(
+        followerId,
+      );
+    const rebuiltCurrentFollowRequestIds: string[] = [];
+    for (const followRequestId of rebuiltFollowRequestIds) {
+      if (
+        await this.kv.get<string>(this.getFollowRequestKey(followRequestId)) ===
+          followerId
+      ) {
+        rebuiltCurrentFollowRequestIds.push(followRequestId);
+      }
+    }
+    if (
+      rebuiltCurrentFollowRequestIds.length !== rebuiltFollowRequestIds.length
+    ) {
       await this.kv.set(
         this.getFollowerFollowRequestsKey(followerId),
-        currentFollowRequestIds,
+        rebuiltCurrentFollowRequestIds,
       );
     }
-    return currentFollowRequestIds.length > 0;
+    return rebuiltCurrentFollowRequestIds.length > 0;
   }
 
   private async getIndexedFollowRequestsForFollowerLocked(
@@ -732,9 +758,7 @@ export class KvRepository implements Repository {
   ): Promise<T> {
     const cas = this.kv.cas?.bind(this.kv);
     if (cas == null) {
-      throw new TypeError(
-        "KvRepository follower mutations require a KvStore with CAS support.",
-      );
+      return await this.withNonCasKvLock(lockKey, operation);
     }
     const lock: KvLock = { id: crypto.randomUUID() };
     while (true) {
@@ -758,6 +782,30 @@ export class KvRepository implements Repository {
         await cas(lockKey, currentLock, { ...currentLock, released: true }, {
           ttl: kvLockReleaseTtl,
         });
+      }
+    }
+  }
+
+  private async withNonCasKvLock<T>(
+    lockKey: KvKey,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const encodedLockKey = JSON.stringify(lockKey);
+    const previousLock = this.nonCasLocks.get(encodedLockKey) ??
+      Promise.resolve();
+    let releaseLock: () => void;
+    const lock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const tail = previousLock.then(() => lock, () => lock);
+    this.nonCasLocks.set(encodedLockKey, tail);
+    await previousLock.catch(() => {});
+    try {
+      return await operation();
+    } finally {
+      releaseLock!();
+      if (this.nonCasLocks.get(encodedLockKey) === tail) {
+        this.nonCasLocks.delete(encodedLockKey);
       }
     }
   }

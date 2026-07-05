@@ -271,6 +271,14 @@ test("KvRepository uses follower indexes when adding requests", async () => {
     secondFollow.href,
   ]);
   assert.deepStrictEqual(kv.listCalls, 0);
+
+  kv.listCalls = 0;
+  assert.deepStrictEqual(
+    await repo.removeFollower(firstFollow, follower.id!),
+    undefined,
+  );
+  assert.deepStrictEqual(kv.listCalls, 0);
+  assert.deepStrictEqual(await kv.get(indexKey), [secondFollow.href]);
 });
 
 test("KvRepository recovers legacy follower locks", async () => {
@@ -292,21 +300,21 @@ test("KvRepository recovers legacy follower locks", async () => {
   assert.notDeepStrictEqual(await kv.get(lockKey), follower.id!.href);
 });
 
-test("KvRepository requires CAS for follower mutations", async () => {
+test("KvRepository supports non-CAS follower mutations", async () => {
   const repo = new KvRepository(new NonCasMemoryKvStore());
   const follower = new Person({
     id: new URL("https://example.com/ap/actor/no-cas"),
     preferredUsername: "no-cas",
   });
   const follow = new URL("https://example.com/ap/follow/no-cas");
-  const error = {
-    name: "TypeError",
-    message:
-      "KvRepository follower mutations require a KvStore with CAS support.",
-  };
 
-  await assert.rejects(() => repo.addFollower(follow, follower), error);
-  await assert.rejects(() => repo.removeFollower(follow, follower.id!), error);
+  await repo.addFollower(follow, follower);
+  assert.ok(await repo.hasFollower(follower.id!));
+  assert.deepStrictEqual(
+    await repo.removeFollower(follow, follower.id!),
+    follower,
+  );
+  assert.ok(!await repo.hasFollower(follower.id!));
 });
 
 for (const name in factories) {
