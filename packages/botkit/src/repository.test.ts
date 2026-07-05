@@ -15,6 +15,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import {
   type KvKey,
+  type KvStore,
+  type KvStoreListEntry,
   type KvStoreSetOptions,
   MemoryKvStore,
 } from "@fedify/fedify/federation";
@@ -49,6 +51,7 @@ const factories: Record<string, () => Repository> = {
 
 class RecordingMemoryKvStore extends MemoryKvStore {
   readonly lockOptions: KvStoreSetOptions[] = [];
+  readonly lockReleases: KvKey[] = [];
 
   override set(
     key: KvKey,
@@ -65,8 +68,38 @@ class RecordingMemoryKvStore extends MemoryKvStore {
     newValue: unknown,
     options?: KvStoreSetOptions,
   ): Promise<boolean> {
-    if (key.includes("lock")) this.lockOptions.push(options ?? {});
+    if (key.includes("lock")) {
+      if (newValue === undefined) {
+        this.lockReleases.push(key);
+      } else {
+        this.lockOptions.push(options ?? {});
+      }
+    }
     return super.cas(key, expectedValue, newValue, options);
+  }
+}
+
+class NonCasMemoryKvStore implements KvStore {
+  readonly #kv = new MemoryKvStore();
+
+  get<T = unknown>(key: KvKey): Promise<T | undefined> {
+    return this.#kv.get<T>(key);
+  }
+
+  set(
+    key: KvKey,
+    value: unknown,
+    options?: KvStoreSetOptions,
+  ): Promise<void> {
+    return this.#kv.set(key, value, options);
+  }
+
+  delete(key: KvKey): Promise<void> {
+    return this.#kv.delete(key);
+  }
+
+  list(prefix?: KvKey): AsyncIterable<KvStoreListEntry> {
+    return this.#kv.list(prefix);
   }
 }
 
@@ -139,6 +172,7 @@ test("KvRepository uses expiring follower locks", async () => {
 
   assert.ok(kv.lockOptions.length > 0);
   assert.ok(kv.lockOptions.every((options) => options.ttl != null));
+  assert.ok(kv.lockReleases.length > 0);
 });
 
 test("KvRepository deletes stale follower indexes", async () => {
@@ -180,6 +214,23 @@ test("KvRepository recovers legacy follower locks", async () => {
 
   assert.ok(await repo.hasFollower(follower.id!));
   assert.deepStrictEqual(await kv.get(lockKey), undefined);
+});
+
+test("KvRepository requires CAS for follower mutations", async () => {
+  const repo = new KvRepository(new NonCasMemoryKvStore());
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/no-cas"),
+    preferredUsername: "no-cas",
+  });
+  const follow = new URL("https://example.com/ap/follow/no-cas");
+  const error = {
+    name: "TypeError",
+    message:
+      "KvRepository follower mutations require a KvStore with CAS support.",
+  };
+
+  await assert.rejects(() => repo.addFollower(follow, follower), error);
+  await assert.rejects(() => repo.removeFollower(follow, follower.id!), error);
 });
 
 for (const name in factories) {

@@ -547,18 +547,16 @@ export class KvRepository implements Repository {
             followerId,
             followRequestIdString,
           );
-        });
-        if (
-          previousFollowerId != null && previousFollowerId !== followerId
-        ) {
-          await this.withKvLock(this.getFollowersLockKey(), async () => {
+          if (
+            previousFollowerId != null && previousFollowerId !== followerId
+          ) {
             await this.removeFollowRequestForFollowerLocked(
               previousFollowerId,
               followRequestIdString,
             );
             await this.cleanupFollowerLocked(previousFollowerId);
-          });
-        }
+          }
+        });
       },
     );
   }
@@ -720,33 +718,21 @@ export class KvRepository implements Repository {
     lockKey: KvKey,
     operation: () => Promise<T>,
   ): Promise<T> {
-    const lock: KvLock = { id: crypto.randomUUID() };
-    if (this.kv.cas == null) {
-      while (true) {
-        await this.kv.set(lockKey, lock, { ttl: kvLockTtl });
-        const currentLock = await this.kv.get(lockKey);
-        if (!isKvLock(currentLock) || currentLock.id !== lock.id) {
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          continue;
-        }
-        try {
-          return await operation();
-        } finally {
-          const currentLock = await this.kv.get(lockKey);
-          if (isKvLock(currentLock) && currentLock.id === lock.id) {
-            await this.kv.delete(lockKey);
-          }
-        }
-      }
+    const cas = this.kv.cas?.bind(this.kv);
+    if (cas == null) {
+      throw new TypeError(
+        "KvRepository follower mutations require a KvStore with CAS support.",
+      );
     }
+    const lock: KvLock = { id: crypto.randomUUID() };
     while (true) {
-      if (await this.kv.cas(lockKey, undefined, lock, { ttl: kvLockTtl })) {
+      if (await cas(lockKey, undefined, lock, { ttl: kvLockTtl })) {
         break;
       }
       const currentLock = await this.kv.get(lockKey);
       if (
         isLegacyKvLock(currentLock) &&
-        await this.kv.cas(lockKey, currentLock, lock, { ttl: kvLockTtl })
+        await cas(lockKey, currentLock, lock, { ttl: kvLockTtl })
       ) {
         break;
       }
@@ -757,7 +743,7 @@ export class KvRepository implements Repository {
     } finally {
       const currentLock = await this.kv.get(lockKey);
       if (isKvLock(currentLock) && currentLock.id === lock.id) {
-        await this.kv.delete(lockKey);
+        await cas(lockKey, currentLock, undefined);
       }
     }
   }
