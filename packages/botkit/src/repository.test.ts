@@ -634,6 +634,85 @@ for (const name in factories) {
       assert.deepStrictEqual(await repo.hasFollower(followerB.id!), false);
     });
 
+    test("followers with multiple follow requests", async () => {
+      const follower = new Person({
+        id: new URL("https://example.com/ap/actor/alice"),
+        preferredUsername: "alice",
+      });
+      const followA = new URL(
+        "https://example.com/ap/follow/f2fb7255-d3ad-4fef-8f9a-1d0f2c2ec0b4",
+      );
+      const followB = new URL(
+        "https://example.com/ap/follow/a3d4cc4f-af93-4a9f-a7b3-0b7c0fe4901d",
+      );
+
+      await repo.addFollower(followA, follower);
+      await repo.addFollower(followB, follower);
+      assert.deepStrictEqual(await repo.countFollowers(), 1);
+      assert.ok(await repo.hasFollower(follower.id!));
+
+      assert.deepStrictEqual(
+        await repo.removeFollower(followA, follower.id!),
+        undefined,
+      );
+      assert.deepStrictEqual(await repo.countFollowers(), 1);
+      assert.ok(await repo.hasFollower(follower.id!));
+
+      assert.deepStrictEqual(
+        await (await repo.removeFollower(followB, follower.id!))?.toJsonLd(),
+        await follower.toJsonLd(),
+      );
+      assert.deepStrictEqual(await repo.countFollowers(), 0);
+      assert.deepStrictEqual(await repo.hasFollower(follower.id!), false);
+    });
+
+    test("followers with reassigned follow requests", async () => {
+      const oldFollower = new Person({
+        id: new URL("https://example.com/ap/actor/alice"),
+        preferredUsername: "alice",
+      });
+      const newFollower = new Person({
+        id: new URL("https://example.com/ap/actor/bob"),
+        preferredUsername: "bob",
+      });
+      const followA = new URL(
+        "https://example.com/ap/follow/f2fb7255-d3ad-4fef-8f9a-1d0f2c2ec0b4",
+      );
+      const followB = new URL(
+        "https://example.com/ap/follow/a3d4cc4f-af93-4a9f-a7b3-0b7c0fe4901d",
+      );
+
+      await repo.addFollower(followA, oldFollower);
+      await repo.addFollower(followB, oldFollower);
+      await repo.addFollower(followA, newFollower);
+
+      assert.deepStrictEqual(await repo.countFollowers(), 2);
+      assert.ok(await repo.hasFollower(oldFollower.id!));
+      assert.ok(await repo.hasFollower(newFollower.id!));
+
+      assert.deepStrictEqual(
+        await (await repo.removeFollower(followB, oldFollower.id!))
+          ?.toJsonLd(),
+        await oldFollower.toJsonLd(),
+      );
+      assert.deepStrictEqual(await repo.countFollowers(), 1);
+      assert.deepStrictEqual(await repo.hasFollower(oldFollower.id!), false);
+      assert.ok(await repo.hasFollower(newFollower.id!));
+
+      await repo.addFollower(followA, oldFollower);
+      assert.deepStrictEqual(await repo.countFollowers(), 1);
+      assert.ok(await repo.hasFollower(oldFollower.id!));
+      assert.deepStrictEqual(await repo.hasFollower(newFollower.id!), false);
+      assert.deepStrictEqual(
+        await Promise.all(
+          (await Array.fromAsync(repo.getFollowers())).map((follower) =>
+            follower.toJsonLd()
+          ),
+        ),
+        [await oldFollower.toJsonLd()],
+      );
+    });
+
     test("sent follows", async () => {
       const follow = new Follow({
         id: new URL(

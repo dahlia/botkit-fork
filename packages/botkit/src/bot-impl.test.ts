@@ -1482,6 +1482,53 @@ test("BotImpl.onUnfollowed()", async (t) => {
   });
 });
 
+test("BotImpl.onUnfollowed() with multiple follow requests", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const unfollowed: [Session<void>, Actor][] = [];
+  bot.onUnfollow = (session, actor) => void (unfollowed.push([session, actor]));
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/john"),
+    preferredUsername: "john",
+  });
+  const followA = new URL("https://example.com/ap/actor/john/follows/bot");
+  const followB = new URL(
+    "https://example.com/ap/actor/john/follows/bot-again",
+  );
+
+  await repository.addFollower(followA, follower);
+  await repository.addFollower(followB, follower);
+
+  await bot.onUnfollowed(
+    ctx,
+    new Undo({
+      actor: follower.id,
+      object: new Follow({ id: followA }),
+    }),
+  );
+  assert.deepStrictEqual(await repository.countFollowers(), 1);
+  assert.ok(await repository.hasFollower(follower.id!));
+  assert.deepStrictEqual(unfollowed, []);
+
+  await bot.onUnfollowed(
+    ctx,
+    new Undo({
+      actor: follower.id,
+      object: new Follow({ id: followB }),
+    }),
+  );
+  assert.deepStrictEqual(await repository.countFollowers(), 0);
+  assert.deepStrictEqual(unfollowed.length, 1);
+  const [session, actor] = unfollowed[0] as [Session<void>, Actor];
+  assert.deepStrictEqual(session.bot, bot);
+  assert.deepStrictEqual(actor.id, follower.id);
+});
+
 test("BotImpl.onFollowAccepted()", async (t) => {
   const repository = new MemoryRepository();
   const bot = new BotImpl<void>({

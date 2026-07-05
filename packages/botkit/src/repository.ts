@@ -123,8 +123,9 @@ export interface Repository {
    * Removes a follower from the repository.
    * @param followId The URL of the follow request.
    * @param followerId The ID of the actor to remove.
-   * @returns The removed actor.  If the follower does not exist or the follow
-   *          request is not about the follower, `undefined` will be returned.
+   * @returns The removed actor.  If the follower does not exist, the follow
+   *          request is not about the follower, or the actor still has another
+   *          active follow request, `undefined` will be returned.
    */
   removeFollower(followId: URL, followerId: URL): Promise<Actor | undefined>;
 
@@ -511,24 +512,22 @@ export class KvRepository implements Repository {
     if (follower.id == null) {
       throw new TypeError("The follower ID is missing.");
     }
+    const followerId = follower.id.href;
+    const followRequestKey: KvKey = [
+      ...this.prefixes.followRequests,
+      followRequestId.href,
+    ];
+    const previousFollowerId = await this.kv.get<string>(followRequestKey);
     const followerKey: KvKey = [...this.prefixes.followers, follower.id.href];
     await this.kv.set(
       followerKey,
       await follower.toJsonLd({ format: "compact" }),
     );
-    const lockKey: KvKey = [...this.prefixes.followers, "lock"];
-    const listKey: KvKey = this.prefixes.followers;
-    do {
-      await this.kv.set(lockKey, follower.id.href);
-      const list = await this.kv.get<string[]>(listKey) ?? [];
-      if (!list.includes(follower.id.href)) list.push(follower.id.href);
-      await this.kv.set(listKey, list);
-    } while (await this.kv.get(lockKey) !== follower.id.href);
-    const followRequestKey: KvKey = [
-      ...this.prefixes.followRequests,
-      followRequestId.href,
-    ];
-    await this.kv.set(followRequestKey, follower.id.href);
+    await this.addFollowerId(followerId);
+    await this.kv.set(followRequestKey, followerId);
+    if (previousFollowerId != null && previousFollowerId !== followerId) {
+      await this.cleanupFollower(previousFollowerId);
+    }
   }
 
   async removeFollower(
@@ -552,6 +551,23 @@ export class KvRepository implements Repository {
       return undefined;
     }
     if (!isActor(follower)) return undefined;
+    await this.kv.delete(followRequestKey);
+    return await this.cleanupFollower(followerId) ? follower : undefined;
+  }
+
+  private async addFollowerId(followerId: string): Promise<void> {
+    const lockKey: KvKey = [...this.prefixes.followers, "lock"];
+    const listKey: KvKey = this.prefixes.followers;
+    do {
+      await this.kv.set(lockKey, followerId);
+      const list = await this.kv.get<string[]>(listKey) ?? [];
+      if (!list.includes(followerId)) list.push(followerId);
+      await this.kv.set(listKey, list);
+    } while (await this.kv.get(lockKey) !== followerId);
+  }
+
+  private async cleanupFollower(followerId: string): Promise<boolean> {
+    if (await this.hasFollowRequestForFollower(followerId)) return false;
     const lockKey: KvKey = [...this.prefixes.followers, "lock"];
     const listKey: KvKey = this.prefixes.followers;
     do {
@@ -560,9 +576,19 @@ export class KvRepository implements Repository {
       list = list.filter((id) => id !== followerId);
       await this.kv.set(listKey, list);
     } while (await this.kv.get(lockKey) !== followerId);
-    await this.kv.delete(followerKey);
-    await this.kv.delete(followRequestKey);
-    return follower;
+    await this.kv.delete([...this.prefixes.followers, followerId]);
+    return true;
+  }
+
+  private async hasFollowRequestForFollower(
+    followerId: string,
+  ): Promise<boolean> {
+    const followRequestKeyLength = this.prefixes.followRequests.length + 1;
+    for await (const entry of this.kv.list(this.prefixes.followRequests)) {
+      if (entry.key.length !== followRequestKeyLength) continue;
+      if (entry.value === followerId) return true;
+    }
+    return false;
   }
 
   async hasFollower(followerId: URL): Promise<boolean> {
@@ -851,8 +877,14 @@ export class MemoryRepository implements Repository {
     if (follower.id == null) {
       throw new TypeError("The follower ID is missing.");
     }
+    const previousFollowerId = this.followRequests[followId.href];
     this.followers.set(follower.id.href, follower);
     this.followRequests[followId.href] = follower.id.href;
+    if (
+      previousFollowerId != null && previousFollowerId !== follower.id.href
+    ) {
+      this.cleanupFollower(previousFollowerId);
+    }
     return Promise.resolve();
   }
 
@@ -863,8 +895,16 @@ export class MemoryRepository implements Repository {
     }
     delete this.followRequests[followId.href];
     const follower = this.followers.get(followerId.href);
-    this.followers.delete(followerId.href);
-    return Promise.resolve(follower);
+    const removed = this.cleanupFollower(followerId.href);
+    return Promise.resolve(removed ? follower : undefined);
+  }
+
+  private cleanupFollower(followerId: string): boolean {
+    if (globalThis.Object.values(this.followRequests).includes(followerId)) {
+      return false;
+    }
+    this.followers.delete(followerId);
+    return true;
   }
 
   hasFollower(followerId: URL): Promise<boolean> {
@@ -1060,9 +1100,7 @@ export class MemoryCachedRepository implements Repository {
       followId,
       followerId,
     );
-    if (removedFollower !== undefined) {
-      await this.cache.removeFollower(followId, followerId);
-    }
+    await this.cache.removeFollower(followId, followerId);
     return removedFollower;
   }
 
