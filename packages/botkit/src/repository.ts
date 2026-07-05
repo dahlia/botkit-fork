@@ -29,6 +29,7 @@ export type { KvKey, KvStore } from "@fedify/fedify/federation";
 export { Announce, Create } from "@fedify/vocab";
 
 const logger = getLogger(["botkit", "repository"]);
+const kvLockTtl = Temporal.Duration.from({ minutes: 5 });
 
 /**
  * A UUID (universally unique identifier).
@@ -706,7 +707,7 @@ export class KvRepository implements Repository {
     const lockId = crypto.randomUUID();
     if (this.kv.cas == null) {
       while (true) {
-        await this.kv.set(lockKey, lockId);
+        await this.kv.set(lockKey, lockId, { ttl: kvLockTtl });
         if (await this.kv.get(lockKey) !== lockId) continue;
         try {
           return await operation();
@@ -717,7 +718,7 @@ export class KvRepository implements Repository {
         }
       }
     }
-    while (!await this.kv.cas(lockKey, undefined, lockId)) {
+    while (!await this.kv.cas(lockKey, undefined, lockId, { ttl: kvLockTtl })) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     try {

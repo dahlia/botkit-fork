@@ -13,7 +13,11 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import { MemoryKvStore } from "@fedify/fedify/federation";
+import {
+  type KvKey,
+  type KvStoreSetOptions,
+  MemoryKvStore,
+} from "@fedify/fedify/federation";
 import { importJwk } from "@fedify/fedify/sig";
 import { Create, Follow, Note, Person, PUBLIC_COLLECTION } from "@fedify/vocab";
 import assert from "node:assert";
@@ -42,6 +46,29 @@ const factories: Record<string, () => Repository> = {
   MemoryRepository: createMemoryRepository,
   MemoryCachedRepository: createMemoryCachedRepository,
 };
+
+class RecordingMemoryKvStore extends MemoryKvStore {
+  readonly lockOptions: KvStoreSetOptions[] = [];
+
+  override set(
+    key: KvKey,
+    value: unknown,
+    options?: KvStoreSetOptions,
+  ): Promise<void> {
+    if (key.includes("lock")) this.lockOptions.push(options ?? {});
+    return super.set(key, value, options);
+  }
+
+  override cas(
+    key: KvKey,
+    expectedValue: unknown,
+    newValue: unknown,
+    options?: KvStoreSetOptions,
+  ): Promise<boolean> {
+    if (key.includes("lock")) this.lockOptions.push(options ?? {});
+    return super.cas(key, expectedValue, newValue, options);
+  }
+}
 
 const keyPairs: CryptoKeyPair[] = [
   {
@@ -96,6 +123,23 @@ const keyPairs: CryptoKeyPair[] = [
     }, "public"),
   },
 ];
+
+test("KvRepository uses expiring follower locks", async () => {
+  const kv = new RecordingMemoryKvStore();
+  const repo = new KvRepository(kv);
+  const follower = new Person({
+    id: new URL("https://example.com/ap/actor/lock-test"),
+    preferredUsername: "lock-test",
+  });
+
+  await repo.addFollower(
+    new URL("https://example.com/ap/follow/lock-test"),
+    follower,
+  );
+
+  assert.ok(kv.lockOptions.length > 0);
+  assert.ok(kv.lockOptions.every((options) => options.ttl != null));
+});
 
 for (const name in factories) {
   const factory = factories[name];
