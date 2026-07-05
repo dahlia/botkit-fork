@@ -1026,13 +1026,14 @@ export class InstanceImpl<TContextData>
         }
         throw error;
       }
+      const mtime = fileInfo.mtime ?? new Date();
       return new Response(data as Uint8Array<ArrayBuffer>, {
         headers: {
           "Content-Type": customEmoji.type,
           "Content-Length": fileInfo.size.toString(),
           "Cache-Control": "public, max-age=31536000, immutable",
-          "Last-Modified": (fileInfo.mtime ?? new Date()).toUTCString(),
-          "ETag": `"${fileInfo.mtime?.getTime().toString(36)}${
+          "Last-Modified": mtime.toUTCString(),
+          "ETag": `"${mtime.getTime().toString(36)}${
             fileInfo.size.toString(36)
           }"`,
         },
