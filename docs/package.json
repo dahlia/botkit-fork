@@ -24,10 +24,5 @@
     "vitepress": "^2.0.0-alpha.15",
     "vitepress-plugin-group-icons": "^1.3.3",
     "vitepress-plugin-llms": "^1.1.0"
-  },
-  "scripts": {
-    "dev": "cd ../ && pnpm run -r build && cd docs/ && vitepress dev",
-    "build": "cd ../ && pnpm run -r build && cd docs/ && vitepress build",
-    "preview": "cd ../ && pnpm run -r build && cd docs/ && vitepress preview"
   }
 }

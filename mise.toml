@@ -2,7 +2,7 @@
 bun = "latest"
 deno = "2"
 node = "22"
-"npm:pnpm" = "latest"
+pnpm = "latest"
 "aqua:dahlia/hongdown" = "0.5.1"
 
 [settings]
@@ -61,23 +61,63 @@ run = [
   "hongdown --write",
 ]
 
+[tasks."build:botkit"]
+description = "Build @fedify/botkit"
+sources = [
+  "packages/botkit/deno.json",
+  "packages/botkit/package.json",
+  "packages/botkit/tsdown.config.ts",
+  "packages/botkit/src/**/*",
+]
+outputs = [
+  "packages/botkit/dist/mod.js",
+  "packages/botkit/dist/mod.d.ts",
+]
+run = "pnpm --filter @fedify/botkit run build"
+
+[tasks."build:botkit-sqlite"]
+description = "Build @fedify/botkit-sqlite"
+depends = ["build:botkit"]
+sources = [
+  "packages/botkit-sqlite/deno.json",
+  "packages/botkit-sqlite/package.json",
+  "packages/botkit-sqlite/tsdown.config.ts",
+  "packages/botkit-sqlite/src/**/*",
+]
+outputs = [
+  "packages/botkit-sqlite/dist/mod.js",
+  "packages/botkit-sqlite/dist/mod.d.ts",
+]
+run = "pnpm --filter @fedify/botkit-sqlite run build"
+
+[tasks."build:botkit-postgres"]
+description = "Build @fedify/botkit-postgres"
+depends = ["build:botkit"]
+sources = [
+  "packages/botkit-postgres/deno.json",
+  "packages/botkit-postgres/package.json",
+  "packages/botkit-postgres/tsdown.config.ts",
+  "packages/botkit-postgres/src/**/*",
+]
+outputs = [
+  "packages/botkit-postgres/dist/mod.js",
+  "packages/botkit-postgres/dist/mod.d.ts",
+]
+run = "pnpm --filter @fedify/botkit-postgres run build"
+
+[tasks."test:node"]
+description = "Build packages and run Node.js tests"
+depends = ["build:*"]
+run = "pnpm run -r test"
+
 [tasks."test:deno"]
 description = "Run Deno tests"
 raw_args = true
 run = "deno test --allow-read --allow-write --allow-env --allow-net=hollo.social,localhost,127.0.0.1 --parallel"
 
-[tasks."test:node"]
-description = "Build packages and run Node.js tests"
-run = [
-  "pnpm --filter './packages/*' run build",
-  "pnpm run -r test",
-]
-
 [tasks.test]
 description = "Run all checks and tests"
-run = [
-  { tasks = ["check", "test:deno", "test:node"] },
-]
+depends = ["check", "test:deno", "test:node"]
 
 [tasks.coverage]
 description = "Generate Deno test coverage report"
@@ -85,3 +125,23 @@ run = [
   "deno test --allow-read --allow-write --allow-env --allow-net=hollo.social,localhost,127.0.0.1 --parallel --coverage --clean",
   "deno coverage --html",
 ]
+
+[tasks."docs:dev"]
+description = "Start the documentation development server"
+tools.node = "24"
+raw_args = true
+depends = ["build:*"]
+run = "pnpm --dir docs exec vitepress dev"
+
+[tasks."docs:build"]
+description = "Build the documentation site"
+tools.node = "24"
+depends = ["build:*"]
+run = "pnpm --dir docs exec vitepress build"
+
+[tasks."docs:preview"]
+description = "Preview the built documentation site"
+tools.node = "24"
+raw_args = true
+depends = ["build:*"]
+run = "pnpm --dir docs exec vitepress preview"

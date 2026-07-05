@@ -29,7 +29,8 @@ Development commands
 
 ### Build commands
 
- -  `pnpm build` - Build via npm script (runs tsdown)
+ -  `mise run 'build:*'` - Build all npm packages with dependency-based
+    freshness checks
  -  `pnpm test` - Run Node.js tests after mise installs dependencies
 
 ### Code quality
@@ -60,6 +61,11 @@ to use an older version.
 >
 > Forgetting to add a dependency to *package.json* will cause Node.js tests
 > to fail with `ERR_MODULE_NOT_FOUND`, even if Deno tests pass.
+
+When adding a new npm package under *packages/*, also add a matching
+`build:<package>` task to *mise.toml*.  Include package-specific `sources` and
+`outputs`, and use `depends` for any workspace packages that must be built
+first so `mise run 'build:*'` remains the complete package build command.
 
 [JSR API]: https://jsr.io/docs/api
 
@@ -628,9 +634,9 @@ pnpm add @fedify/botkit
 ### Building documentation
 
 ~~~~ bash
-cd docs
-pnpm build    # Build for production (runs Twoslash type checking)
-pnpm dev      # Start development server
+mise run docs:build    # Build for production (runs Twoslash type checking)
+mise run docs:dev      # Start development server
 ~~~~
 
-Always run `pnpm build` before committing to catch Twoslash type errors.
+Always run `mise run docs:build` before committing documentation changes to
+catch Twoslash type errors.
