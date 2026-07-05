@@ -457,7 +457,7 @@ export class SqliteRepository implements Repository, Disposable {
       throw error;
     }
 
-    if (!removed) return undefined;
+    if (!removed || row == null) return undefined;
 
     try {
       const actorData = JSON.parse(row.actor_json);
