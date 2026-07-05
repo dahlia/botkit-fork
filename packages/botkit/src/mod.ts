@@ -66,6 +66,7 @@ export {
 export type {
   Actor,
   AuthorizedMessage,
+  AuthorizedMessageUpdateOptions,
   AuthorizedSharedMessage,
   Message,
   MessageClass,

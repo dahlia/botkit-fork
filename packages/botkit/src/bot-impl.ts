@@ -94,7 +94,12 @@ import {
   isQuoteLink,
   messageClasses,
 } from "./message-impl.ts";
-import type { Message, MessageClass, SharedMessage } from "./message.ts";
+import type {
+  Message,
+  MessageClass,
+  MessageVisibility,
+  SharedMessage,
+} from "./message.ts";
 import type { Vote } from "./poll.ts";
 import { QuoteRequestImpl } from "./quote-impl.ts";
 import { normalizeQuotePolicy, type QuotePolicyOption } from "./quote.ts";
@@ -760,6 +765,20 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     const quote = await createMessage(quoteObject, session, {
       [actor.id.href]: actor,
     });
+    if (this.#isQuoteAudienceWider(quote.visibility, target.visibility)) {
+      await session.context.sendActivity(
+        this,
+        actor,
+        new Reject({
+          id: new URL(`/#reject/${request.id?.href}`, session.actorId),
+          actor: session.actorId,
+          to: actor.id,
+          object: request,
+        }),
+        { excludeBaseUris: [new URL(session.context.origin)] },
+      );
+      return;
+    }
     const quoteRequest = new QuoteRequestImpl(
       session,
       request,
@@ -804,6 +823,22 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     if (recipients.includes(actorId.href)) return true;
     return recipients.includes(ctx.getFollowersUri(this.identifier).href) &&
       await this.repository.hasFollower(actorId);
+  }
+
+  #isQuoteAudienceWider(
+    quoteVisibility: MessageVisibility,
+    targetVisibility: MessageVisibility,
+  ): boolean {
+    const ranks: Record<MessageVisibility, number | undefined> = {
+      public: 4,
+      unlisted: 3,
+      followers: 2,
+      direct: 1,
+      unknown: undefined,
+    };
+    const quoteRank = ranks[quoteVisibility];
+    const targetRank = ranks[targetVisibility];
+    return quoteRank != null && targetRank != null && quoteRank > targetRank;
   }
 
   async #matchesQuoteAcceptance(
