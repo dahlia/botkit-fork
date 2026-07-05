@@ -720,22 +720,13 @@ export class KvRepository implements Repository {
         currentFollowRequestIds.push(followRequestId);
       }
     }
-    if (currentFollowRequestIds.length > 0) {
-      if (currentFollowRequestIds.length !== followRequestIds.length) {
-        await this.kv.set(
-          this.getFollowerFollowRequestsKey(followerId),
-          currentFollowRequestIds,
-        );
-      }
-      return true;
-    }
     if (currentFollowRequestIds.length !== followRequestIds.length) {
       await this.kv.set(
         indexKey,
         currentFollowRequestIds,
       );
     }
-    return false;
+    return currentFollowRequestIds.length > 0;
   }
 
   private async getIndexedFollowRequestsForFollowerLocked(
