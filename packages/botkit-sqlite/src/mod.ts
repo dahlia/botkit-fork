@@ -396,7 +396,7 @@ export class SqliteRepository implements Repository, Disposable {
       SELECT follower_id FROM follow_requests WHERE follow_request_id = ?
     `);
 
-    this.db.exec("BEGIN TRANSACTION");
+    this.db.exec("BEGIN IMMEDIATE TRANSACTION");
     try {
       const previousRow = previousFollowerStmt.get(followRequestId.href) as
         | { follower_id: string }
@@ -433,7 +433,7 @@ export class SqliteRepository implements Repository, Disposable {
 
     let row: { follower_id: string; actor_json: string } | undefined;
     let removed = false;
-    this.db.exec("BEGIN TRANSACTION");
+    this.db.exec("BEGIN IMMEDIATE TRANSACTION");
     try {
       row = checkStmt.get(followRequestId.href, actorId.href) as
         | { follower_id: string; actor_json: string }
