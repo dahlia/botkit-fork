@@ -811,13 +811,15 @@ export async function createMessage<T extends MessageClass, TContextData>(
     }
   }
   if (quoteTarget == null) {
-    let quoteUrl: URL | null = null;
-    for (const quoteLink of quoteLinks) {
-      if (quoteLink.href == null) continue;
-      quoteUrl = quoteLink.href;
-      break;
+    let quoteUrl = raw.quoteId;
+    if (quoteUrl == null) {
+      for (const quoteLink of quoteLinks) {
+        if (quoteLink.href == null) continue;
+        quoteUrl = quoteLink.href;
+        break;
+      }
     }
-    if (quoteUrl == null) quoteUrl = raw.quoteId ?? raw.quoteUrl;
+    if (quoteUrl == null) quoteUrl = raw.quoteUrl;
     let qt: Object | null = null;
     const parsed = parseLocalUri(
       session.context,
