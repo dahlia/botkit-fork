@@ -879,7 +879,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       object,
     );
     if (actor == null) return;
-    await this.#forwardQuoteAuthorizationDeletion(ctx, object);
+    await this.#forwardQuoteAuthorizationDeletion(ctx, object, actor);
     const stripped = await this.#stripRejectedQuote(ctx, id, object, actor);
     if (stripped != null && this.onQuoteRevoked != null) {
       await this.onQuoteRevoked(stripped.session, stripped.message, actor);
@@ -1041,16 +1041,76 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
   async #forwardQuoteAuthorizationDeletion(
     ctx: InboxContext<TContextData>,
     object: MessageClass,
+    quoteActor: Actor,
   ): Promise<void> {
     const visibility = await this.#getMessageVisibility(ctx, object);
-    if (
-      visibility !== "public" && visibility !== "unlisted" &&
-      visibility !== "followers"
-    ) return;
-    await ctx.forwardActivity(this, "followers", {
+    const preferSharedInbox = visibility === "public" ||
+      visibility === "unlisted" || visibility === "followers";
+    const excludeBaseUris = [new URL(ctx.origin)];
+    const followersUri = ctx.getFollowersUri(this.identifier);
+    const botActorUri = ctx.getActorUri(this.identifier);
+    const recipientIds = new Map<string, URL>();
+    let forwardsToFollowers = false;
+    const addRecipientId = (id: URL | null | undefined) => {
+      if (id == null) return;
+      if (id.href === followersUri.href) {
+        forwardsToFollowers = true;
+        return;
+      }
+      if (
+        id.href === PUBLIC_COLLECTION.href ||
+        id.href === botActorUri.href
+      ) {
+        return;
+      }
+      recipientIds.set(id.href, id);
+    };
+    for (const id of object.toIds) addRecipientId(id);
+    for (const id of object.ccIds) addRecipientId(id);
+    for await (
+      const tag of object.getTags({
+        contextLoader: ctx.contextLoader,
+        documentLoader: ctx.documentLoader,
+        suppressError: true,
+      })
+    ) {
+      if (tag instanceof Mention) addRecipientId(tag.href);
+    }
+    if (forwardsToFollowers) {
+      await ctx.forwardActivity(this, "followers", {
+        skipIfUnsigned: true,
+        preferSharedInbox: true,
+        excludeBaseUris,
+      });
+    }
+    const actorRecipients: Actor[] = [];
+    const actorRecipientIds = new Set<string>();
+    const knownActors = new Map<string, Actor>();
+    if (quoteActor.id != null) knownActors.set(quoteActor.id.href, quoteActor);
+    const addActorRecipient = (actor: Actor) => {
+      if (
+        actor.id == null ||
+        actor.id.href === botActorUri.href ||
+        actorRecipientIds.has(actor.id.href)
+      ) return;
+      actorRecipientIds.add(actor.id.href);
+      actorRecipients.push(actor);
+    };
+    for (const id of recipientIds.values()) {
+      const knownActor = knownActors.get(id.href);
+      if (knownActor != null) {
+        addActorRecipient(knownActor);
+        continue;
+      }
+      const recipient = await lookupObjectSafely(this, ctx, id);
+      if (isActor(recipient)) addActorRecipient(recipient);
+    }
+    addActorRecipient(quoteActor);
+    if (actorRecipients.length < 1) return;
+    await ctx.forwardActivity(this, actorRecipients, {
       skipIfUnsigned: true,
-      preferSharedInbox: true,
-      excludeBaseUris: [new URL(ctx.origin)],
+      preferSharedInbox,
+      excludeBaseUris,
     });
   }
 

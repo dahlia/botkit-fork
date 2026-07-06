@@ -4527,8 +4527,8 @@ test("BotImpl.onDeleted() strips revoked quote authorizations", async () => {
     ),
     undefined,
   );
-  assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
-  assert.deepStrictEqual(ctx.forwardedActivities.length, 1);
+  assert.deepStrictEqual(ctx.forwardedRecipients, ["followers", author]);
+  assert.deepStrictEqual(ctx.forwardedActivities.length, 2);
   assert.deepStrictEqual(
     ctx.forwardedActivities[0].options,
     {
@@ -4687,8 +4687,8 @@ test("BotImpl.onDeleted() keeps newer quote authorizations", async () => {
     ),
     messageId,
   );
-  assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
-  assert.deepStrictEqual(ctx.forwardedActivities.length, 1);
+  assert.deepStrictEqual(ctx.forwardedRecipients, ["followers", author]);
+  assert.deepStrictEqual(ctx.forwardedActivities.length, 2);
   assert.deepStrictEqual(ctx.sentActivities, []);
   assert.deepStrictEqual(revoked, undefined);
 });
@@ -4782,7 +4782,75 @@ test("BotImpl.onDeleted() ignores same-origin quote revocations without attribut
   assert.deepStrictEqual(revoker, undefined);
 });
 
-test("BotImpl.onDeleted() does not forward private quote revocations to followers", async () => {
+test("BotImpl.onDeleted() forwards quote revocations to mentions", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const messageId = "01950000-0000-7000-8000-000000000209" as Uuid;
+  const author = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const mentioned = new Person({
+    id: new URL("https://mentioned.example/users/bob"),
+    preferredUsername: "bob",
+  });
+  Object.defineProperty(ctx, "lookupObject", {
+    value: (id: URL) =>
+      Promise.resolve(id.href === mentioned.id?.href ? mentioned : null),
+  });
+  const authorization = new URL("https://remote.example/stamps/1");
+  await repository.addMessage(
+    "bot",
+    messageId,
+    new Create({
+      id: new URL(`https://example.com/ap/actor/bot/create/${messageId}`),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: new Note({
+        id: new URL(`https://example.com/ap/actor/bot/note/${messageId}`),
+        attribution: new URL("https://example.com/ap/actor/bot"),
+        content: "Quote @bob.",
+        tos: [ctx.getFollowersUri(bot.identifier), mentioned.id!],
+        tags: [new Mention({ href: mentioned.id })],
+        quote: new URL("https://remote.example/notes/original"),
+        quoteAuthorization: authorization,
+      }),
+    }),
+  );
+  await repository.addQuoteAuthorizationReference(
+    "bot",
+    authorization,
+    messageId,
+    author.id!,
+  );
+
+  await bot.onDeleted(
+    ctx,
+    new Delete({
+      actor: author,
+      object: authorization,
+    }),
+  );
+
+  const stored = await repository.getMessage("bot", messageId);
+  assert.ok(stored instanceof Create);
+  const object = await stored.getObject(ctx);
+  assert.ok(object instanceof Note);
+  assert.deepStrictEqual(object.quoteId, null);
+  assert.deepStrictEqual(object.quoteAuthorizationId, null);
+  assert.deepStrictEqual(ctx.forwardedRecipients, [
+    "followers",
+    mentioned,
+    author,
+  ]);
+  assert.deepStrictEqual(ctx.forwardedActivities.length, 2);
+});
+
+test("BotImpl.onDeleted() forwards private quote revocations only to the quote audience", async () => {
   const repository = new MemoryRepository();
   const bot = new BotImpl<void>({
     kv: new MemoryKvStore(),
@@ -4837,8 +4905,8 @@ test("BotImpl.onDeleted() does not forward private quote revocations to follower
     await repository.findQuoteAuthorizationReference("bot", authorization),
     undefined,
   );
-  assert.deepStrictEqual(ctx.forwardedRecipients, []);
-  assert.deepStrictEqual(ctx.forwardedActivities, []);
+  assert.deepStrictEqual(ctx.forwardedRecipients, [author]);
+  assert.deepStrictEqual(ctx.forwardedActivities.length, 1);
   assert.deepStrictEqual(ctx.sentActivities.length, 1);
   assert.deepStrictEqual(ctx.sentActivities[0].recipients, [author]);
   assert.ok(ctx.sentActivities[0].activity instanceof Update);
