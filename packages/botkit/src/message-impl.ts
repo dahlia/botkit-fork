@@ -1019,7 +1019,14 @@ async function verifyQuoteApproval<TContextData>(
       targetId: quoteTarget.id,
       targetActorId: quoteTarget.actor.id,
     });
-  } catch {
+  } catch (error) {
+    if (
+      signal?.aborted === true &&
+      (error === signal.reason ||
+        (error instanceof DOMException && error.name === "AbortError"))
+    ) {
+      throw error;
+    }
     return false;
   }
 }

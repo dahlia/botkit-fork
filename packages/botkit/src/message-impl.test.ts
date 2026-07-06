@@ -217,6 +217,7 @@ test("createMessage() verifies quote approvals", async (t) => {
       readonly quoteUrl?: URL;
       readonly quoteAuthorization?: URL;
       readonly authorization?: QuoteAuthorization | null;
+      readonly authorizationError?: unknown;
       readonly throwOnAuthorization?: boolean;
       readonly signal?: AbortSignal;
       readonly onAuthorizationLookup?: (
@@ -232,6 +233,9 @@ test("createMessage() verifies quote approvals", async (t) => {
         if (id.href === targetId.href) return Promise.resolve(target);
         if (id.href === authorizationId.href) {
           options.onAuthorizationLookup?.(lookupOptions);
+          if (options.authorizationError != null) {
+            return Promise.reject(options.authorizationError);
+          }
           if (options.throwOnAuthorization === true) {
             return Promise.reject(new TypeError("Fetch failed."));
           }
@@ -378,6 +382,22 @@ test("createMessage() verifies quote approvals", async (t) => {
     });
     assert.deepStrictEqual(message.quoteApproved, true);
     assert.deepStrictEqual(lookupSignal, controller.signal);
+  });
+
+  await t.test("preserves abort errors from remote stamp lookup", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("Aborted.", "AbortError");
+    controller.abort(reason);
+    await assert.rejects(
+      () =>
+        materialize({
+          quote: targetId,
+          quoteAuthorization: authorizationId,
+          authorizationError: reason,
+          signal: controller.signal,
+        }),
+      (error) => error === reason,
+    );
   });
 
   await t.test("legacy quote", async () => {
