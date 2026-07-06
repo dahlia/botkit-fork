@@ -25,6 +25,7 @@ import {
   PUBLIC_COLLECTION,
   QuoteAuthorization,
   Undo,
+  Update,
 } from "@fedify/vocab";
 import assert from "node:assert";
 import { describe, test } from "node:test";
@@ -404,6 +405,72 @@ describe("shared inbox routing", () => {
           attribution: author,
           to: PUBLIC_COLLECTION,
           content: "A pure FEP quote",
+          quote: targetId,
+          quoteAuthorization: authorizationUrl,
+        }),
+      }),
+    );
+    assert.deepStrictEqual(events, ["quote:alpha"]);
+  });
+
+  test("routes pure FEP quote Updates to the quoted bot", async () => {
+    const { instance, repository, alpha, ctx } = createHarness();
+    const events: string[] = [];
+    alpha.onQuote = (session) =>
+      void (events.push(`quote:${session.bot.identifier}`));
+
+    const targetMessageId = "01950000-0000-7000-8000-000000000303" as Uuid;
+    const targetId = new URL(
+      `https://example.com/ap/actor/alpha/note/${targetMessageId}`,
+    );
+    const quoteId = new URL("https://remote.example/notes/fep-quote-update");
+    await repository.addMessage(
+      "alpha",
+      targetMessageId,
+      new Create({
+        id: new URL(
+          `https://example.com/ap/actor/alpha/create/${targetMessageId}`,
+        ),
+        actor: new URL("https://example.com/ap/actor/alpha"),
+        to: PUBLIC_COLLECTION,
+        object: new Note({
+          id: targetId,
+          attribution: new URL("https://example.com/ap/actor/alpha"),
+          to: PUBLIC_COLLECTION,
+          content: "Alpha's quoteable post",
+        }),
+      }),
+    );
+    const authorizationId = "01950000-0000-7000-8000-000000000304" as Uuid;
+    const authorizationUrl = new URL(
+      `https://example.com/ap/actor/alpha/quote-authorization/${authorizationId}`,
+    );
+    await repository.addQuoteAuthorization(
+      "alpha",
+      authorizationId,
+      new QuoteAuthorization({
+        id: authorizationUrl,
+        attribution: new URL("https://example.com/ap/actor/alpha"),
+        interactingObject: quoteId,
+        interactionTarget: targetId,
+      }),
+    );
+
+    const author = new Person({
+      id: new URL("https://remote.example/actors/john"),
+      preferredUsername: "john",
+    });
+    await instance.onUpdated(
+      ctx,
+      new Update({
+        id: new URL("https://remote.example/updates/fep-quote"),
+        actor: author,
+        to: PUBLIC_COLLECTION,
+        object: new Note({
+          id: quoteId,
+          attribution: author,
+          to: PUBLIC_COLLECTION,
+          content: "A pure FEP quote update",
           quote: targetId,
           quoteAuthorization: authorizationUrl,
         }),

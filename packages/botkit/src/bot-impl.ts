@@ -970,7 +970,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
 
   async #hasValidQuoteAuthorization(
     ctx: InboxContext<TContextData>,
-    object: Object,
+    object: MessageClass,
     targetId: URL,
   ): Promise<boolean> {
     if (
@@ -1033,7 +1033,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
         targetVisibility,
       )
     ) {
-      await this.repository.removeQuoteAuthorization(parsed.values.id as Uuid);
+      const session = this.getSession(ctx);
+      const target = await createMessage(
+        targetObject,
+        session,
+        {},
+        undefined,
+        undefined,
+        true,
+      );
+      const quote = await createMessage(object, session, {});
+      await target.unauthorizeQuote(quote);
       return false;
     }
     return true;
@@ -1042,6 +1052,20 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
   async onCreated(
     ctx: InboxContext<TContextData>,
     create: Create,
+  ): Promise<void> {
+    await this.#onCreatedOrUpdated(ctx, create);
+  }
+
+  async onUpdated(
+    ctx: InboxContext<TContextData>,
+    update: Update,
+  ): Promise<void> {
+    await this.#onCreatedOrUpdated(ctx, update);
+  }
+
+  async #onCreatedOrUpdated(
+    ctx: InboxContext<TContextData>,
+    create: Create | Update,
   ): Promise<void> {
     const object = await create.getObject(ctx);
     if (

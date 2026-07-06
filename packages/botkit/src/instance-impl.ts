@@ -47,6 +47,7 @@ import {
   QuoteRequest,
   Reject,
   Undo,
+  Update,
 } from "@fedify/vocab";
 import { getLogger } from "@logtape/logtape";
 import mimeDb from "mime-db";
@@ -322,6 +323,7 @@ export class InstanceImpl<TContextData>
       .on(Accept, (ctx, accept) => this.onFollowAccepted(ctx, accept))
       .on(Reject, (ctx, reject) => this.onFollowRejected(ctx, reject))
       .on(Create, (ctx, create) => this.onCreated(ctx, create))
+      .on(Update, (ctx, update) => this.onUpdated(ctx, update))
       .on(Announce, (ctx, announce) => this.onAnnounced(ctx, announce))
       .on(RawLike, (ctx, like) => this.onLiked(ctx, like))
       .setSharedKeyDispatcher((ctx) => this.dispatchSharedKey(ctx));
@@ -736,6 +738,32 @@ export class InstanceImpl<TContextData>
       return targets;
     });
     for (const bot of bots) await bot.onCreated(ctx, create);
+  }
+
+  async onUpdated(
+    ctx: InboxContext<TContextData>,
+    update: Update,
+  ): Promise<void> {
+    const bots = await this.#resolveTargets(ctx, async () => {
+      const targets = new Set<string>();
+      const addLocalObject = (uri: URL | null) => {
+        const parsed = parseLocalUri(
+          ctx,
+          uri,
+          this.legacyObjectUrisIdentifier,
+        );
+        if (
+          parsed?.type === "object" &&
+          typeof parsed.values.identifier === "string"
+        ) {
+          targets.add(parsed.values.identifier);
+        }
+      };
+      const object = await update.getObject(ctx);
+      if (isMessageObject(object)) addLocalObject(object.quoteId);
+      return targets;
+    });
+    for (const bot of bots) await bot.onUpdated(ctx, update);
   }
 
   async onAnnounced(

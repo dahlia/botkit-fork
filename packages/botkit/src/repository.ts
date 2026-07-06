@@ -2153,9 +2153,14 @@ export class MemoryRepository implements Repository {
     data.quoteAuthorizations.delete(id);
     const interactingObject = authorization?.interactingObjectId;
     if (interactingObject != null) {
-      data.quoteAuthorizationsByInteractingObject.delete(
+      const indexedId = data.quoteAuthorizationsByInteractingObject.get(
         interactingObject.href,
       );
+      if (indexedId === id) {
+        data.quoteAuthorizationsByInteractingObject.delete(
+          interactingObject.href,
+        );
+      }
     }
     return Promise.resolve(authorization);
   }

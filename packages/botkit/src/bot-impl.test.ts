@@ -2223,6 +2223,68 @@ test("BotImpl.onCreated()", async (t) => {
     ctx.forwardedRecipients = [];
   });
 
+  await t.test("on authorized FEP quote update", async () => {
+    const quoteId = new URL(
+      "https://example.com/ap/note/9cfd7129-4cf0-4505-90d8-3cac2dc42439",
+    );
+    const targetId = new URL(
+      "https://example.com/ap/note/a6358f1b-c978-49d3-8065-37a1df6168de",
+    );
+    const authorizationId = "01950000-0000-7000-8000-000000000204" as Uuid;
+    const authorizationUrl = new URL(
+      "https://example.com/ap/actor/bot/quote-authorization/" +
+        authorizationId,
+    );
+    await repository.addQuoteAuthorization(
+      "bot",
+      authorizationId,
+      new QuoteAuthorization({
+        id: authorizationUrl,
+        attribution: new URL("https://example.com/ap/actor/bot"),
+        interactingObject: quoteId,
+        interactionTarget: targetId,
+      }),
+    );
+    const update = new Update({
+      id: new URL(
+        "https://example.com/ap/update/9cfd7129-4cf0-4505-90d8-3cac2dc42439",
+      ),
+      actor: new URL("https://example.com/ap/actor/john"),
+      to: PUBLIC_COLLECTION,
+      cc: new URL("https://example.com/ap/actor/john/followers"),
+      object: new Note({
+        id: quoteId,
+        attribution: new Person({
+          id: new URL("https://example.com/ap/actor/john"),
+          preferredUsername: "john",
+        }),
+        to: PUBLIC_COLLECTION,
+        cc: new URL("https://example.com/ap/actor/john/followers"),
+        content: "It's an approved FEP quote update!",
+        quote: targetId,
+        quoteAuthorization: authorizationUrl,
+      }),
+    });
+    let quoted: [Session<void>, Message<MessageClass, void>][] = [];
+    bot.onQuote = (session, msg) => void (quoted.push([session, msg]));
+
+    await bot.onUpdated(ctx, update);
+
+    assert.deepStrictEqual(quoted.length, 1);
+    const [, msg] = quoted[0];
+    assert.ok(msg.quoteTarget != null);
+    assert.deepStrictEqual(msg.quoteTarget.id, targetId);
+    assert.deepStrictEqual(replied, []);
+    assert.deepStrictEqual(mentioned, []);
+    assert.deepStrictEqual(messaged, quoted);
+    assert.deepStrictEqual(ctx.sentActivities, []);
+    assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
+
+    quoted = [];
+    messaged = [];
+    ctx.forwardedRecipients = [];
+  });
+
   await t.test("on authorized FEP quote with mismatched fallback link", async () => {
     const quoteId = new URL(
       "https://example.com/ap/note/9cfd7129-4cf0-4505-90d8-3cac2dc42437",
@@ -2384,11 +2446,22 @@ test("BotImpl.onCreated()", async (t) => {
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
     assert.deepStrictEqual(messaged, []);
-    assert.deepStrictEqual(ctx.sentActivities, []);
+    assert.deepStrictEqual(ctx.sentActivities.length, 2);
+    const [actorDelete, followersDelete] = ctx.sentActivities;
+    assert.deepStrictEqual(
+      actorDelete.recipients,
+      [actor],
+    );
+    assert.ok(actorDelete.activity instanceof Delete);
+    assert.deepStrictEqual(actorDelete.activity.objectId, authorizationUrl);
+    assert.deepStrictEqual(followersDelete.recipients, "followers");
+    assert.ok(followersDelete.activity instanceof Delete);
+    assert.deepStrictEqual(followersDelete.activity.objectId, authorizationUrl);
     assert.deepStrictEqual(ctx.forwardedRecipients, []);
 
     quoted = [];
     messaged = [];
+    ctx.sentActivities = [];
     ctx.forwardedRecipients = [];
   });
 
