@@ -852,7 +852,15 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     quoteVisibility: MessageVisibility,
     targetVisibility: MessageVisibility,
   ): Promise<boolean> {
-    if (targetVisibility === "unknown") return quoteVisibility !== "direct";
+    if (targetVisibility === "unknown") {
+      return quoteVisibility !== "direct" ||
+        !await this.#isQuoteAudienceSubset(
+          ctx,
+          actorId,
+          quoteObject,
+          targetObject,
+        );
+    }
     if (quoteVisibility === "unknown") {
       return targetVisibility !== "public" && targetVisibility !== "unlisted";
     }

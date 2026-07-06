@@ -4120,6 +4120,72 @@ test("BotImpl.onQuoteRequested() rejects unknown-audience quotes", async () => {
   );
 });
 
+test("BotImpl.onQuoteRequested() checks direct quote recipients for unknown targets", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+    quotePolicy: "public",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const actor = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const unrelatedActor = new Person({
+    id: new URL("https://remote.example/users/bob"),
+    preferredUsername: "bob",
+  });
+  const targetId = new URL(
+    "https://example.com/ap/note/01950000-0000-7000-8000-000000000101",
+  );
+  await repository.addMessage(
+    "bot",
+    "01950000-0000-7000-8000-000000000101" as Uuid,
+    new Create({
+      id: new URL(
+        "https://example.com/ap/create/01950000-0000-7000-8000-000000000101",
+      ),
+      actor: session.actorId,
+      object: new Note({
+        id: targetId,
+        attribution: session.actorId,
+        content: "A target with an unrecognized audience.",
+        to: actor.id,
+      }),
+    }),
+  );
+  const quote = new Note({
+    id: new URL("https://remote.example/notes/direct-quote-outside-target"),
+    attribution: actor.id,
+    quoteUrl: targetId,
+    content: "Quoted directly to someone else.",
+    to: unrelatedActor.id,
+    tags: [new Mention({ href: unrelatedActor.id })],
+  });
+
+  await bot.onQuoteRequested(
+    ctx,
+    new QuoteRequest({
+      id: new URL("https://remote.example/quote-requests/direct-outside"),
+      actor,
+      object: targetId,
+      instrument: quote,
+    }),
+  );
+
+  assert.deepStrictEqual(ctx.sentActivities.length, 1);
+  const { recipients, activity } = ctx.sentActivities[0];
+  assert.deepStrictEqual(recipients, [actor]);
+  assert.ok(activity instanceof Reject);
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorization("bot", quote.id!),
+    undefined,
+  );
+});
+
 test("AuthorizedMessage.unauthorizeQuote() checks the target message", async () => {
   const repository = new MemoryRepository();
   const bot = new BotImpl<void>({
