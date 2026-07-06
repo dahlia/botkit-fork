@@ -1021,9 +1021,9 @@ export class KvRepository implements Repository {
    * reusing the repository for another bot, even concurrently, does not
    * adopt the same rows again.  Legacy keys are copied, not moved, and
    * the completion is recorded last, so a partially failed run is simply
-   * retried by the adopter on the next call without data loss.  Followees
-   * are also entered into the reverse lookup index used by
-   * {@link KvRepository.findFollowedBots}.
+   * retried by the adopter on the next call without data loss.  Followees and
+   * quote authorization references are also entered into their reverse lookup
+   * indexes.
    *
    * Calling this method again after a successful migration is a no-op.
    * @param identifier The identifier of the bot actor that adopts the legacy
@@ -1096,6 +1096,25 @@ export class KvRepository implements Repository {
             continue;
           }
           await this.#addToFolloweeIndex(identifier, followeeId);
+        }
+        if (category === "quoteAuthorizationRefs" && rest.length === 1) {
+          let authorization: URL;
+          try {
+            authorization = new URL(rest[0]);
+          } catch (error) {
+            // A malformed legacy key cannot be indexed; storage errors from
+            // the indexing itself must propagate so the done marker is not
+            // written and the adopter retries:
+            logger.warn(
+              "Skipping the malformed legacy quote authorization reference key {authorization}.",
+              { authorization: rest[0], error },
+            );
+            continue;
+          }
+          await this.#addToQuoteAuthorizationReferenceIndex(
+            identifier,
+            authorization,
+          );
         }
       }
     }

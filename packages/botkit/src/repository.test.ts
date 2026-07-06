@@ -2013,6 +2013,7 @@ describe("KvRepository.migrate()", () => {
     followRequestId: URL;
     followeeId: URL;
     followeeFollowJson: unknown;
+    quoteAuthorizationRefId: URL;
     sentFollowId: Uuid;
     sentFollowJson: unknown;
   }> {
@@ -2063,6 +2064,12 @@ describe("KvRepository.migrate()", () => {
     });
     await kv.set(["_botkit", "followees", followeeId.href], followeeFollowJson);
 
+    const quoteAuthorizationRefId = new URL("https://example.com/stamps/1");
+    await kv.set(
+      ["_botkit", "quoteAuthorizationRefs", quoteAuthorizationRefId.href],
+      messageId,
+    );
+
     const sentFollowId: Uuid = "e35ff5d8-ede9-4f5e-9b83-4bfcd4c9a69c";
     const sentFollow = new Follow({
       id: new URL(`https://example.com/ap/follow/${sentFollowId}`),
@@ -2089,6 +2096,7 @@ describe("KvRepository.migrate()", () => {
       followRequestId,
       followeeId,
       followeeFollowJson,
+      quoteAuthorizationRefId,
       sentFollowId,
       sentFollowJson,
     };
@@ -2208,6 +2216,29 @@ describe("KvRepository.migrate()", () => {
     assert.deepStrictEqual(
       await follow?.toJsonLd({ format: "compact" }),
       seed.followeeFollowJson,
+    );
+  });
+
+  test("migrates quote authorization references with their reverse index", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+    await repo.migrate("bot");
+
+    assert.deepStrictEqual(
+      await repo.findQuoteAuthorizationReference(
+        "bot",
+        seed.quoteAuthorizationRefId,
+      ),
+      seed.messageId,
+    );
+    assert.deepStrictEqual(
+      await Array.fromAsync(
+        repo.findQuoteAuthorizationReferenceIdentifiers(
+          seed.quoteAuthorizationRefId,
+        ),
+      ),
+      ["bot"],
     );
   });
 
