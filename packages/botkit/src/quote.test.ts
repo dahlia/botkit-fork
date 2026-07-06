@@ -13,10 +13,14 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import { PUBLIC_COLLECTION } from "@fedify/vocab";
+import { InteractionRule, PUBLIC_COLLECTION } from "@fedify/vocab";
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { normalizeQuotePolicy, serializeQuotePolicy } from "./quote.ts";
+import {
+  normalizeQuotePolicy,
+  parseQuotePolicy,
+  serializeQuotePolicy,
+} from "./quote.ts";
 
 describe("normalizeQuotePolicy()", () => {
   test("normalizes string policies", () => {
@@ -73,5 +77,20 @@ describe("serializeQuotePolicy()", () => {
     ).canQuote;
     assert.deepStrictEqual(rule?.automaticApprovals, []);
     assert.deepStrictEqual(rule?.manualApprovals, [followers]);
+  });
+});
+
+describe("parseQuotePolicy()", () => {
+  const actor = new URL("https://example.com/ap/actor/bot");
+  const followers = new URL("https://example.com/ap/actor/bot/followers");
+
+  test("treats nullish approval lists as absent", () => {
+    const rule = new InteractionRule({});
+    Object.defineProperty(rule, "automaticApprovals", { value: null });
+    Object.defineProperty(rule, "manualApprovals", { value: undefined });
+    assert.deepStrictEqual(parseQuotePolicy(rule, actor, followers), {
+      automatic: undefined,
+      manual: undefined,
+    });
   });
 });

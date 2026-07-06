@@ -199,10 +199,11 @@ function serializeQuoteAcceptance(
 }
 
 function parseQuoteAcceptance(
-  approvals: readonly URL[],
+  approvals: readonly URL[] | null | undefined,
   actorUri: URL,
   followersUri?: URL | null,
 ): QuoteAcceptance | undefined {
+  if (approvals == null) return undefined;
   if (approvals.some((approval) => approval.href === PUBLIC_COLLECTION.href)) {
     return "public";
   }

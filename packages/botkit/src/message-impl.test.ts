@@ -663,7 +663,15 @@ test("AuthorizedMessage.update()", async (t) => {
     const ctx = createMockContext(bot, "https://example.com");
     const session = new SessionImpl(bot, ctx);
     const msg = await session.publish(text`Hello`);
+    assert.deepStrictEqual(msg.quotePolicy, {
+      automatic: "public",
+      manual: undefined,
+    });
     await msg.update(text`Hello again`, { quotePolicy: "nobody" });
+    assert.deepStrictEqual(msg.quotePolicy, {
+      automatic: "nobody",
+      manual: undefined,
+    });
     const [create] = await Array.fromAsync(repository.getMessages("bot"));
     assert.ok(create instanceof Create);
     const object = await create.getObject(ctx);

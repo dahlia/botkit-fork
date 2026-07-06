@@ -98,7 +98,7 @@ export class MessageImpl<T extends MessageClass, TContextData>
   html: string;
   readonly replyTarget?: Message<MessageClass, TContextData> | undefined;
   readonly quoteTarget?: Message<MessageClass, TContextData> | undefined;
-  readonly quotePolicy?: QuotePolicy | undefined;
+  quotePolicy?: QuotePolicy | undefined;
   mentions: readonly Actor[];
   hashtags: readonly Hashtag[];
   readonly attachments: readonly Document[];
@@ -505,6 +505,11 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
             ),
         });
         this.raw = newMessage as T;
+        this.quotePolicy = parseQuotePolicy(
+          newMessage.interactionPolicy?.canQuote,
+          this.session.actorId,
+          this.session.context.getFollowersUri(this.session.bot.identifier),
+        );
         create = create.clone({ object: newMessage, updated });
         const to = create.toIds.map((url) => url.href);
         for (const url of newMessage.toIds) {
