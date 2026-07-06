@@ -288,6 +288,14 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
         }),
       );
     }
+    const actorId = this.context.getActorUri(this.bot.identifier);
+    const quoteTargetActorId = options.quoteTarget?.actor.id;
+    const privateQuoteAudienceIds = quoteTargetActorId != null &&
+        quoteTargetActorId.href !== actorId.href &&
+        (visibility === "followers" || visibility === "direct") &&
+        !mentionedActorIds.some((id) => id.href === quoteTargetActorId.href)
+      ? [quoteTargetActorId]
+      : [];
     let inclusiveOptions: Note[] = [];
     let exclusiveOptions: Note[] = [];
     let voters: number | null = null;
@@ -327,10 +335,10 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
       tags,
       interactionPolicy: serializeQuotePolicy(
         options.quotePolicy ?? this.bot.quotePolicy,
-        this.context.getActorUri(this.bot.identifier),
+        actorId,
         this.context.getFollowersUri(this.bot.identifier),
       ),
-      attribution: this.context.getActorUri(this.bot.identifier),
+      attribution: actorId,
       attachments: options.attachments ?? [],
       inclusiveOptions,
       exclusiveOptions,
@@ -342,8 +350,9 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
         ? [
           this.context.getFollowersUri(this.bot.identifier),
           ...mentionedActorIds,
+          ...privateQuoteAudienceIds,
         ]
-        : mentionedActorIds,
+        : [...mentionedActorIds, ...privateQuoteAudienceIds],
       ccs: visibility === "public"
         ? [this.context.getFollowersUri(this.bot.identifier)]
         : visibility === "unlisted"

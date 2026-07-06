@@ -554,6 +554,39 @@ test("SessionImpl.publish()", async (t) => {
     assert.deepStrictEqual(quote.quoteTarget?.id, originalMsg.id);
   });
 
+  await t.test("private quote includes quoted author in audience", async () => {
+    const originalAuthorId = new URL("https://remote.example/ap/actor/john");
+    const originalAuthor = new Person({
+      id: originalAuthorId,
+      preferredUsername: "john",
+    });
+    const originalPost = new Note({
+      id: new URL("https://remote.example/ap/note/private"),
+      content: "<p>Private post</p>",
+      attribution: originalAuthor,
+      to: new URL("https://remote.example/ap/actor/john/followers"),
+    });
+    const originalMsg = await createMessage<Note, void>(
+      originalPost,
+      session,
+      {},
+    );
+
+    for (const visibility of ["followers", "direct"] as const) {
+      ctx.sentActivities = [];
+      await session.publish(text`Private quote`, {
+        quoteTarget: originalMsg,
+        visibility,
+      });
+
+      const { activity } = ctx.sentActivities[0];
+      assert.ok(activity instanceof Create);
+      const object = await activity.getObject(ctx);
+      assert.ok(object instanceof Note);
+      assert.ok(object.toIds.includes(originalAuthorId));
+    }
+  });
+
   await t.test("poll single choice", async () => {
     ctx.sentActivities = [];
     const endTime = Temporal.Now.instant().add({ hours: 24 });
