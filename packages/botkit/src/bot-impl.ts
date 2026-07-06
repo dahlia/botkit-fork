@@ -1222,15 +1222,20 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       quoteUrl,
       this.legacyObjectUrisIdentifier,
     );
-    if (
-      this.onQuote != null &&
-      quoteTarget?.type === "object" &&
+    const isLocalQuoteTarget = quoteTarget?.type === "object" &&
       // @ts-ignore: quoteTarget.class satisfies (typeof messageClasses)[number]
       messageClasses.includes(quoteTarget.class) &&
-      quoteTarget.values.identifier === this.identifier &&
-      (!requiresQuoteAuthorization ||
-        (fepQuoteUrl != null &&
-          await this.#hasValidQuoteAuthorization(ctx, object, fepQuoteUrl)))
+      quoteTarget.values.identifier === this.identifier;
+    const hasValidQuoteAuthorization = !requiresQuoteAuthorization ||
+      (fepQuoteUrl != null && isLocalQuoteTarget &&
+        await this.#hasValidQuoteAuthorization(ctx, object, fepQuoteUrl));
+    if (requiresQuoteAuthorization && isLocalQuoteTarget) {
+      if (!hasValidQuoteAuthorization) return;
+    }
+    if (
+      this.onQuote != null &&
+      isLocalQuoteTarget &&
+      hasValidQuoteAuthorization
     ) {
       const message = await getMessage();
       if (

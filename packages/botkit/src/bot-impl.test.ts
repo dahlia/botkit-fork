@@ -2101,7 +2101,7 @@ test("BotImpl.onCreated()", async (t) => {
     assert.deepStrictEqual(quoted, []);
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
-    assert.deepStrictEqual(messaged.length, 1);
+    assert.deepStrictEqual(messaged, []);
     assert.deepStrictEqual(ctx.sentActivities, []);
     assert.deepStrictEqual(ctx.forwardedRecipients, []);
 
@@ -2149,7 +2149,7 @@ test("BotImpl.onCreated()", async (t) => {
     assert.deepStrictEqual(quoted, []);
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
-    assert.deepStrictEqual(messaged.length, 1);
+    assert.deepStrictEqual(messaged, []);
     assert.deepStrictEqual(ctx.sentActivities, []);
     assert.deepStrictEqual(ctx.forwardedRecipients, []);
 
@@ -2383,7 +2383,7 @@ test("BotImpl.onCreated()", async (t) => {
     assert.deepStrictEqual(quoted, []);
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
-    assert.deepStrictEqual(messaged.length, 1);
+    assert.deepStrictEqual(messaged, []);
     assert.deepStrictEqual(ctx.sentActivities, []);
     assert.deepStrictEqual(ctx.forwardedRecipients, []);
 
