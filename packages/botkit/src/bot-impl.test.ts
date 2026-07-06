@@ -4182,6 +4182,82 @@ test("BotImpl.onDeleted() strips revoked quote authorizations", async () => {
   assert.deepStrictEqual(rejecter?.id, author.id);
 });
 
+test("BotImpl.onDeleted() ignores quote revocations from other actors", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const author = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const otherActor = new Person({
+    id: new URL("https://remote.example/users/bob"),
+    preferredUsername: "bob",
+  });
+  const target = new Note({
+    id: new URL("https://remote.example/notes/original"),
+    attribution: author,
+    content: "Original.",
+    to: PUBLIC_COLLECTION,
+  });
+  Object.defineProperty(ctx, "lookupObject", {
+    value: (id: URL) =>
+      Promise.resolve(id.href === target.id?.href ? target : null),
+  });
+  const targetMessage = await createMessage(target, session, {});
+  const quote = await session.publish(text`Please approve this.`, {
+    quoteTarget: targetMessage,
+  });
+  const parsed = ctx.parseUri(quote.id);
+  assert.ok(parsed?.type === "object");
+  const messageId = parsed.values.id as Uuid;
+  const authorization = new QuoteAuthorization({
+    id: new URL("https://remote.example/stamps/1"),
+    attribution: author.id,
+    interactingObject: quote.id,
+    interactionTarget: target.id,
+  });
+  await bot.onFollowAccepted(
+    ctx,
+    new Accept({
+      actor: author,
+      object: ctx.getObjectUri(QuoteRequest, {
+        identifier: bot.identifier,
+        id: messageId,
+      }),
+      result: authorization,
+    }),
+  );
+  ctx.sentActivities = [];
+
+  await bot.onDeleted(
+    ctx,
+    new Delete({
+      actor: otherActor,
+      object: authorization.id,
+    }),
+  );
+
+  const stored = await repository.getMessage("bot", messageId);
+  assert.ok(stored instanceof Create);
+  const object = await stored.getObject(ctx);
+  assert.ok(object instanceof Note);
+  assert.deepStrictEqual(object.quoteAuthorizationId, authorization.id);
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference(
+      "bot",
+      authorization.id!,
+    ),
+    messageId,
+  );
+  assert.deepStrictEqual(ctx.sentActivities.length, 0);
+});
+
 test("BotImpl.onDeleted() strips revoked quotes with missing targets", async () => {
   const repository = new MemoryRepository();
   const bot = new BotImpl<void>({
@@ -4363,6 +4439,104 @@ test("BotImpl.onDeleted() keeps references after update failures", async () => {
   assert.ok(object instanceof Note);
   assert.deepStrictEqual(object.quoteAuthorizationId, authorization.id);
   assert.deepStrictEqual(ctx.sentActivities.length, 0);
+});
+
+test("BotImpl.onDeleted() removes references after missing updates", async () => {
+  class MissingUpdateRepository extends MemoryRepository {
+    #updateCount = 0;
+
+    override updateMessage(
+      identifier: string,
+      id: Uuid,
+      updater: (
+        existing: Create | Announce,
+      ) =>
+        | Create
+        | Announce
+        | undefined
+        | Promise<Create | Announce | undefined>,
+    ): Promise<boolean> {
+      this.#updateCount++;
+      if (identifier === "bot" && this.#updateCount > 1) {
+        return Promise.resolve(false);
+      }
+      return super.updateMessage(identifier, id, updater);
+    }
+  }
+  const repository = new MissingUpdateRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const author = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const target = new Note({
+    id: new URL("https://remote.example/notes/original"),
+    attribution: author,
+    content: "Original.",
+    to: PUBLIC_COLLECTION,
+  });
+  Object.defineProperty(ctx, "lookupObject", {
+    value: (id: URL) =>
+      Promise.resolve(id.href === target.id?.href ? target : null),
+  });
+  const targetMessage = await createMessage(target, session, {});
+  const quote = await session.publish(text`Please approve this.`, {
+    quoteTarget: targetMessage,
+  });
+  const parsed = ctx.parseUri(quote.id);
+  assert.ok(parsed?.type === "object");
+  const messageId = parsed.values.id as Uuid;
+  const authorization = new QuoteAuthorization({
+    id: new URL("https://remote.example/stamps/1"),
+    attribution: author.id,
+    interactingObject: quote.id,
+    interactionTarget: target.id,
+  });
+  await bot.onFollowAccepted(
+    ctx,
+    new Accept({
+      actor: author,
+      object: ctx.getObjectUri(QuoteRequest, {
+        identifier: bot.identifier,
+        id: messageId,
+      }),
+      result: authorization,
+    }),
+  );
+  let rejected: AuthorizedMessage<MessageClass, void> | undefined;
+  bot.onQuoteRejected = (_session, message) => {
+    rejected = message;
+  };
+  ctx.sentActivities = [];
+
+  await bot.onDeleted(
+    ctx,
+    new Delete({
+      actor: author,
+      object: authorization.id,
+    }),
+  );
+
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference(
+      "bot",
+      authorization.id!,
+    ),
+    undefined,
+  );
+  const stored = await repository.getMessage("bot", messageId);
+  assert.ok(stored instanceof Create);
+  const object = await stored.getObject(ctx);
+  assert.ok(object instanceof Note);
+  assert.deepStrictEqual(object.quoteAuthorizationId, authorization.id);
+  assert.deepStrictEqual(ctx.sentActivities.length, 0);
+  assert.deepStrictEqual(rejected, undefined);
 });
 
 test("BotImpl ignores malformed quote request IDs", async (t) => {

@@ -533,6 +533,7 @@ describe("shared inbox routing", () => {
       "alpha",
       authorization,
       messageId,
+      author.id!,
     );
 
     await instance.onDeleted(

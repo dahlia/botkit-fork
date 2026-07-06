@@ -769,6 +769,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     await this.repository.addQuoteAuthorizationReference(
       approval.authorization.id!,
       id,
+      approval.actor.id!,
     );
     const removeReference = async () => {
       try {
@@ -870,12 +871,16 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       updated: Temporal.Now.instant(),
     });
     const updated = stored.clone({ object: strippedObject });
-    await this.repository.updateMessage(id, () => Promise.resolve(updated));
+    const wasUpdated = await this.repository.updateMessage(
+      id,
+      () => Promise.resolve(updated),
+    );
     if (object.quoteAuthorizationId != null) {
       await this.repository.removeQuoteAuthorizationReference(
         object.quoteAuthorizationId,
       );
     }
+    if (!wasUpdated) return;
     await this.#sendQuoteUpdate(ctx, strippedObject, actor);
     if (this.onQuoteRejected != null) {
       const session = this.getSession(ctx);
@@ -975,11 +980,15 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     });
     if (
       !isActor(actor) || actor.id == null ||
-      actor.id.href !== del.actorId.href ||
-      object.quoteAuthorizationId.origin !== actor.id.origin
+      actor.id.href !== del.actorId.href
     ) {
       return undefined;
     }
+    const attribution = await this.repository
+      .findQuoteAuthorizationReferenceAttribution(
+        object.quoteAuthorizationId,
+      );
+    if (attribution?.href !== actor.id.href) return undefined;
     return actor;
   }
 
@@ -2351,12 +2360,14 @@ export class MigrationGatedRepository implements Repository {
     identifier: string,
     authorization: URL,
     messageId: Uuid,
+    attribution?: URL,
   ): Promise<void> {
     await this.#migration;
     return await this.#repository.addQuoteAuthorizationReference(
       identifier,
       authorization,
       messageId,
+      attribution,
     );
   }
 
@@ -2366,6 +2377,17 @@ export class MigrationGatedRepository implements Repository {
   ): Promise<Uuid | undefined> {
     await this.#migration;
     return await this.#repository.findQuoteAuthorizationReference(
+      identifier,
+      authorization,
+    );
+  }
+
+  async findQuoteAuthorizationReferenceAttribution(
+    identifier: string,
+    authorization: URL,
+  ): Promise<URL | undefined> {
+    await this.#migration;
+    return await this.#repository.findQuoteAuthorizationReferenceAttribution(
       identifier,
       authorization,
     );

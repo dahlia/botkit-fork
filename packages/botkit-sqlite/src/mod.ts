@@ -109,6 +109,15 @@ export class SqliteRepository implements Repository, Disposable {
     return row.count > 0;
   }
 
+  private hasColumn(table: string, column: string): boolean {
+    const stmt = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM pragma_table_info(?)
+      WHERE name = ?
+    `);
+    const row = stmt.get(table, column) as { count: number };
+    return row.count > 0;
+  }
+
   /**
    * Rebuilds tables created by \@fedify/botkit-sqlite 0.4 or earlier, which
    * had no `bot_id` column, into the bot-scoped schema.  Existing rows get
@@ -444,9 +453,15 @@ export class SqliteRepository implements Repository, Disposable {
         bot_id TEXT NOT NULL,
         authorization TEXT NOT NULL,
         message_id TEXT NOT NULL,
+        attribution TEXT,
         PRIMARY KEY (bot_id, authorization)
       )
     `);
+    if (!this.hasColumn("quote_authorization_refs", "attribution")) {
+      this.db.exec(`
+        ALTER TABLE quote_authorization_refs ADD COLUMN attribution TEXT
+      `);
+    }
 
     // Poll votes table
     this.db.exec(`
@@ -1082,13 +1097,19 @@ export class SqliteRepository implements Repository, Disposable {
     identifier: string,
     authorization: URL,
     messageId: Uuid,
+    attribution?: URL,
   ): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO quote_authorization_refs
-        (bot_id, authorization, message_id)
-      VALUES (?, ?, ?)
+        (bot_id, authorization, message_id, attribution)
+      VALUES (?, ?, ?, ?)
     `);
-    stmt.run(identifier, authorization.href, messageId);
+    stmt.run(
+      identifier,
+      authorization.href,
+      messageId,
+      attribution?.href ?? null,
+    );
     return Promise.resolve();
   }
 
@@ -1104,6 +1125,25 @@ export class SqliteRepository implements Repository, Disposable {
       | { message_id: Uuid }
       | undefined;
     return Promise.resolve(row?.message_id);
+  }
+
+  findQuoteAuthorizationReferenceAttribution(
+    identifier: string,
+    authorization: URL,
+  ): Promise<URL | undefined> {
+    const stmt = this.db.prepare(`
+      SELECT attribution FROM quote_authorization_refs
+      WHERE bot_id = ? AND authorization = ?
+    `);
+    const row = stmt.get(identifier, authorization.href) as
+      | { attribution: string | null }
+      | undefined;
+    if (row?.attribution == null) return Promise.resolve(undefined);
+    try {
+      return Promise.resolve(new URL(row.attribution));
+    } catch {
+      return Promise.resolve(undefined);
+    }
   }
 
   removeQuoteAuthorizationReference(
