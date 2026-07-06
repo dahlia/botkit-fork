@@ -47,7 +47,7 @@ import {
   PropertyValue,
   PUBLIC_COLLECTION,
   Question,
-  type QuoteAuthorization,
+  QuoteAuthorization,
   type QuoteRequest as RawQuoteRequest,
   type Recipient,
   Reject,
@@ -934,6 +934,35 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     return false;
   }
 
+  async #hasValidQuoteAuthorization(
+    ctx: InboxContext<TContextData>,
+    object: Object,
+    targetId: URL,
+  ): Promise<boolean> {
+    if (
+      object.id == null ||
+      !("quoteAuthorizationId" in object) ||
+      !(object.quoteAuthorizationId instanceof URL)
+    ) return false;
+    const parsed = parseLocalUri(
+      ctx,
+      object.quoteAuthorizationId,
+      this.legacyObjectUrisIdentifier,
+    );
+    if (
+      parsed?.type !== "object" ||
+      parsed.class !== QuoteAuthorization ||
+      parsed.values.identifier !== this.identifier
+    ) return false;
+    const authorization = await this.repository.getQuoteAuthorization(
+      parsed.values.id as Uuid,
+    );
+    return authorization?.attributionId?.href ===
+        ctx.getActorUri(this.identifier).href &&
+      authorization.interactingObjectId?.href === object.id.href &&
+      authorization.interactionTargetId?.href === targetId.href;
+  }
+
   async onCreated(
     ctx: InboxContext<TContextData>,
     create: Create,
@@ -1109,7 +1138,9 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
         break;
       }
     }
-    if (quoteUrl == null) quoteUrl = object.quoteId ?? object.quoteUrl;
+    const fepQuoteUrl = object.quoteId;
+    const requiresQuoteAuthorization = quoteUrl == null && fepQuoteUrl != null;
+    if (quoteUrl == null) quoteUrl = fepQuoteUrl ?? object.quoteUrl;
     const quoteTarget = parseLocalUri(
       ctx,
       quoteUrl,
@@ -1120,7 +1151,10 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       quoteTarget?.type === "object" &&
       // @ts-ignore: quoteTarget.class satisfies (typeof messageClasses)[number]
       messageClasses.includes(quoteTarget.class) &&
-      quoteTarget.values.identifier === this.identifier
+      quoteTarget.values.identifier === this.identifier &&
+      (!requiresQuoteAuthorization ||
+        (fepQuoteUrl != null &&
+          await this.#hasValidQuoteAuthorization(ctx, object, fepQuoteUrl)))
     ) {
       const message = await getMessage();
       if (
