@@ -313,8 +313,8 @@ the *Message* concept document.
 [FEP-044f]: https://w3id.org/fep/044f
 
 
-Quote accepted and rejected
----------------------------
+Quote accepted, rejected, and revoked
+-------------------------------------
 
 *This API is available since BotKit 0.5.0.*
 
@@ -336,10 +336,9 @@ bot.onQuoteAccepted = (_session, message, approver) => {
 };
 ~~~~
 
-When the request is rejected, or when a previously accepted
-`QuoteAuthorization` stamp is later deleted by the quoted author, BotKit
-removes the quote target and fallback quote link from the stored message,
-sends an `Update` activity, and then calls `~Bot.onQuoteRejected`:
+When the request is rejected, BotKit removes the quote target and fallback
+quote link from the stored message, sends an `Update` activity, and then calls
+`~Bot.onQuoteRejected`:
 
 ~~~~ typescript twoslash
 import { type Bot } from "@fedify/botkit";
@@ -347,6 +346,22 @@ const bot = {} as unknown as Bot<void>;
 // ---cut-before---
 bot.onQuoteRejected = (_session, message, rejecter) => {
   console.log(`${rejecter.id} rejected ${message.id}`);
+  console.log(message.quoteTarget);  // undefined
+};
+~~~~
+
+If a previously accepted `QuoteAuthorization` stamp is later deleted by the
+quoted author's server, BotKit forwards the `Delete` activity to the quote
+post's audience, removes the quote target and fallback quote link from the
+stored message, sends an `Update` activity, and then calls
+`~Bot.onQuoteRevoked`:
+
+~~~~ typescript twoslash
+import { type Bot } from "@fedify/botkit";
+const bot = {} as unknown as Bot<void>;
+// ---cut-before---
+bot.onQuoteRevoked = (_session, message, revoker) => {
+  console.log(`${revoker.id} revoked approval for ${message.id}`);
   console.log(message.quoteTarget);  // undefined
 };
 ~~~~

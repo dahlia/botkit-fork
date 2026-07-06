@@ -396,6 +396,17 @@ export interface Repository {
   ): Promise<Uuid | undefined>;
 
   /**
+   * Finds bot identifiers whose quote messages depend on a received quote
+   * authorization stamp.
+   * @param authorization The URI of the received quote authorization stamp.
+   * @returns The identifiers of bot actors that reference the stamp.
+   * @since 0.5.0
+   */
+  findQuoteAuthorizationReferenceIdentifiers(
+    authorization: URL,
+  ): AsyncIterable<string>;
+
+  /**
    * Finds the actor that issued a received quote authorization stamp.
    * @param identifier The identifier of the bot actor that owns the message.
    * @param authorization The URI of the received quote authorization stamp.
@@ -989,6 +1000,15 @@ export class KvRepository implements Repository {
       "quoteAuthorizationRefs",
       authorization.href,
     );
+  }
+
+  #quoteAuthorizationReferenceIndexKey(authorization: URL): KvKey {
+    return [
+      ...this.prefix,
+      "index",
+      "quoteAuthorizationRefs",
+      authorization.href,
+    ];
   }
 
   /**
@@ -1831,6 +1851,10 @@ export class KvRepository implements Repository {
         ? messageId
         : { messageId, attribution: attribution.href },
     );
+    await this.#addToQuoteAuthorizationReferenceIndex(
+      identifier,
+      authorization,
+    );
   }
 
   async findQuoteAuthorizationReference(
@@ -1842,6 +1866,15 @@ export class KvRepository implements Repository {
     );
     if (typeof value === "string") return value as Uuid;
     return value?.messageId;
+  }
+
+  async *findQuoteAuthorizationReferenceIdentifiers(
+    authorization: URL,
+  ): AsyncIterable<string> {
+    const identifiers = await this.kv.get<string[]>(
+      this.#quoteAuthorizationReferenceIndexKey(authorization),
+    ) ?? [];
+    for (const identifier of identifiers) yield identifier;
   }
 
   async findQuoteAuthorizationReferenceAttribution(
@@ -1866,6 +1899,10 @@ export class KvRepository implements Repository {
   ): Promise<void> {
     await this.kv.delete(
       this.#quoteAuthorizationReferenceKey(identifier, authorization),
+    );
+    await this.#removeFromQuoteAuthorizationReferenceIndex(
+      identifier,
+      authorization,
     );
   }
 
@@ -1907,6 +1944,48 @@ export class KvRepository implements Repository {
       logger.trace(
         "CAS operation failed, retrying to unindex followee {followeeId} for bot {identifier}.",
         { followeeId: followeeId.href, identifier },
+      );
+    }
+  }
+
+  async #addToQuoteAuthorizationReferenceIndex(
+    identifier: string,
+    authorization: URL,
+  ): Promise<void> {
+    const key = this.#quoteAuthorizationReferenceIndexKey(authorization);
+    while (true) {
+      const prev = await this.kv.get<string[]>(key);
+      if (prev != null && prev.includes(identifier)) return;
+      const next = prev == null ? [identifier] : [...prev, identifier];
+      if (this.kv.cas == null) {
+        await this.kv.set(key, next);
+        return;
+      }
+      if (await this.kv.cas(key, prev, next)) return;
+      logger.trace(
+        "CAS operation failed, retrying to index quote authorization reference {authorization} for bot {identifier}.",
+        { authorization: authorization.href, identifier },
+      );
+    }
+  }
+
+  async #removeFromQuoteAuthorizationReferenceIndex(
+    identifier: string,
+    authorization: URL,
+  ): Promise<void> {
+    const key = this.#quoteAuthorizationReferenceIndexKey(authorization);
+    while (true) {
+      const prev = await this.kv.get<string[]>(key);
+      if (prev == null || !prev.includes(identifier)) return;
+      const next = prev.filter((id) => id !== identifier);
+      if (this.kv.cas == null) {
+        await this.kv.set(key, next);
+        return;
+      }
+      if (await this.kv.cas(key, prev, next)) return;
+      logger.trace(
+        "CAS operation failed, retrying to unindex quote authorization reference {authorization} for bot {identifier}.",
+        { authorization: authorization.href, identifier },
       );
     }
   }
@@ -2380,6 +2459,16 @@ export class MemoryRepository implements Repository {
     );
   }
 
+  async *findQuoteAuthorizationReferenceIdentifiers(
+    authorization: URL,
+  ): AsyncIterable<string> {
+    for (const [identifier, data] of this.#data) {
+      if (data.quoteAuthorizationRefs.has(authorization.href)) {
+        yield identifier;
+      }
+    }
+  }
+
   findQuoteAuthorizationReferenceAttribution(
     identifier: string,
     authorization: URL,
@@ -2787,6 +2876,34 @@ export class MemoryCachedRepository implements Repository {
       );
     }
     return found;
+  }
+
+  async *findQuoteAuthorizationReferenceIdentifiers(
+    authorization: URL,
+  ): AsyncIterable<string> {
+    for await (
+      const identifier of this.underlying
+        .findQuoteAuthorizationReferenceIdentifiers(authorization)
+    ) {
+      const found = await this.underlying.findQuoteAuthorizationReference(
+        identifier,
+        authorization,
+      );
+      if (found != null) {
+        const attribution = await this.underlying
+          .findQuoteAuthorizationReferenceAttribution(
+            identifier,
+            authorization,
+          );
+        await this.cache.addQuoteAuthorizationReference(
+          identifier,
+          authorization,
+          found,
+          attribution,
+        );
+      }
+      yield identifier;
+    }
   }
 
   async findQuoteAuthorizationReferenceAttribution(

@@ -342,9 +342,9 @@ console.log(message.quoteApprovalState);  // "pending"
 
 If the author accepts the quote request, BotKit stores the received
 authorization stamp on the message and sends an `Update` activity.  If the
-author rejects it, BotKit removes the quote target and the fallback quote link
-from the stored message and sends an `Update` activity with the stripped
-content.
+author rejects it, or the author's server later revokes the authorization
+stamp, BotKit removes the quote target and the fallback quote link from the
+stored message and sends an `Update` activity with the stripped content.
 
 ### Polls
 
@@ -618,6 +618,16 @@ object.
 You can get the message that is quoted in the message through
 the `~Message.quoteTarget` property.  It is either another `Message` object
 or `undefined` if the message is not a quote.
+
+For messages received from the fediverse, `~Message.quoteApproved` reports
+whether the quote has FEP-044f approval.  It is `undefined` when the message
+does not quote anything, `true` for self-quotes and quotes with a valid
+`QuoteAuthorization` stamp, and `false` when the stamp is missing, invalid, or
+could not be fetched.  Legacy quote links such as Misskey quote tags and
+`quoteUrl` without a `QuoteAuthorization` stamp are reported as unapproved.
+
+BotKit checks `~Message.quoteApproved` when it materializes the message, so a
+message can reflect a later stamp revocation when it is loaded again.
 
 For authorized messages created by your bot,
 `~AuthorizedMessage.quoteApprovalState` describes whether the quote target

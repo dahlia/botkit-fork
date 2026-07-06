@@ -33,6 +33,7 @@ import type {
   QuoteEventHandler,
   QuoteRejectedEventHandler,
   QuoteRequestEventHandler,
+  QuoteRevokedEventHandler,
   ReactionEventHandler,
   RejectEventHandler,
   ReplyEventHandler,
@@ -109,6 +110,13 @@ export interface BotEventHandlers<TContextData> {
    * @since 0.5.0
    */
   onQuoteRejected?: QuoteRejectedEventHandler<TContextData>;
+
+  /**
+   * An event handler invoked when a quote authorization for the bot's quote
+   * post is revoked.
+   * @since 0.5.0
+   */
+  onQuoteRevoked?: QuoteRevokedEventHandler<TContextData>;
 
   /**
    * An event handler for a message shown to the bot's timeline.  To listen

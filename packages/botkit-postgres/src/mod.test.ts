@@ -1104,8 +1104,25 @@ if (postgresUrl == null) {
           undefined,
         );
         assert.deepStrictEqual(
+          await Array.fromAsync(
+            repo.findQuoteAuthorizationReferenceIdentifiers(authorization),
+          ),
+          ["bot"],
+        );
+        assert.deepStrictEqual(
           await repo.findQuoteAuthorizationReference("bot", authorization),
           firstMessageId,
+        );
+        await repo.addQuoteAuthorizationReference(
+          "other",
+          authorization,
+          firstMessageId,
+        );
+        assert.deepStrictEqual(
+          await Array.fromAsync(
+            repo.findQuoteAuthorizationReferenceIdentifiers(authorization),
+          ),
+          ["bot", "other"],
         );
 
         await repo.addQuoteAuthorizationReference(
@@ -1124,6 +1141,12 @@ if (postgresUrl == null) {
         assert.deepStrictEqual(
           await repo.findQuoteAuthorizationReference("bot", authorization),
           undefined,
+        );
+        assert.deepStrictEqual(
+          await Array.fromAsync(
+            repo.findQuoteAuthorizationReferenceIdentifiers(authorization),
+          ),
+          ["other"],
         );
       } finally {
         await harness.cleanup();

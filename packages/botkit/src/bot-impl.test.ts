@@ -2099,12 +2099,21 @@ test("BotImpl.onCreated()", async (t) => {
 
     await bot.onCreated(ctx, create);
 
-    assert.deepStrictEqual(quoted, []);
+    assert.deepStrictEqual(quoted.length, 1);
+    const [, msg] = quoted[0];
+    assert.ok(msg.quoteTarget != null);
+    assert.deepStrictEqual(
+      msg.quoteTarget.id,
+      new URL(
+        "https://example.com/ap/note/a6358f1b-c978-49d3-8065-37a1df6168de",
+      ),
+    );
+    assert.deepStrictEqual(msg.quoteApproved, false);
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
-    assert.deepStrictEqual(messaged, []);
+    assert.deepStrictEqual(messaged, quoted);
     assert.deepStrictEqual(ctx.sentActivities, []);
-    assert.deepStrictEqual(ctx.forwardedRecipients, []);
+    assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
 
     quoted = [];
     messaged = [];
@@ -2147,12 +2156,16 @@ test("BotImpl.onCreated()", async (t) => {
 
     await bot.onCreated(ctx, create);
 
-    assert.deepStrictEqual(quoted, []);
+    assert.deepStrictEqual(quoted.length, 1);
+    const [, msg] = quoted[0];
+    assert.ok(msg.quoteTarget != null);
+    assert.deepStrictEqual(msg.quoteTarget.id, targetId);
+    assert.deepStrictEqual(msg.quoteApproved, false);
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
-    assert.deepStrictEqual(messaged, []);
+    assert.deepStrictEqual(messaged, quoted);
     assert.deepStrictEqual(ctx.sentActivities, []);
-    assert.deepStrictEqual(ctx.forwardedRecipients, []);
+    assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
 
     quoted = [];
     messaged = [];
@@ -2213,6 +2226,7 @@ test("BotImpl.onCreated()", async (t) => {
       msg.quoteTarget.id,
       targetId,
     );
+    assert.deepStrictEqual(msg.quoteApproved, true);
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
     assert.deepStrictEqual(messaged, quoted);
@@ -2275,6 +2289,7 @@ test("BotImpl.onCreated()", async (t) => {
     const [, msg] = quoted[0];
     assert.ok(msg.quoteTarget != null);
     assert.deepStrictEqual(msg.quoteTarget.id, targetId);
+    assert.deepStrictEqual(msg.quoteApproved, true);
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
     assert.deepStrictEqual(messaged, quoted);
@@ -2368,6 +2383,7 @@ test("BotImpl.onCreated()", async (t) => {
       msg.quoteTarget.id,
       fepTargetId,
     );
+    assert.deepStrictEqual(msg.quoteApproved, true);
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
     assert.deepStrictEqual(messaged, quoted);
@@ -2443,10 +2459,14 @@ test("BotImpl.onCreated()", async (t) => {
 
     await bot.onCreated(ctx, create);
 
-    assert.deepStrictEqual(quoted, []);
+    assert.deepStrictEqual(quoted.length, 1);
+    const [, msg] = quoted[0];
+    assert.ok(msg.quoteTarget != null);
+    assert.deepStrictEqual(msg.quoteTarget.id, targetId);
+    assert.deepStrictEqual(msg.quoteApproved, false);
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
-    assert.deepStrictEqual(messaged, []);
+    assert.deepStrictEqual(messaged, quoted);
     assert.deepStrictEqual(ctx.sentActivities.length, 2);
     const [actorDelete, followersDelete] = ctx.sentActivities;
     assert.deepStrictEqual(
@@ -2458,7 +2478,7 @@ test("BotImpl.onCreated()", async (t) => {
     assert.deepStrictEqual(followersDelete.recipients, "followers");
     assert.ok(followersDelete.activity instanceof Delete);
     assert.deepStrictEqual(followersDelete.activity.objectId, authorizationUrl);
-    assert.deepStrictEqual(ctx.forwardedRecipients, []);
+    assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
 
     quoted = [];
     messaged = [];
@@ -3195,6 +3215,10 @@ interface SentActivity {
 interface MockInboxContext extends InboxContext<void> {
   sentActivities: SentActivity[];
   forwardedRecipients: ("followers" | Recipient)[];
+  forwardedActivities: {
+    recipients: "followers" | Recipient[];
+    options: unknown;
+  }[];
 }
 
 function createMockInboxContext(
@@ -3224,7 +3248,16 @@ function createMockInboxContext(
     return Promise.resolve();
   };
   ctx.forwardedRecipients = [];
-  ctx.forwardActivity = (_, recipients) => {
+  ctx.forwardedActivities = [];
+  ctx.forwardActivity = (_, recipients, options) => {
+    ctx.forwardedActivities.push({
+      recipients: recipients === "followers"
+        ? "followers"
+        : Array.isArray(recipients)
+        ? recipients
+        : [recipients],
+      options,
+    });
     if (recipients === "followers") {
       ctx.forwardedRecipients.push("followers");
     } else if (Array.isArray(recipients)) {
@@ -4401,13 +4434,19 @@ test("BotImpl.onDeleted() strips revoked quote authorizations", async () => {
     ),
     messageId,
   );
-  let rejected: AuthorizedMessage<MessageClass, void> | undefined;
-  let rejecter: Actor | undefined;
-  bot.onQuoteRejected = (_session, message, actor) => {
-    rejected = message;
-    rejecter = actor;
+  let rejectedCalled = false;
+  let revoked: AuthorizedMessage<MessageClass, void> | undefined;
+  let revoker: Actor | undefined;
+  bot.onQuoteRejected = () => {
+    rejectedCalled = true;
+  };
+  bot.onQuoteRevoked = (_session, message, actor) => {
+    revoked = message;
+    revoker = actor;
   };
   ctx.sentActivities = [];
+  ctx.forwardedRecipients = [];
+  ctx.forwardedActivities = [];
 
   await bot.onDeleted(
     ctx,
@@ -4433,17 +4472,28 @@ test("BotImpl.onDeleted() strips revoked quote authorizations", async () => {
     ),
     undefined,
   );
+  assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
+  assert.deepStrictEqual(ctx.forwardedActivities.length, 1);
+  assert.deepStrictEqual(
+    ctx.forwardedActivities[0].options,
+    {
+      skipIfUnsigned: true,
+      preferSharedInbox: true,
+      excludeBaseUris: [new URL("https://example.com")],
+    },
+  );
   assert.deepStrictEqual(ctx.sentActivities.length, 2);
   assert.deepStrictEqual(ctx.sentActivities[0].recipients, "followers");
   assert.ok(ctx.sentActivities[0].activity instanceof Update);
   assert.deepStrictEqual(ctx.sentActivities[1].recipients, [author]);
   assert.ok(ctx.sentActivities[1].activity instanceof Update);
-  assert.deepStrictEqual(rejected?.id, quote.id);
-  assert.deepStrictEqual(rejected?.quoteTarget, undefined);
-  assert.deepStrictEqual(rejecter?.id, author.id);
+  assert.deepStrictEqual(rejectedCalled, false);
+  assert.deepStrictEqual(revoked?.id, quote.id);
+  assert.deepStrictEqual(revoked?.quoteTarget, undefined);
+  assert.deepStrictEqual(revoker?.id, author.id);
 });
 
-test("BotImpl.onDeleted() ignores quote revocations from other actors", async () => {
+test("BotImpl.onDeleted() strips quote revocations from same-origin actors", async () => {
   const repository = new MemoryRepository();
   const bot = new BotImpl<void>({
     kv: new MemoryKvStore(),
@@ -4494,7 +4544,15 @@ test("BotImpl.onDeleted() ignores quote revocations from other actors", async ()
       result: authorization,
     }),
   );
+  let revoked: AuthorizedMessage<MessageClass, void> | undefined;
+  let revoker: Actor | undefined;
+  bot.onQuoteRevoked = (_session, message, actor) => {
+    revoked = message;
+    revoker = actor;
+  };
   ctx.sentActivities = [];
+  ctx.forwardedRecipients = [];
+  ctx.forwardedActivities = [];
 
   await bot.onDeleted(
     ctx,
@@ -4508,15 +4566,84 @@ test("BotImpl.onDeleted() ignores quote revocations from other actors", async ()
   assert.ok(stored instanceof Create);
   const object = await stored.getObject(ctx);
   assert.ok(object instanceof Note);
-  assert.deepStrictEqual(object.quoteAuthorizationId, authorization.id);
+  assert.deepStrictEqual(object.quoteId, null);
+  assert.deepStrictEqual(object.quoteAuthorizationId, null);
   assert.deepStrictEqual(
     await repository.findQuoteAuthorizationReference(
       "bot",
       authorization.id!,
     ),
+    undefined,
+  );
+  assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
+  assert.deepStrictEqual(ctx.forwardedActivities.length, 1);
+  assert.deepStrictEqual(ctx.sentActivities.length, 2);
+  assert.deepStrictEqual(ctx.sentActivities[0].recipients, "followers");
+  assert.ok(ctx.sentActivities[0].activity instanceof Update);
+  assert.deepStrictEqual(ctx.sentActivities[1].recipients, [otherActor]);
+  assert.ok(ctx.sentActivities[1].activity instanceof Update);
+  assert.deepStrictEqual(revoked?.id, quote.id);
+  assert.deepStrictEqual(revoked?.quoteTarget, undefined);
+  assert.deepStrictEqual(revoker?.id, otherActor.id);
+});
+
+test("BotImpl.onDeleted() ignores quote revocations from wrong origins", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const messageId = "01950000-0000-7000-8000-000000000205" as Uuid;
+  const authorization = new URL("https://remote.example/stamps/1");
+  const revoker = new Person({
+    id: new URL("https://evil.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  await repository.addMessage(
+    "bot",
+    messageId,
+    new Create({
+      id: new URL(`https://example.com/ap/actor/bot/create/${messageId}`),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      to: PUBLIC_COLLECTION,
+      object: new Note({
+        id: new URL(`https://example.com/ap/actor/bot/note/${messageId}`),
+        attribution: new URL("https://example.com/ap/actor/bot"),
+        content: "Quote.",
+        to: PUBLIC_COLLECTION,
+        quote: new URL("https://remote.example/notes/original"),
+        quoteAuthorization: authorization,
+      }),
+    }),
+  );
+  await repository.addQuoteAuthorizationReference(
+    "bot",
+    authorization,
+    messageId,
+    revoker.id!,
+  );
+  let revoked = false;
+  bot.onQuoteRevoked = () => {
+    revoked = true;
+  };
+
+  await bot.onDeleted(
+    ctx,
+    new Delete({
+      actor: revoker,
+      object: authorization,
+    }),
+  );
+
+  assert.deepStrictEqual(revoked, false);
+  assert.deepStrictEqual(ctx.sentActivities, []);
+  assert.deepStrictEqual(ctx.forwardedRecipients, []);
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference("bot", authorization),
     messageId,
   );
-  assert.deepStrictEqual(ctx.sentActivities.length, 0);
 });
 
 test("BotImpl.onDeleted() strips revoked quotes with missing targets", async () => {

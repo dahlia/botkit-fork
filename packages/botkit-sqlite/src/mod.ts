@@ -457,6 +457,10 @@ export class SqliteRepository implements Repository, Disposable {
         PRIMARY KEY (bot_id, authorization)
       )
     `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_quote_authorization_refs_authorization
+      ON quote_authorization_refs(authorization)
+    `);
     if (!this.hasColumn("quote_authorization_refs", "attribution")) {
       this.db.exec(`
         ALTER TABLE quote_authorization_refs ADD COLUMN attribution TEXT
@@ -1125,6 +1129,17 @@ export class SqliteRepository implements Repository, Disposable {
       | { message_id: Uuid }
       | undefined;
     return Promise.resolve(row?.message_id);
+  }
+
+  async *findQuoteAuthorizationReferenceIdentifiers(
+    authorization: URL,
+  ): AsyncIterable<string> {
+    const stmt = this.db.prepare(`
+      SELECT bot_id FROM quote_authorization_refs
+      WHERE authorization = ? ORDER BY bot_id
+    `);
+    const rows = stmt.all(authorization.href) as { bot_id: string }[];
+    for (const row of rows) yield row.bot_id;
   }
 
   findQuoteAuthorizationReferenceAttribution(

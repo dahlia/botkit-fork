@@ -299,6 +299,13 @@ async function initializePostgresRepositorySchemaInTransaction(
   );
   await execute(
     sql,
+    `CREATE INDEX IF NOT EXISTS "idx_quote_authorization_refs_authorization"
+       ON "${validatedSchema}"."quote_authorization_refs" (authorization_uri)`,
+    [],
+    prepare,
+  );
+  await execute(
+    sql,
     `ALTER TABLE "${validatedSchema}"."quote_authorization_refs"
        ADD COLUMN IF NOT EXISTS attribution_uri TEXT`,
     [],
@@ -1145,6 +1152,21 @@ export class PostgresRepository implements Repository, AsyncDisposable {
       [identifier, authorization.href],
     );
     return rows[0]?.message_id;
+  }
+
+  async *findQuoteAuthorizationReferenceIdentifiers(
+    authorization: URL,
+  ): AsyncIterable<string> {
+    await this.ensureReady();
+    const rows = await this.query<{ readonly bot_id: string }>(
+      this.sql,
+      `SELECT bot_id
+         FROM ${this.table("quote_authorization_refs")}
+        WHERE authorization_uri = $1
+        ORDER BY bot_id`,
+      [authorization.href],
+    );
+    for (const row of rows) yield row.bot_id;
   }
 
   async findQuoteAuthorizationReferenceAttribution(

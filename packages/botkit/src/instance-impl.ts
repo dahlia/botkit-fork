@@ -680,12 +680,20 @@ export class InstanceImpl<TContextData>
     ctx: InboxContext<TContextData>,
     del: Delete,
   ): Promise<void> {
-    const bots = await this.#resolveTargets(ctx, () => {
+    const bots = await this.#resolveTargets(ctx, async () => {
       const targets = new Set<string>();
       for (const uri of [...del.toIds, ...del.ccIds]) {
         const parsed = ctx.parseUri(uri);
         if (parsed?.type === "actor" || parsed?.type === "followers") {
           if (parsed.identifier != null) targets.add(parsed.identifier);
+        }
+      }
+      if (del.objectId != null) {
+        for await (
+          const identifier of this.repository
+            .findQuoteAuthorizationReferenceIdentifiers(del.objectId)
+        ) {
+          targets.add(identifier);
         }
       }
       return targets;

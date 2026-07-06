@@ -480,13 +480,13 @@ describe("shared inbox routing", () => {
     assert.deepStrictEqual(events, ["quote:alpha"]);
   });
 
-  test("routes quote authorization Deletes to addressed bots", async () => {
+  test("routes quote authorization Deletes by reference index", async () => {
     const { instance, repository, alpha, beta, ctx } = createHarness();
     const events: string[] = [];
-    alpha.onQuoteRejected = (session) =>
-      void (events.push(`rejected:${session.bot.identifier}`));
-    beta.onQuoteRejected = (session) =>
-      void (events.push(`rejected:${session.bot.identifier}`));
+    alpha.onQuoteRevoked = (session) =>
+      void (events.push(`revoked:${session.bot.identifier}`));
+    beta.onQuoteRevoked = (session) =>
+      void (events.push(`revoked:${session.bot.identifier}`));
     const author = new Person({
       id: new URL("https://remote.example/actors/john"),
       preferredUsername: "john",
@@ -541,11 +541,10 @@ describe("shared inbox routing", () => {
       new Delete({
         actor: author,
         object: authorization,
-        to: new URL("https://example.com/ap/actor/alpha"),
       }),
     );
 
-    assert.deepStrictEqual(events, ["rejected:alpha"]);
+    assert.deepStrictEqual(events, ["revoked:alpha"]);
     assert.deepStrictEqual(
       await repository.findQuoteAuthorizationReference("alpha", authorization),
       undefined,
@@ -556,6 +555,89 @@ describe("shared inbox routing", () => {
     assert.ok(object instanceof Note);
     assert.deepStrictEqual(object.quoteAuthorizationId, null);
     assert.deepStrictEqual(object.quoteId, null);
+  });
+
+  test("routes dynamic bot quote authorization Deletes by reference index", async () => {
+    const repository = new MemoryRepository();
+    const instance = new InstanceImpl<void>({
+      kv: new MemoryKvStore(),
+      repository,
+    });
+    const group = instance.createBot((_ctx, identifier) =>
+      identifier.startsWith("region_") ? { username: identifier } : null
+    );
+    const ctx = createMockInboxContext(
+      instance,
+      "https://example.com/",
+      undefined,
+    );
+    const events: string[] = [];
+    group.onQuoteRevoked = (session) =>
+      void (events.push(`revoked:${session.bot.identifier}`));
+    const author = new Person({
+      id: new URL("https://remote.example/actors/john"),
+      preferredUsername: "john",
+    });
+    const target = new Note({
+      id: new URL("https://remote.example/notes/original"),
+      attribution: author,
+      content: "Original.",
+      to: PUBLIC_COLLECTION,
+    });
+    Object.defineProperty(ctx, "lookupObject", {
+      value: (id: URL) =>
+        Promise.resolve(id.href === target.id?.href ? target : null),
+      configurable: true,
+    });
+    const messageId = "01950000-0000-7000-8000-000000000306" as Uuid;
+    const authorization = new URL("https://remote.example/stamps/2");
+    await repository.addMessage(
+      "region_kr",
+      messageId,
+      new Create({
+        id: new URL(
+          `https://example.com/ap/actor/region_kr/create/${messageId}`,
+        ),
+        actor: new URL("https://example.com/ap/actor/region_kr"),
+        to: PUBLIC_COLLECTION,
+        object: new Note({
+          id: new URL(
+            `https://example.com/ap/actor/region_kr/note/${messageId}`,
+          ),
+          attribution: new URL("https://example.com/ap/actor/region_kr"),
+          to: PUBLIC_COLLECTION,
+          content: `<p>Quote.</p>\n\n<p class="quote-inline"><br>RE: <a href="${
+            target.id!.href
+          }">${target.id!.href}</a></p>`,
+          quote: target.id,
+          quoteUrl: target.id,
+          quoteAuthorization: authorization,
+        }),
+      }),
+    );
+    await repository.addQuoteAuthorizationReference(
+      "region_kr",
+      authorization,
+      messageId,
+      author.id!,
+    );
+
+    await instance.onDeleted(
+      ctx,
+      new Delete({
+        actor: author,
+        object: authorization,
+      }),
+    );
+
+    assert.deepStrictEqual(events, ["revoked:region_kr"]);
+    assert.deepStrictEqual(
+      await repository.findQuoteAuthorizationReference(
+        "region_kr",
+        authorization,
+      ),
+      undefined,
+    );
   });
 
   test("routes Create to followers of the author", async () => {

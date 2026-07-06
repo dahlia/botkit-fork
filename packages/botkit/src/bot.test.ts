@@ -86,6 +86,15 @@ test("createBot()", async () => {
   assert.strictEqual(bot.onQuoteRejected, onQuoteRejected);
   assert.strictEqual(impl.onQuoteRejected, onQuoteRejected);
 
+  function onQuoteRevoked(
+    _session: Session<void>,
+    _message: AuthorizedMessage<MessageClass, void>,
+    _revoker: Actor,
+  ) {}
+  bot.onQuoteRevoked = onQuoteRevoked;
+  assert.strictEqual(bot.onQuoteRevoked, onQuoteRevoked);
+  assert.strictEqual(impl.onQuoteRevoked, onQuoteRevoked);
+
   function onMention(
     _session: Session<void>,
     _message: Message<MessageClass, void>,

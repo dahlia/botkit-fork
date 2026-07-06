@@ -54,6 +54,7 @@ import type {
 } from "./message.ts";
 import type { AuthorizedLike, AuthorizedReaction } from "./reaction.ts";
 import type { Uuid } from "./repository.ts";
+import { validateQuoteAuthorization } from "./quote-authorization.ts";
 import {
   parseQuotePolicy,
   type QuotePolicy,
@@ -99,6 +100,7 @@ export class MessageImpl<T extends MessageClass, TContextData>
   readonly replyTarget?: Message<MessageClass, TContextData> | undefined;
   readonly quoteTarget?: Message<MessageClass, TContextData> | undefined;
   quotePolicy?: QuotePolicy | undefined;
+  readonly quoteApproved?: boolean | undefined;
   mentions: readonly Actor[];
   hashtags: readonly Hashtag[];
   readonly attachments: readonly Document[];
@@ -127,6 +129,7 @@ export class MessageImpl<T extends MessageClass, TContextData>
     this.replyTarget = message.replyTarget;
     this.quoteTarget = message.quoteTarget;
     this.quotePolicy = message.quotePolicy;
+    this.quoteApproved = message.quoteApproved;
     this.mentions = message.mentions;
     this.hashtags = message.hashtags;
     this.attachments = message.attachments;
@@ -906,6 +909,15 @@ export async function createMessage<T extends MessageClass, TContextData>(
       actor.id ?? raw.attributionId!,
       actor.followersId,
     );
+  const quoteApproved = quoteTarget == null ? undefined : actor.id != null &&
+      quoteTarget.actor.id != null &&
+      actor.id.href === quoteTarget.actor.id.href
+    ? true
+    : await verifyQuoteApproval(
+      raw,
+      quoteTarget,
+      session,
+    );
   const quoteApprovalState = !authorized || quoteTarget == null
     ? undefined
     : quoteTarget.actor.id?.href === actor.id?.href
@@ -935,6 +947,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
     replyTarget,
     quoteTarget,
     quotePolicy,
+    quoteApproved,
     quoteApprovalState,
     mentions,
     hashtags,
@@ -942,6 +955,50 @@ export async function createMessage<T extends MessageClass, TContextData>(
     published: raw.published ?? undefined,
     updated: raw.updated ?? undefined,
   });
+}
+
+async function verifyQuoteApproval<TContextData>(
+  raw: MessageClass,
+  quoteTarget: Message<MessageClass, TContextData>,
+  session: SessionImpl<TContextData>,
+): Promise<boolean> {
+  if (
+    raw.id == null ||
+    raw.quoteAuthorizationId == null ||
+    quoteTarget.actor.id == null
+  ) {
+    return false;
+  }
+  try {
+    const parsed = parseLocalUri(
+      session.context,
+      raw.quoteAuthorizationId,
+      session.bot.legacyObjectUrisIdentifier,
+    );
+    const authorization = parsed?.type === "object" &&
+        parsed.class === QuoteAuthorization &&
+        parsed.values.identifier === session.bot.identifier
+      ? await session.bot.repository.getQuoteAuthorization(
+        parsed.values.id as Uuid,
+      )
+      : await session.context.lookupObject(
+        raw.quoteAuthorizationId,
+        {
+          contextLoader: session.context.contextLoader,
+          documentLoader: await session.context.getDocumentLoader(
+            session.bot,
+          ),
+        },
+      );
+    return validateQuoteAuthorization(authorization, {
+      authorizationId: raw.quoteAuthorizationId,
+      quoteId: raw.id,
+      targetId: quoteTarget.id,
+      targetActorId: quoteTarget.actor.id,
+    });
+  } catch {
+    return false;
+  }
 }
 
 export function getMessageVisibility(

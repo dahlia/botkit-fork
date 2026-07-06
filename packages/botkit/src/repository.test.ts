@@ -150,8 +150,25 @@ for (const [name, factory] of Object.entries(factories)) {
       undefined,
     );
     assert.deepStrictEqual(
+      await Array.fromAsync(
+        repository.findQuoteAuthorizationReferenceIdentifiers(authorization),
+      ),
+      ["bot"],
+    );
+    assert.deepStrictEqual(
       await repository.findQuoteAuthorizationReference("bot", authorization),
       firstMessageId,
+    );
+    await repository.addQuoteAuthorizationReference(
+      "other",
+      authorization,
+      firstMessageId,
+    );
+    assert.deepStrictEqual(
+      await Array.fromAsync(
+        repository.findQuoteAuthorizationReferenceIdentifiers(authorization),
+      ),
+      ["bot", "other"],
     );
 
     await repository.addQuoteAuthorizationReference(
@@ -170,6 +187,12 @@ for (const [name, factory] of Object.entries(factories)) {
     assert.deepStrictEqual(
       await repository.findQuoteAuthorizationReference("bot", authorization),
       undefined,
+    );
+    assert.deepStrictEqual(
+      await Array.fromAsync(
+        repository.findQuoteAuthorizationReferenceIdentifiers(authorization),
+      ),
+      ["other"],
     );
   });
 }
