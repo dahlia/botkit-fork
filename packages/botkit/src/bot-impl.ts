@@ -706,7 +706,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     );
     if (!(stored instanceof Create)) return;
     const targetObject = await stored.getObject(ctx);
-    if (!isMessageObject(targetObject)) return;
+    if (!isMessageObject(targetObject) || targetObject.id == null) return;
     const documentLoader = await ctx.getDocumentLoader(this);
     const instrument = await request.getInstrument({
       contextLoader: ctx.contextLoader,
@@ -714,6 +714,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       suppressError: true,
     });
     if (!isMessageObject(instrument) || instrument.id == null) return;
+    if (instrument.quoteUrl?.href !== targetObject.id.href) return;
     const actor = await request.getActor({
       contextLoader: ctx.contextLoader,
       documentLoader,
@@ -769,7 +770,16 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       await rejectRequest();
       return;
     }
-    if (this.#isQuoteAudienceWider(quote.visibility, target.visibility)) {
+    if (
+      await this.#isQuoteAudienceWider(
+        ctx,
+        actor.id,
+        quoteObject,
+        targetObject,
+        quote.visibility,
+        target.visibility,
+      )
+    ) {
       if (existingAuthorization != null) {
         await target.unauthorizeQuote(quote);
       }
@@ -822,10 +832,14 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       await this.repository.hasFollower(actorId);
   }
 
-  #isQuoteAudienceWider(
+  async #isQuoteAudienceWider(
+    ctx: InboxContext<TContextData>,
+    actorId: URL,
+    quoteObject: Object,
+    targetObject: Object,
     quoteVisibility: MessageVisibility,
     targetVisibility: MessageVisibility,
-  ): boolean {
+  ): Promise<boolean> {
     if (targetVisibility === "unknown") return quoteVisibility !== "direct";
     if (quoteVisibility === "unknown") {
       return targetVisibility !== "public" && targetVisibility !== "unlisted";
@@ -837,7 +851,34 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       direct: 1,
       unknown: 0,
     };
-    return ranks[quoteVisibility] > ranks[targetVisibility];
+    if (ranks[quoteVisibility] > ranks[targetVisibility]) return true;
+    return !await this.#isQuoteAudienceSubset(
+      ctx,
+      actorId,
+      quoteObject,
+      targetObject,
+    );
+  }
+
+  async #isQuoteAudienceSubset(
+    ctx: InboxContext<TContextData>,
+    actorId: URL,
+    quoteObject: Object,
+    targetObject: Object,
+  ): Promise<boolean> {
+    const targetRecipients = new Set(
+      [...targetObject.toIds, ...targetObject.ccIds].map((u) => u.href),
+    );
+    if (targetRecipients.has(PUBLIC_COLLECTION.href)) return true;
+    const followerCollection = ctx.getFollowersUri(this.identifier).href;
+    const actorIsFollower = targetRecipients.has(followerCollection) &&
+      await this.repository.hasFollower(actorId);
+    for (const recipient of [...quoteObject.toIds, ...quoteObject.ccIds]) {
+      if (targetRecipients.has(recipient.href)) continue;
+      if (actorIsFollower && recipient.href === actorId.href) continue;
+      return false;
+    }
+    return true;
   }
 
   async #matchesQuoteAcceptance(
