@@ -581,6 +581,8 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     if (!isUuid(values.id)) return null;
     const stored = await this.repository.getMessage(values.id as Uuid);
     if (!(stored instanceof Create)) return null;
+    const isVisible = await this.getPermissionChecker(ctx);
+    if (!isVisible(stored)) return null;
     const object = await stored.getObject(ctx);
     if (
       !isMessageObject(object) || object.id == null || object.quoteId == null

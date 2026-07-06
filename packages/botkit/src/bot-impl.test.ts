@@ -13,7 +13,7 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import type { RequestContext, UnverifiedActivityReason } from "@fedify/fedify";
+import type { UnverifiedActivityReason } from "@fedify/fedify";
 import { type InboxContext, MemoryKvStore } from "@fedify/fedify/federation";
 import {
   Accept,
@@ -4223,10 +4223,13 @@ test("BotImpl ignores malformed quote request IDs", async (t) => {
       repository,
       username: "bot",
     });
-    const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+    const ctx = bot.federation.createContext(
+      new Request("https://example.com/"),
+      undefined,
+    );
 
     assert.deepStrictEqual(
-      await bot.dispatchQuoteRequest(ctx as unknown as RequestContext<void>, {
+      await bot.dispatchQuoteRequest(ctx, {
         identifier: "bot",
         id: "not-a-uuid",
       }),
@@ -4273,6 +4276,50 @@ test("BotImpl ignores malformed quote request IDs", async (t) => {
       }),
     );
   });
+});
+
+test("BotImpl.dispatchQuoteRequest() checks message visibility", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const sessionCtx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, sessionCtx);
+  const author = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const target = new Note({
+    id: new URL("https://remote.example/notes/original"),
+    attribution: author,
+    content: "Original.",
+    to: PUBLIC_COLLECTION,
+  });
+  Object.defineProperty(sessionCtx, "lookupObject", {
+    value: (id: URL) =>
+      Promise.resolve(id.href === target.id?.href ? target : null),
+  });
+  const targetMessage = await createMessage(target, session, {});
+  const quote = await session.publish(text`Please approve this.`, {
+    quoteTarget: targetMessage,
+    visibility: "followers",
+  });
+  const parsed = sessionCtx.parseUri(quote.id);
+  assert.ok(parsed?.type === "object");
+  const requestCtx = bot.federation.createContext(
+    new Request("https://example.com/"),
+    undefined,
+  );
+
+  assert.deepStrictEqual(
+    await bot.dispatchQuoteRequest(requestCtx, {
+      identifier: "bot",
+      id: parsed.values.id,
+    }),
+    null,
+  );
 });
 
 test("BotImpl.onFollowAccepted() with canonical follow URIs", async () => {
