@@ -953,7 +953,9 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     del: Delete,
     object: MessageClass,
   ): Promise<Actor | undefined> {
-    if (del.actorId == null || object.quoteId == null) return undefined;
+    if (del.actorId == null || object.quoteAuthorizationId == null) {
+      return undefined;
+    }
     const actor = await del.getActor({
       contextLoader: ctx.contextLoader,
       documentLoader: ctx.documentLoader,
@@ -961,15 +963,11 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     });
     if (
       !isActor(actor) || actor.id == null ||
-      actor.id.href !== del.actorId.href
+      actor.id.href !== del.actorId.href ||
+      object.quoteAuthorizationId.origin !== actor.id.origin
     ) {
       return undefined;
     }
-    const target = await lookupObjectSafely(ctx, object.quoteId);
-    if (
-      !isMessageObject(target) ||
-      target.attributionId?.href !== actor.id.href
-    ) return undefined;
     return actor;
   }
 
@@ -997,7 +995,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
         { preferSharedInbox, excludeBaseUris },
       );
     }
-    const mentionedActors: Actor[] = [];
+    const mentionUris: URL[] = [];
     for await (
       const tag of object.getTags({
         contextLoader: ctx.contextLoader,
@@ -1006,9 +1004,11 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       })
     ) {
       if (!(tag instanceof Mention) || tag.href == null) continue;
-      const mentioned = await lookupObjectSafely(ctx, tag.href);
-      if (isActor(mentioned)) mentionedActors.push(mentioned);
+      mentionUris.push(tag.href);
     }
+    const mentionedActors = (await Promise.all(
+      mentionUris.map((uri) => lookupObjectSafely(ctx, uri)),
+    )).filter(isActor);
     if (mentionedActors.length > 0) {
       await ctx.sendActivity(
         this,
