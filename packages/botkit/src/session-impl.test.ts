@@ -627,6 +627,29 @@ test("SessionImpl.publish()", async (t) => {
     assert.ok(object.toIds.includes(originalAuthorId));
   });
 
+  await t.test("self-quote update preserves audience", async () => {
+    ctx.sentActivities = [];
+    const original = await session.publish(text`Original`, {
+      visibility: "followers",
+    });
+    const quote = await session.publish(text`Self quote`, {
+      quoteTarget: original,
+      visibility: "followers",
+    });
+
+    assert.ok(!quote.raw.toIds.some((id) => id.href === session.actorId.href));
+    await quote.update(text`Updated self quote`);
+
+    assert.ok(!quote.raw.toIds.some((id) => id.href === session.actorId.href));
+    const parsed = ctx.parseUri(quote.id);
+    assert.ok(parsed?.type === "object");
+    const stored = await repository.getMessage("bot", parsed.values.id as Uuid);
+    assert.ok(stored instanceof Create);
+    const object = await stored.getObject(ctx);
+    assert.ok(object instanceof Note);
+    assert.ok(!object.toIds.some((id) => id.href === session.actorId.href));
+  });
+
   await t.test("poll single choice", async () => {
     ctx.sentActivities = [];
     const endTime = Temporal.Now.instant().add({ hours: 24 });

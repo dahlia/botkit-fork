@@ -475,6 +475,7 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
         this.updated = updated;
         const quoteTargetActorId = this.quoteTarget?.actor.id;
         const privateQuoteAudienceIds = quoteTargetActorId != null &&
+            quoteTargetActorId.href !== this.session.actorId.href &&
             (this.visibility === "followers" || this.visibility === "direct") &&
             !mentionedActorIds.some((id) => id.href === quoteTargetActorId.href)
           ? [quoteTargetActorId]

@@ -837,7 +837,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     }
     const rejecter = await this.#validateQuoteRejection(ctx, reject, object);
     if (rejecter == null) return;
-    await this.#stripRejectedQuote(ctx, id, stored, object, rejecter);
+    await this.#stripRejectedQuote(ctx, id, object, rejecter);
   }
 
   async onDeleted(
@@ -868,30 +868,40 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       object,
     );
     if (actor == null) return;
-    await this.#stripRejectedQuote(ctx, id, stored, object, actor);
+    await this.#stripRejectedQuote(ctx, id, object, actor);
   }
 
   async #stripRejectedQuote(
     ctx: InboxContext<TContextData>,
     id: Uuid,
-    stored: Create,
     object: MessageClass,
     actor: Actor,
   ): Promise<void> {
-    const strippedObject = (await stripQuoteObject(object)).clone({
-      updated: Temporal.Now.instant(),
-    });
-    const updated = stored.clone({ object: strippedObject });
+    const quoteId = object.quoteId;
+    let strippedObject: MessageClass | undefined;
     const wasUpdated = await this.repository.updateMessage(
       id,
-      () => Promise.resolve(updated),
+      async (existing) => {
+        if (!(existing instanceof Create)) return;
+        const existingObject = await existing.getObject(ctx);
+        if (
+          !isMessageObject(existingObject) || existingObject.id == null ||
+          (quoteId != null && existingObject.quoteId?.href !== quoteId.href)
+        ) {
+          return;
+        }
+        strippedObject = (await stripQuoteObject(existingObject)).clone({
+          updated: Temporal.Now.instant(),
+        });
+        return existing.clone({ object: strippedObject });
+      },
     );
     if (object.quoteAuthorizationId != null) {
       await this.repository.removeQuoteAuthorizationReference(
         object.quoteAuthorizationId,
       );
     }
-    if (!wasUpdated) return;
+    if (!wasUpdated || strippedObject == null) return;
     await this.#sendQuoteUpdate(ctx, strippedObject, actor);
     if (this.onQuoteRejected != null) {
       const session = this.getSession(ctx);
