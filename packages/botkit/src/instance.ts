@@ -25,6 +25,7 @@ import type { Bot, BotEventHandlers, PagesOptions } from "./bot.ts";
 import type { CustomEmoji, DeferredCustomEmoji } from "./emoji.ts";
 import { InstanceImpl } from "./instance-impl.ts";
 export { DEFAULT_INSTANCE_ACTOR_IDENTIFIER } from "./instance-impl.ts";
+import type { QuotePolicyOption } from "./quote.ts";
 import type { Repository } from "./repository.ts";
 import type { Session } from "./session.ts";
 import type { Text } from "./text.ts";
@@ -93,6 +94,16 @@ export interface BotProfile<TContextData> {
    * @default `"accept"`
    */
   readonly followerPolicy?: "accept" | "reject" | "manual";
+
+  /**
+   * Who can quote messages published by the bot.
+   *
+   * This policy is advertised on outgoing messages and is used as the
+   * fallback for older messages that do not have a serialized quote policy.
+   * @default `"public"`
+   * @since 0.5.0
+   */
+  readonly quotePolicy?: QuotePolicyOption;
 }
 
 /**

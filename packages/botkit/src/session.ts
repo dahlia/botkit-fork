@@ -30,6 +30,7 @@ import type {
   MessageVisibility,
 } from "./message.ts";
 import type { Poll } from "./poll.ts";
+import type { QuotePolicyOption } from "./quote.ts";
 import type { Text } from "./text.ts";
 
 /**
@@ -192,6 +193,14 @@ export interface SessionPublishOptions<TContextData> {
    * @since 0.2.0
    */
   readonly quoteTarget?: Message<MessageClass, TContextData>;
+
+  /**
+   * Who can quote the published message.
+   *
+   * If omitted, the bot's default quote policy is used.
+   * @since 0.5.0
+   */
+  readonly quotePolicy?: QuotePolicyOption;
 }
 
 /**

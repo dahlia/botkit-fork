@@ -47,8 +47,10 @@ import {
   PropertyValue,
   PUBLIC_COLLECTION,
   Question,
+  QuoteAuthorization,
+  type QuoteRequest as RawQuoteRequest,
   type Recipient,
-  type Reject,
+  Reject,
   Service,
   type Undo,
   Update,
@@ -73,6 +75,7 @@ import type {
   MentionEventHandler,
   MessageEventHandler,
   QuoteEventHandler,
+  QuoteRequestEventHandler,
   ReactionEventHandler,
   RejectEventHandler,
   ReplyEventHandler,
@@ -91,8 +94,15 @@ import {
   isQuoteLink,
   messageClasses,
 } from "./message-impl.ts";
-import type { Message, MessageClass, SharedMessage } from "./message.ts";
+import type {
+  Message,
+  MessageClass,
+  MessageVisibility,
+  SharedMessage,
+} from "./message.ts";
 import type { Vote } from "./poll.ts";
+import { QuoteRequestImpl } from "./quote-impl.ts";
+import { normalizeQuotePolicy, type QuotePolicyOption } from "./quote.ts";
 import type { Like, Reaction } from "./reaction.ts";
 import {
   ActorScopedRepository,
@@ -137,6 +147,7 @@ export const botEventHandlerNames = [
   "onMention",
   "onReply",
   "onQuote",
+  "onQuoteRequest",
   "onMessage",
   "onSharedMessage",
   "onLike",
@@ -158,6 +169,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
   readonly properties: Record<string, Text<"block" | "inline", TContextData>>;
   #properties: { pairs: PropertyValue[]; tags: (Link | Object)[] } | null;
   readonly followerPolicy: "accept" | "reject" | "manual";
+  readonly quotePolicy: QuotePolicyOption;
   readonly repository: ActorScopedRepository;
 
   /**
@@ -208,6 +220,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
   onMention?: MentionEventHandler<TContextData>;
   onReply?: ReplyEventHandler<TContextData>;
   onQuote?: QuoteEventHandler<TContextData>;
+  onQuoteRequest?: QuoteRequestEventHandler<TContextData>;
   onMessage?: MessageEventHandler<TContextData>;
   onSharedMessage?: SharedMessageEventHandler<TContextData>;
   onLike?: LikeEventHandler<TContextData>;
@@ -228,6 +241,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     this.properties = options.properties ?? {};
     this.#properties = null;
     this.followerPolicy = options.followerPolicy ?? "accept";
+    this.quotePolicy = options.quotePolicy ?? "public";
     this.instance = options.instance ?? new InstanceImpl({
       kv: options.kv,
       // The single-bot deployment may carry data from BotKit 0.4 or
@@ -531,6 +545,15 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     return isVisible(activity) ? activity : null;
   }
 
+  async dispatchQuoteAuthorization(
+    _ctx: RequestContext<TContextData>,
+    values: { identifier: string; id: string },
+  ): Promise<QuoteAuthorization | null> {
+    if (values.identifier !== this.identifier) return null;
+    return await this.repository.getQuoteAuthorization(values.id as Uuid) ??
+      null;
+  }
+
   dispatchEmoji(
     ctx: Context<TContextData>,
     values: { name: string },
@@ -661,9 +684,388 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     }
   }
 
+  async onQuoteRequested(
+    ctx: InboxContext<TContextData>,
+    request: RawQuoteRequest,
+  ): Promise<void> {
+    if (request.id == null || request.actorId == null) return;
+    const requestId = request.id;
+    const parsedObj = parseLocalUri(
+      ctx,
+      request.objectId,
+      this.legacyObjectUrisIdentifier,
+    );
+    if (
+      parsedObj?.type !== "object" ||
+      !(messageClasses as readonly unknown[]).includes(parsedObj.class) ||
+      parsedObj.values.identifier !== this.identifier
+    ) return;
+    const stored = await this.repository.getMessage(
+      parsedObj.values.id as Uuid,
+    );
+    if (!(stored instanceof Create)) return;
+    const targetObject = await stored.getObject(ctx);
+    if (!isMessageObject(targetObject) || targetObject.id == null) return;
+    const documentLoader = await ctx.getDocumentLoader(this);
+    const instrument = await request.getInstrument({
+      contextLoader: ctx.contextLoader,
+      documentLoader,
+      suppressError: true,
+    });
+    if (!isMessageObject(instrument) || instrument.id == null) return;
+    const quotedObjectId = instrument.quoteId ?? instrument.quoteUrl;
+    if (quotedObjectId?.href !== targetObject.id.href) return;
+    const actor = await request.getActor({
+      contextLoader: ctx.contextLoader,
+      documentLoader,
+      suppressError: true,
+    });
+    if (!isActor(actor) || actor.id == null) return;
+    const session = this.getSession(ctx);
+    if (!await this.#canActorSeeObject(ctx, actor.id, targetObject)) {
+      return;
+    }
+    const rejectRequest = async () => {
+      await session.context.sendActivity(
+        this,
+        actor,
+        new Reject({
+          id: new URL(`/#reject/${requestId.href}`, session.actorId),
+          actor: session.actorId,
+          to: actor.id,
+          object: request,
+        }),
+        { excludeBaseUris: [new URL(session.context.origin)] },
+      );
+    };
+    if (
+      instrument.attributionId != null &&
+      instrument.attributionId.href !== actor.id.href
+    ) {
+      await rejectRequest();
+      return;
+    }
+    const quoteObject = instrument.attributionId == null
+      ? instrument.clone({ attribution: actor.id })
+      : instrument;
+    const target = await createMessage(
+      targetObject,
+      session,
+      {},
+      undefined,
+      undefined,
+      true,
+    );
+    const quote = await createMessage(quoteObject, session, {
+      [actor.id.href]: actor,
+    });
+    if (quote.id == null || target.id == null) return;
+    const existingAuthorization = await this.repository.findQuoteAuthorization(
+      quote.id,
+    );
+    if (
+      existingAuthorization != null &&
+      existingAuthorization.interactionTargetId?.href !== target.id.href
+    ) {
+      await rejectRequest();
+      return;
+    }
+    if (
+      await this.#isQuoteAudienceWider(
+        ctx,
+        quoteObject,
+        targetObject,
+        quote.visibility,
+        target.visibility,
+      )
+    ) {
+      if (existingAuthorization != null) {
+        await target.unauthorizeQuote(quote);
+      }
+      await rejectRequest();
+      return;
+    }
+    const quoteRequest = new QuoteRequestImpl(
+      session,
+      request,
+      actor,
+      quote,
+      target,
+    );
+    const revokeAndRejectQuoteRequest = async () => {
+      if (existingAuthorization != null) {
+        await target.unauthorizeQuote(quote);
+      }
+      await quoteRequest.reject();
+    };
+    const rule = targetObject.interactionPolicy?.canQuote;
+    if (rule == null) {
+      const policy = normalizeQuotePolicy(this.quotePolicy);
+      if (await this.#matchesQuoteAcceptance(ctx, actor.id, policy.automatic)) {
+        await quoteRequest.accept();
+      } else if (
+        await this.#matchesQuoteAcceptance(ctx, actor.id, policy.manual)
+      ) {
+        if (existingAuthorization != null) {
+          await quoteRequest.accept();
+          return;
+        }
+      } else {
+        await revokeAndRejectQuoteRequest();
+      }
+    } else if (
+      await this.#matchesQuoteApprovals(ctx, actor.id, rule.automaticApprovals)
+    ) {
+      await quoteRequest.accept();
+    } else if (
+      await this.#matchesQuoteApprovals(ctx, actor.id, rule.manualApprovals)
+    ) {
+      if (existingAuthorization != null) {
+        await quoteRequest.accept();
+        return;
+      }
+    } else {
+      await revokeAndRejectQuoteRequest();
+    }
+    await this.onQuoteRequest?.(session, quoteRequest);
+  }
+
+  async #canActorSeeObject(
+    ctx: InboxContext<TContextData>,
+    actorId: URL,
+    object: Object,
+  ): Promise<boolean> {
+    if (actorId.href === ctx.getActorUri(this.identifier).href) return true;
+    const recipients = [...object.toIds, ...object.ccIds].map((u) => u.href);
+    if (recipients.includes(PUBLIC_COLLECTION.href)) return true;
+    if (recipients.includes(actorId.href)) return true;
+    return recipients.includes(ctx.getFollowersUri(this.identifier).href) &&
+      await this.repository.hasFollower(actorId);
+  }
+
+  async #isQuoteAudienceWider(
+    ctx: InboxContext<TContextData>,
+    quoteObject: Object,
+    targetObject: Object,
+    quoteVisibility: MessageVisibility,
+    targetVisibility: MessageVisibility,
+  ): Promise<boolean> {
+    if (targetVisibility === "unknown") {
+      return quoteVisibility !== "direct" ||
+        !await this.#isQuoteAudienceSubset(
+          ctx,
+          quoteObject,
+          targetObject,
+        );
+    }
+    if (quoteVisibility === "unknown") {
+      return targetVisibility !== "public" && targetVisibility !== "unlisted";
+    }
+    const ranks: Record<MessageVisibility, number> = {
+      public: 4,
+      unlisted: 3,
+      followers: 2,
+      direct: 1,
+      unknown: 0,
+    };
+    if (ranks[quoteVisibility] > ranks[targetVisibility]) return true;
+    return !await this.#isQuoteAudienceSubset(
+      ctx,
+      quoteObject,
+      targetObject,
+    );
+  }
+
+  async #isQuoteAudienceSubset(
+    ctx: InboxContext<TContextData>,
+    quoteObject: Object,
+    targetObject: Object,
+  ): Promise<boolean> {
+    const targetRecipients = new Set(
+      [...targetObject.toIds, ...targetObject.ccIds].map((u) => u.href),
+    );
+    targetRecipients.add(ctx.getActorUri(this.identifier).href);
+    if (targetRecipients.has(PUBLIC_COLLECTION.href)) return true;
+    const followerCollection = ctx.getFollowersUri(this.identifier).href;
+    const targetIncludesFollowers = targetRecipients.has(followerCollection);
+    for (const recipient of [...quoteObject.toIds, ...quoteObject.ccIds]) {
+      if (targetRecipients.has(recipient.href)) continue;
+      if (
+        targetIncludesFollowers &&
+        await this.repository.hasFollower(recipient)
+      ) continue;
+      return false;
+    }
+    return true;
+  }
+
+  async #getMessageVisibility(
+    ctx: InboxContext<TContextData>,
+    object: Object,
+  ): Promise<MessageVisibility | null> {
+    const documentLoader = await ctx.getDocumentLoader(this);
+    const actor = object.attributionId?.href ===
+        ctx.getActorUri(this.identifier).href
+      ? await this.getSession(ctx).getActor()
+      : await object.getAttribution({
+        contextLoader: ctx.contextLoader,
+        documentLoader,
+        suppressError: true,
+      });
+    if (!isActor(actor)) return null;
+    const mentionedActorIds = new Set<string>();
+    for await (
+      const tag of object.getTags({
+        contextLoader: ctx.contextLoader,
+        documentLoader,
+        suppressError: true,
+      })
+    ) {
+      if (tag instanceof Mention && tag.href != null) {
+        mentionedActorIds.add(tag.href.href);
+      }
+    }
+    return getMessageVisibility(
+      object.toIds,
+      object.ccIds,
+      actor,
+      mentionedActorIds,
+    );
+  }
+
+  async #matchesQuoteAcceptance(
+    ctx: InboxContext<TContextData>,
+    actorId: URL,
+    acceptance: ReturnType<typeof normalizeQuotePolicy>["automatic"],
+  ): Promise<boolean> {
+    if (actorId.href === ctx.getActorUri(this.identifier).href) return true;
+    switch (acceptance) {
+      case "public":
+        return true;
+      case "followers":
+        return await this.repository.hasFollower(actorId);
+      case "nobody":
+      default:
+        return false;
+    }
+  }
+
+  async #matchesQuoteApprovals(
+    ctx: InboxContext<TContextData>,
+    actorId: URL,
+    approvals: readonly URL[],
+  ): Promise<boolean> {
+    if (actorId.href === ctx.getActorUri(this.identifier).href) return true;
+    const followerCollection = ctx.getFollowersUri(this.identifier).href;
+    for (const approval of approvals) {
+      if (approval.href === PUBLIC_COLLECTION.href) return true;
+      if (approval.href === actorId.href) return true;
+      if (
+        approval.href === followerCollection &&
+        await this.repository.hasFollower(actorId)
+      ) return true;
+    }
+    return false;
+  }
+
+  async #hasValidQuoteAuthorization(
+    ctx: InboxContext<TContextData>,
+    object: MessageClass,
+    targetId: URL,
+  ): Promise<boolean> {
+    if (
+      object.id == null ||
+      !("quoteAuthorizationId" in object) ||
+      !(object.quoteAuthorizationId instanceof URL)
+    ) return false;
+    const parsed = parseLocalUri(
+      ctx,
+      object.quoteAuthorizationId,
+      this.legacyObjectUrisIdentifier,
+    );
+    if (
+      parsed?.type !== "object" ||
+      parsed.class !== QuoteAuthorization ||
+      parsed.values.identifier !== this.identifier
+    ) return false;
+    const authorization = await this.repository.getQuoteAuthorization(
+      parsed.values.id as Uuid,
+    );
+    if (
+      authorization?.attributionId?.href !==
+        ctx.getActorUri(this.identifier).href ||
+      authorization.interactingObjectId?.href !== object.id.href ||
+      authorization.interactionTargetId?.href !== targetId.href
+    ) {
+      return false;
+    }
+    const parsedTarget = parseLocalUri(
+      ctx,
+      targetId,
+      this.legacyObjectUrisIdentifier,
+    );
+    if (
+      parsedTarget?.type !== "object" ||
+      parsedTarget.values.identifier !== this.identifier
+    ) return false;
+    const stored = await this.repository.getMessage(
+      parsedTarget.values.id as Uuid,
+    );
+    if (!(stored instanceof Create)) return false;
+    const targetObject = await stored.getObject(ctx);
+    if (
+      !isMessageObject(targetObject) || targetObject.id?.href !== targetId.href
+    ) {
+      return false;
+    }
+    const quoteVisibility = await this.#getMessageVisibility(ctx, object);
+    const targetVisibility = await this.#getMessageVisibility(
+      ctx,
+      targetObject,
+    );
+    if (quoteVisibility == null || targetVisibility == null) return false;
+    if (
+      await this.#isQuoteAudienceWider(
+        ctx,
+        object,
+        targetObject,
+        quoteVisibility,
+        targetVisibility,
+      )
+    ) {
+      const session = this.getSession(ctx);
+      const target = await createMessage(
+        targetObject,
+        session,
+        {},
+        undefined,
+        undefined,
+        true,
+      );
+      const quote = await createMessage(object, session, {});
+      await target.unauthorizeQuote(quote);
+      return false;
+    }
+    return true;
+  }
+
   async onCreated(
     ctx: InboxContext<TContextData>,
     create: Create,
+  ): Promise<void> {
+    await this.#onCreatedOrUpdated(ctx, create);
+  }
+
+  async onUpdated(
+    ctx: InboxContext<TContextData>,
+    update: Update,
+  ): Promise<void> {
+    await this.#onCreatedOrUpdated(ctx, update);
+  }
+
+  async #onCreatedOrUpdated(
+    ctx: InboxContext<TContextData>,
+    create: Create | Update,
   ): Promise<void> {
     const object = await create.getObject(ctx);
     if (
@@ -836,18 +1238,28 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
         break;
       }
     }
-    if (quoteUrl == null) quoteUrl = object.quoteUrl;
+    const fepQuoteUrl = object.quoteId;
+    const requiresQuoteAuthorization = fepQuoteUrl != null;
+    quoteUrl = fepQuoteUrl ?? quoteUrl ?? object.quoteUrl;
     const quoteTarget = parseLocalUri(
       ctx,
       quoteUrl,
       this.legacyObjectUrisIdentifier,
     );
-    if (
-      this.onQuote != null &&
-      quoteTarget?.type === "object" &&
+    const isLocalQuoteTarget = quoteTarget?.type === "object" &&
       // @ts-ignore: quoteTarget.class satisfies (typeof messageClasses)[number]
       messageClasses.includes(quoteTarget.class) &&
-      quoteTarget.values.identifier === this.identifier
+      quoteTarget.values.identifier === this.identifier;
+    const hasValidQuoteAuthorization = !requiresQuoteAuthorization ||
+      (fepQuoteUrl != null && isLocalQuoteTarget &&
+        await this.#hasValidQuoteAuthorization(ctx, object, fepQuoteUrl));
+    if (requiresQuoteAuthorization && isLocalQuoteTarget) {
+      if (!hasValidQuoteAuthorization) return;
+    }
+    if (
+      this.onQuote != null &&
+      isLocalQuoteTarget &&
+      hasValidQuoteAuthorization
     ) {
       const message = await getMessage();
       if (
@@ -1207,6 +1619,12 @@ export function wrapBotImpl<TContextData>(
     set onQuote(value) {
       bot.onQuote = value;
     },
+    get onQuoteRequest() {
+      return bot.onQuoteRequest;
+    },
+    set onQuoteRequest(value) {
+      bot.onQuoteRequest = value;
+    },
     get onMessage() {
       return bot.onMessage;
     },
@@ -1429,6 +1847,46 @@ export class MigrationGatedRepository implements Repository {
     yield* this.#repository.findFollowedBots(followeeId);
   }
 
+  async addQuoteAuthorization(
+    identifier: string,
+    id: Uuid,
+    authorization: QuoteAuthorization,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.addQuoteAuthorization(
+      identifier,
+      id,
+      authorization,
+    );
+  }
+
+  async getQuoteAuthorization(
+    identifier: string,
+    id: Uuid,
+  ): Promise<QuoteAuthorization | undefined> {
+    await this.#migration;
+    return await this.#repository.getQuoteAuthorization(identifier, id);
+  }
+
+  async findQuoteAuthorization(
+    identifier: string,
+    interactingObject: URL,
+  ): Promise<QuoteAuthorization | undefined> {
+    await this.#migration;
+    return await this.#repository.findQuoteAuthorization(
+      identifier,
+      interactingObject,
+    );
+  }
+
+  async removeQuoteAuthorization(
+    identifier: string,
+    id: Uuid,
+  ): Promise<QuoteAuthorization | undefined> {
+    await this.#migration;
+    return await this.#repository.removeQuoteAuthorization(identifier, id);
+  }
+
   async vote(
     identifier: string,
     messageId: Uuid,
@@ -1482,6 +1940,7 @@ export class BotGroupImpl<TContextData> implements BotGroup<TContextData> {
   onMention?: MentionEventHandler<TContextData>;
   onReply?: ReplyEventHandler<TContextData>;
   onQuote?: QuoteEventHandler<TContextData>;
+  onQuoteRequest?: QuoteRequestEventHandler<TContextData>;
   onMessage?: MessageEventHandler<TContextData>;
   onSharedMessage?: SharedMessageEventHandler<TContextData>;
   onLike?: LikeEventHandler<TContextData>;
@@ -1549,6 +2008,7 @@ export class GroupBotImpl<TContextData> extends BotImpl<TContextData> {
       image: profile.image,
       properties: profile.properties,
       followerPolicy: profile.followerPolicy,
+      quotePolicy: profile.quotePolicy,
     });
     this.group = group;
     for (const name of botEventHandlerNames) {

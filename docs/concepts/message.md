@@ -158,6 +158,73 @@ await session.publish(text`Hello, ${mention("@fedify@hollo.social")}!`, {
 });
 ~~~~
 
+### Quote policy
+
+You can control who may quote a message by providing
+`~SessionPublishOptions.quotePolicy`.  BotKit serializes this policy as
+the [FEP-044f] interaction policy on the ActivityPub object and uses it when
+answering incoming quote requests.
+
+The shorthand values are:
+
+`"public"`
+:   Anyone may quote the message.  This is the default.
+
+`"followers"`
+:   Followers may quote the message automatically.
+
+`"nobody"`
+:   Nobody may quote the message, except the bot itself.
+
+`"manual"`
+:   Quote requests are left pending for `~Bot.onQuoteRequest`.
+
+~~~~ typescript twoslash
+import { type Session, text } from "@fedify/botkit";
+const session = {} as unknown as Session<void>;
+// ---cut-before---
+await session.publish(text`Followers can quote this.`, {
+  quotePolicy: "followers",
+});
+~~~~
+
+You can also use the two-axis form to distinguish actors whose quotes are
+approved automatically from actors whose quotes await manual review:
+
+~~~~ typescript twoslash
+import { type Session, text } from "@fedify/botkit";
+const session = {} as unknown as Session<void>;
+// ---cut-before---
+await session.publish(text`Followers are reviewed before quoting this.`, {
+  quotePolicy: { manual: "followers" },
+});
+~~~~
+
+The quote policy can be changed when editing a message:
+
+~~~~ typescript twoslash
+import { type Session, text } from "@fedify/botkit";
+const session = {} as unknown as Session<void>;
+// ---cut-before---
+const message = await session.publish(text`This starts public.`);
+await message.update(text`This is now harder to quote.`, {
+  quotePolicy: "nobody",
+});
+~~~~
+
+If a quote was already authorized through an incoming quote request, you can
+revoke its authorization stamp from the quoted message:
+
+~~~~ typescript twoslash
+import { type AuthorizedMessage, type Message, type MessageClass } from "@fedify/botkit";
+declare const message: AuthorizedMessage<MessageClass, void>;
+declare const quote: Message<MessageClass, void>;
+// ---cut-before---
+await message.unauthorizeQuote(quote);
+~~~~
+
+[FEP-044f]: https://w3id.org/fep/044f
+
 ### Attaching media
 
 You can attach media files to a message by providing

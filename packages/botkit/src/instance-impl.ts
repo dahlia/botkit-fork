@@ -43,8 +43,11 @@ import {
   Mention,
   Note,
   Question,
+  QuoteAuthorization,
+  QuoteRequest,
   Reject,
   Undo,
+  Update,
 } from "@fedify/vocab";
 import { getLogger } from "@logtape/logtape";
 import mimeDb from "mime-db";
@@ -297,6 +300,14 @@ export class InstanceImpl<TContextData>
       },
     );
     this.federation.setObjectDispatcher(
+      QuoteAuthorization,
+      "/ap/actor/{identifier}/quote-authorization/{id}",
+      async (ctx, values) => {
+        const bot = await this.resolveBot(ctx, values.identifier);
+        return await bot?.dispatchQuoteAuthorization(ctx, values) ?? null;
+      },
+    );
+    this.federation.setObjectDispatcher(
       APEmoji,
       "/ap/emoji/{name}",
       (ctx, values) => this.dispatchEmoji(ctx, values),
@@ -307,10 +318,12 @@ export class InstanceImpl<TContextData>
         this.onUnverifiedActivity(ctx, activity, reason)
       )
       .on(Follow, (ctx, follow) => this.onFollowed(ctx, follow))
+      .on(QuoteRequest, (ctx, request) => this.onQuoteRequested(ctx, request))
       .on(Undo, (ctx, undo) => this.onUndone(ctx, undo))
       .on(Accept, (ctx, accept) => this.onFollowAccepted(ctx, accept))
       .on(Reject, (ctx, reject) => this.onFollowRejected(ctx, reject))
       .on(Create, (ctx, create) => this.onCreated(ctx, create))
+      .on(Update, (ctx, update) => this.onUpdated(ctx, update))
       .on(Announce, (ctx, announce) => this.onAnnounced(ctx, announce))
       .on(RawLike, (ctx, like) => this.onLiked(ctx, like))
       .setSharedKeyDispatcher((ctx) => this.dispatchSharedKey(ctx));
@@ -462,6 +475,7 @@ export class InstanceImpl<TContextData>
       image: profile.image,
       properties: profile.properties,
       followerPolicy: profile.followerPolicy,
+      quotePolicy: profile.quotePolicy,
     });
     return wrapBotImpl(bot);
   }
@@ -620,6 +634,17 @@ export class InstanceImpl<TContextData>
     }
   }
 
+  async onQuoteRequested(
+    ctx: InboxContext<TContextData>,
+    request: QuoteRequest,
+  ): Promise<void> {
+    const bots = await this.#resolveTargets(
+      ctx,
+      () => this.#localObjectTarget(ctx, request.objectId),
+    );
+    for (const bot of bots) await bot.onQuoteRequested(ctx, request);
+  }
+
   async onFollowAccepted(
     ctx: InboxContext<TContextData>,
     accept: Accept,
@@ -705,6 +730,7 @@ export class InstanceImpl<TContextData>
             addLocalObject(tag.href);
           }
         }
+        addLocalObject(object.quoteId);
         addLocalObject(object.quoteUrl);
         // Bots whose message is replied to:
         addLocalObject(object.replyTargetId);
@@ -712,6 +738,32 @@ export class InstanceImpl<TContextData>
       return targets;
     });
     for (const bot of bots) await bot.onCreated(ctx, create);
+  }
+
+  async onUpdated(
+    ctx: InboxContext<TContextData>,
+    update: Update,
+  ): Promise<void> {
+    const bots = await this.#resolveTargets(ctx, async () => {
+      const targets = new Set<string>();
+      const addLocalObject = (uri: URL | null) => {
+        const parsed = parseLocalUri(
+          ctx,
+          uri,
+          this.legacyObjectUrisIdentifier,
+        );
+        if (
+          parsed?.type === "object" &&
+          typeof parsed.values.identifier === "string"
+        ) {
+          targets.add(parsed.values.identifier);
+        }
+      };
+      const object = await update.getObject(ctx);
+      if (isMessageObject(object)) addLocalObject(object.quoteId);
+      return targets;
+    });
+    for (const bot of bots) await bot.onUpdated(ctx, update);
   }
 
   async onAnnounced(

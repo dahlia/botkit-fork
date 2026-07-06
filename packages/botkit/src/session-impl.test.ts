@@ -342,6 +342,30 @@ test("SessionImpl.publish()", async (t) => {
     assert.deepStrictEqual(publicMsg.html, "<p>Hello, world!</p>");
     assert.deepStrictEqual(publicMsg.visibility, "public");
     assert.deepStrictEqual(publicMsg.mentions, []);
+    assert.deepStrictEqual(
+      object.interactionPolicy?.canQuote
+        ?.automaticApprovals,
+      [PUBLIC_COLLECTION],
+    );
+  });
+
+  await t.test("quotePolicy", async () => {
+    ctx.sentActivities = [];
+    const followersMsg = await session.publish(text`Followers can quote`, {
+      quotePolicy: "followers",
+    });
+    const activity = ctx.sentActivities[0].activity;
+    assert.ok(activity instanceof Create);
+    const object = await activity.getObject(ctx);
+    assert.ok(object instanceof Note);
+    assert.deepStrictEqual(
+      object.interactionPolicy?.canQuote?.automaticApprovals,
+      [
+        ctx.getActorUri(bot.identifier),
+        ctx.getFollowersUri(bot.identifier),
+      ],
+    );
+    assert.deepStrictEqual(followersMsg.raw.id, object.id);
   });
 
   await t.test("unlisted", async () => {

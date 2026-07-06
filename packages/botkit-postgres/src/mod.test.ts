@@ -18,7 +18,14 @@ import {
   PostgresRepository,
 } from "@fedify/botkit-postgres";
 import { importJwk } from "@fedify/fedify/sig";
-import { Create, Follow, Note, Person, PUBLIC_COLLECTION } from "@fedify/vocab";
+import {
+  Create,
+  Follow,
+  Note,
+  Person,
+  PUBLIC_COLLECTION,
+  QuoteAuthorization,
+} from "@fedify/vocab";
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import postgres from "postgres";
@@ -129,6 +136,7 @@ if (postgresUrl == null) {
             "key_pairs",
             "messages",
             "poll_votes",
+            "quote_authorizations",
             "sent_follows",
           ],
         );
@@ -211,6 +219,13 @@ if (postgresUrl == null) {
     test("does not emit unhandled rejections for schema initialization", async () => {
       const error = new Error("Schema initialization failed.");
       const sql = {
+        begin: async (
+          callback: (
+            transactionSql: { unsafe: () => Promise<never> },
+          ) => Promise<void>,
+        ) => {
+          await callback(sql);
+        },
         // deno-lint-ignore require-await
         unsafe: async () => {
           throw error;
@@ -1025,6 +1040,47 @@ if (postgresUrl == null) {
       } finally {
         await sql.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
         await sql.end();
+      }
+    });
+
+    test("keeps the first quote authorization for a quote", async () => {
+      const harness = createHarness();
+      try {
+        const repo = harness.repository;
+        const firstId = "01942976-3400-7f34-872e-2cbf0f9eeac4";
+        const secondId = "01942976-3400-7f34-872e-2cbf0f9eeac5";
+        const quote = new URL("https://remote.example/notes/quote");
+        const target = new URL("https://example.com/ap/note/1");
+        const first = new QuoteAuthorization({
+          id: new URL(
+            `https://example.com/ap/actor/bot/quote-authorization/${firstId}`,
+          ),
+          attribution: new URL("https://example.com/ap/actor/bot"),
+          interactingObject: quote,
+          interactionTarget: target,
+        });
+        const second = new QuoteAuthorization({
+          id: new URL(
+            `https://example.com/ap/actor/bot/quote-authorization/${secondId}`,
+          ),
+          attribution: new URL("https://example.com/ap/actor/bot"),
+          interactingObject: quote,
+          interactionTarget: target,
+        });
+
+        await repo.addQuoteAuthorization("bot", firstId, first);
+        await repo.addQuoteAuthorization("bot", secondId, second);
+
+        assert.deepStrictEqual(
+          (await repo.findQuoteAuthorization("bot", quote))?.id?.href,
+          first.id?.href,
+        );
+        assert.deepStrictEqual(
+          await repo.getQuoteAuthorization("bot", secondId),
+          undefined,
+        );
+      } finally {
+        await harness.cleanup();
       }
     });
   });

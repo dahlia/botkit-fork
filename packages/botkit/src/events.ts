@@ -17,6 +17,7 @@ import type { Actor } from "@fedify/vocab";
 import type { FollowRequest } from "./follow.ts";
 import type { Message, MessageClass, SharedMessage } from "./message.ts";
 import type { Vote } from "./poll.ts";
+import type { QuoteRequest } from "./quote.ts";
 import type { Like, Reaction } from "./reaction.ts";
 import type { Session } from "./session.ts";
 
@@ -96,6 +97,18 @@ export type ReplyEventHandler<TContextData> = (
 export type QuoteEventHandler<TContextData> = (
   session: Session<TContextData>,
   quote: Message<MessageClass, TContextData>,
+) => void | Promise<void>;
+
+/**
+ * An event handler for a quote request to the bot.
+ * @typeParam TContextData The type of the context data.
+ * @param session The session of the bot.
+ * @param quoteRequest The quote request.
+ * @since 0.5.0
+ */
+export type QuoteRequestEventHandler<TContextData> = (
+  session: Session<TContextData>,
+  quoteRequest: QuoteRequest<TContextData>,
 ) => void | Promise<void>;
 
 /**

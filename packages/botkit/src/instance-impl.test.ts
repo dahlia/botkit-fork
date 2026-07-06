@@ -14,9 +14,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import { MemoryKvStore } from "@fedify/fedify/federation";
+import { Create, Note } from "@fedify/vocab";
 import assert from "node:assert";
 import { describe, test } from "node:test";
 import { createInstance } from "./instance.ts";
+import { MemoryRepository } from "./repository.ts";
+import { text } from "./text.ts";
 
 describe("createInstance()", () => {
   test("serves a static bot's actor", async () => {
@@ -49,6 +52,35 @@ describe("createInstance()", () => {
     assert.deepStrictEqual(response.status, 200);
     const jrd = await response.json();
     assert.deepStrictEqual(jrd.subject, "acct:mybot@example.com");
+  });
+
+  test("passes quotePolicy to a static bot", async () => {
+    const repository = new MemoryRepository();
+    const instance = createInstance<void>({
+      kv: new MemoryKvStore(),
+      repository,
+    });
+    const bot = instance.createBot("bot", {
+      username: "mybot",
+      quotePolicy: "nobody",
+    });
+    const session = bot.getSession("https://example.com");
+
+    await session.publish(text`Nobody can quote this.`);
+
+    const messages = [];
+    for await (const message of repository.getMessages("bot")) {
+      messages.push(message);
+    }
+    assert.deepStrictEqual(messages.length, 1);
+    const activity = messages[0];
+    assert.ok(activity instanceof Create);
+    const object = await activity.getObject(session.context);
+    assert.ok(object instanceof Note);
+    assert.deepStrictEqual(
+      object.interactionPolicy?.canQuote?.automaticApprovals,
+      [session.actorId],
+    );
   });
 
   test("returns 404 for unregistered identifiers", async () => {

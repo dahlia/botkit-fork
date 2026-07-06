@@ -265,6 +265,54 @@ property.  See also the [*Quotes* section](./message.md#quotes) in the *Message*
 concept document.
 
 
+Quote request
+-------------
+
+*This API is available since BotKit 0.5.0.*
+
+The `~Bot.onQuoteRequest` event handler is called when a remote actor asks
+permission to quote one of your bot's messages through [FEP-044f].  It
+receives a `QuoteRequest` object, whose `quote` property is the remote quote
+post and whose `target` property is the bot's quoted message.
+
+If the message's quote policy automatically accepts or rejects the request,
+BotKit sends the response before the event handler is called.  The handler can
+inspect `~QuoteRequest.state` to see whether the request is still pending:
+
+~~~~ typescript twoslash
+import { type Bot } from "@fedify/botkit";
+const bot = {} as unknown as Bot<void>;
+// ---cut-before---
+bot.onQuoteRequest = async (session, request) => {
+  if (request.state === "pending") {
+    await request.accept();
+  }
+};
+~~~~
+
+If you later need to revoke a quote authorization, call
+`~AuthorizedMessage.unauthorizeQuote()` on the target message with the quote
+message:
+
+~~~~ typescript twoslash
+import { type Bot } from "@fedify/botkit";
+const bot = {} as unknown as Bot<void>;
+// ---cut-before---
+bot.onQuoteRequest = async (session, request) => {
+  if (request.state === "accepted") {
+    await request.target.unauthorizeQuote(request.quote);
+  }
+};
+~~~~
+
+Use the `quotePolicy` option on `createBot()` or `Session.publish()` to choose
+which quote requests are automatic and which require manual review.  For
+details, see the [*Quote policy* section](./message.md#quote-policy) in
+the *Message* concept document.
+
+[FEP-044f]: https://w3id.org/fep/044f
+
+
 Message
 -------
 

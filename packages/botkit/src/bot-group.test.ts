@@ -14,12 +14,20 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import { type InboxContext, MemoryKvStore } from "@fedify/fedify/federation";
-import { Create, Follow, Note, Person, PUBLIC_COLLECTION } from "@fedify/vocab";
+import {
+  Create,
+  Follow,
+  Note,
+  Person,
+  PUBLIC_COLLECTION,
+  QuoteRequest,
+} from "@fedify/vocab";
 import assert from "node:assert";
 import { describe, test } from "node:test";
 import { InstanceImpl } from "./instance-impl.ts";
 import type { BotProfile } from "./instance.ts";
 import { MemoryRepository } from "./repository.ts";
+import { text } from "./text.ts";
 
 function createInstance(): {
   instance: InstanceImpl<void>;
@@ -262,6 +270,60 @@ describe("dynamic bots", () => {
 });
 
 describe("dynamic bots in routing and web pages", () => {
+  test("receive quote requests for their messages", async () => {
+    const { instance, repository } = createInstance();
+    const group = instance.createBot(
+      (_ctx, identifier) => regionProfile(identifier),
+    );
+    const events: string[] = [];
+    group.onQuoteRequest = (session, request) => {
+      events.push(`${session.bot.identifier}:${request.state}`);
+    };
+    const ctx = instance.federation.createContext(
+      new URL("https://example.com/"),
+      undefined,
+    ) as InboxContext<void>;
+    Object.defineProperty(ctx, "recipient", {
+      value: null,
+      configurable: true,
+    });
+    Object.defineProperty(ctx, "sendActivity", {
+      value: () => Promise.resolve(),
+      configurable: true,
+    });
+    const bot = await instance.resolveBot(ctx, "region_kr");
+    assert.ok(bot != null);
+    const target = await bot.getSession(ctx).publish(text`Quote me`);
+    const actor = new Person({
+      id: new URL("https://remote.example/users/alice"),
+      preferredUsername: "alice",
+    });
+    const quote = new Note({
+      id: new URL("https://remote.example/notes/quote"),
+      attribution: actor,
+      quoteUrl: target.id,
+      content: "Quoted.",
+      to: PUBLIC_COLLECTION,
+    });
+
+    await instance.onQuoteRequested(
+      ctx,
+      new QuoteRequest({
+        id: new URL("https://remote.example/quote-requests/1"),
+        actor,
+        object: target.id,
+        instrument: quote,
+      }),
+    );
+
+    assert.deepStrictEqual(events, ["region_kr:accepted"]);
+    assert.deepStrictEqual(
+      (await repository.findQuoteAuthorization("region_kr", quote.id!))
+        ?.interactionTargetId,
+      target.id,
+    );
+  });
+
   test("receive timeline messages via followees", async () => {
     const { instance, repository } = createInstance();
     const group = instance.createBot(

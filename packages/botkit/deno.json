@@ -11,6 +11,7 @@
     "./instance": "./src/instance.ts",
     "./message": "./src/message.ts",
     "./poll": "./src/poll.ts",
+    "./quote": "./src/quote.ts",
     "./reaction": "./src/reaction.ts",
     "./repository": "./src/repository.ts",
     "./session": "./src/session.ts",

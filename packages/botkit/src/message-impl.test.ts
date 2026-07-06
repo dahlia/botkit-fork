@@ -595,6 +595,27 @@ test("AuthorizedMessage.update()", async (t) => {
       }
     });
   }
+
+  await t.test("quote policy", async () => {
+    const repository = new MemoryRepository();
+    const bot = new BotImpl<void>({
+      kv: new MemoryKvStore(),
+      repository,
+      username: "bot",
+    });
+    const ctx = createMockContext(bot, "https://example.com");
+    const session = new SessionImpl(bot, ctx);
+    const msg = await session.publish(text`Hello`);
+    await msg.update(text`Hello again`, { quotePolicy: "nobody" });
+    const [create] = await Array.fromAsync(repository.getMessages("bot"));
+    assert.ok(create instanceof Create);
+    const object = await create.getObject(ctx);
+    assert.ok(object instanceof Note);
+    assert.deepStrictEqual(
+      object.interactionPolicy?.canQuote?.automaticApprovals,
+      [ctx.getActorUri(bot.identifier)],
+    );
+  });
 });
 
 test("getMessageVisibility()", () => {

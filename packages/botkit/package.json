@@ -62,6 +62,10 @@
       "types": "./dist/poll.d.ts",
       "import": "./dist/poll.js"
     },
+    "./quote": {
+      "types": "./dist/quote.d.ts",
+      "import": "./dist/quote.js"
+    },
     "./reaction": {
       "types": "./dist/reaction.d.ts",
       "import": "./dist/reaction.js"

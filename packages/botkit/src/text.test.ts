@@ -129,6 +129,7 @@ const bot: BotWithVoidContextData = {
         username: "bot",
         class: Service,
         followerPolicy: "accept",
+        quotePolicy: "public",
       },
       context: ctx,
       actorId: ctx.getActorUri(bot.identifier),
