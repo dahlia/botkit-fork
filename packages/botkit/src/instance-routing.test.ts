@@ -23,6 +23,7 @@ import {
   Note,
   Person,
   PUBLIC_COLLECTION,
+  QuoteAuthorization,
   Undo,
 } from "@fedify/vocab";
 import assert from "node:assert";
@@ -341,6 +342,56 @@ describe("shared inbox routing", () => {
       }),
     );
     assert.deepStrictEqual(events, ["mention:beta"]);
+  });
+
+  test("routes pure FEP quote Creates to the quoted bot", async () => {
+    const { instance, repository, alpha, beta, ctx } = createHarness();
+    const events: string[] = [];
+    alpha.onQuote = (session) =>
+      void (events.push(`quote:${session.bot.identifier}`));
+    beta.onQuote = (session) =>
+      void (events.push(`quote:${session.bot.identifier}`));
+
+    const quoteId = new URL("https://remote.example/notes/fep-quote");
+    const targetId = new URL(
+      "https://example.com/ap/actor/alpha/note/01950000-0000-7000-8000-000000000301",
+    );
+    const authorizationId = "01950000-0000-7000-8000-000000000302" as Uuid;
+    const authorizationUrl = new URL(
+      `https://example.com/ap/actor/alpha/quote-authorization/${authorizationId}`,
+    );
+    await repository.addQuoteAuthorization(
+      "alpha",
+      authorizationId,
+      new QuoteAuthorization({
+        id: authorizationUrl,
+        attribution: new URL("https://example.com/ap/actor/alpha"),
+        interactingObject: quoteId,
+        interactionTarget: targetId,
+      }),
+    );
+
+    const author = new Person({
+      id: new URL("https://remote.example/actors/john"),
+      preferredUsername: "john",
+    });
+    await instance.onCreated(
+      ctx,
+      new Create({
+        id: new URL("https://remote.example/creates/fep-quote"),
+        actor: author,
+        to: PUBLIC_COLLECTION,
+        object: new Note({
+          id: quoteId,
+          attribution: author,
+          to: PUBLIC_COLLECTION,
+          content: "A pure FEP quote",
+          quote: targetId,
+          quoteAuthorization: authorizationUrl,
+        }),
+      }),
+    );
+    assert.deepStrictEqual(events, ["quote:alpha"]);
   });
 
   test("routes Create to followers of the author", async () => {

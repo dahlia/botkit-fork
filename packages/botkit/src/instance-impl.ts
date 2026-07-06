@@ -728,6 +728,7 @@ export class InstanceImpl<TContextData>
             addLocalObject(tag.href);
           }
         }
+        addLocalObject(object.quoteId);
         addLocalObject(object.quoteUrl);
         // Bots whose message is replied to:
         addLocalObject(object.replyTargetId);
