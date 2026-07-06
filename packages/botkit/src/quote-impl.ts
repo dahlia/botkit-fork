@@ -83,6 +83,11 @@ export class QuoteRequestImpl<TContextData>
     }
     signal?.throwIfAborted();
     const authorization = existing ?? await this.#createAuthorization();
+    if (authorization.interactionTargetId?.href !== this.target.id.href) {
+      throw new TypeError(
+        "The quote authorization does not belong to this message.",
+      );
+    }
     await this.session.context.sendActivity(
       this.session.bot,
       this.actor,

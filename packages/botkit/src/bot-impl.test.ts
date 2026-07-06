@@ -36,6 +36,7 @@ import {
   PropertyValue,
   PUBLIC_COLLECTION,
   Question,
+  QuoteAuthorization,
   QuoteRequest,
   type Recipient,
   Reject,
@@ -56,7 +57,7 @@ import type {
 } from "./message.ts";
 import type { Vote } from "./poll.ts";
 import type { Like, Reaction } from "./reaction.ts";
-import { MemoryRepository } from "./repository.ts";
+import { MemoryRepository, type Uuid } from "./repository.ts";
 import { SessionImpl } from "./session-impl.ts";
 import type { Session } from "./session.ts";
 import { mention, strong, text } from "./text.ts";
@@ -3607,6 +3608,84 @@ test("BotImpl.onQuoteRequested() revokes widened quote stamps", async () => {
   );
   assert.deepStrictEqual(ctx.sentActivities[1].recipients, "followers");
   assert.ok(ctx.sentActivities[2].activity instanceof Reject);
+});
+
+test("BotImpl.onQuoteRequested() does not accept a raced stamp", async () => {
+  class RacedQuoteAuthorizationRepository extends MemoryRepository {
+    readonly racedAuthorization: QuoteAuthorization;
+
+    constructor(racedAuthorization: QuoteAuthorization) {
+      super();
+      this.racedAuthorization = racedAuthorization;
+    }
+
+    override async addQuoteAuthorization(
+      identifier: string,
+      _id: Uuid,
+      authorization: QuoteAuthorization,
+    ): Promise<void> {
+      const interactingObject = authorization.interactingObjectId;
+      if (interactingObject == null) {
+        throw new TypeError(
+          "The quote authorization interacting object is missing.",
+        );
+      }
+      if (
+        await this.findQuoteAuthorization(identifier, interactingObject) == null
+      ) {
+        await super.addQuoteAuthorization(
+          identifier,
+          "01950000-0000-7000-8000-000000000001" as Uuid,
+          this.racedAuthorization,
+        );
+      }
+    }
+  }
+
+  const racedAuthorization = new QuoteAuthorization({
+    id: new URL("https://example.com/ap/quote-authorization/raced"),
+    attribution: new URL("https://example.com/ap/actor/bot"),
+    interactingObject: new URL("https://remote.example/notes/raced-quote"),
+    interactionTarget: new URL("https://example.com/ap/note/other-target"),
+  });
+  const repository = new RacedQuoteAuthorizationRepository(
+    racedAuthorization,
+  );
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+    quotePolicy: "public",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const target = await session.publish(text`Quote me`);
+  ctx.sentActivities = [];
+  const actor = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const quote = new Note({
+    id: racedAuthorization.interactingObjectId,
+    attribution: actor.id,
+    quoteUrl: target.id,
+    content: "Quoted.",
+    to: PUBLIC_COLLECTION,
+  });
+
+  await assert.rejects(
+    bot.onQuoteRequested(
+      ctx,
+      new QuoteRequest({
+        id: new URL("https://remote.example/quote-requests/raced"),
+        actor,
+        object: target.id,
+        instrument: quote,
+      }),
+    ),
+    TypeError,
+  );
+  assert.deepStrictEqual(ctx.sentActivities, []);
 });
 
 test("BotImpl.onQuoteRequested() rejects unknown-audience quotes", async () => {

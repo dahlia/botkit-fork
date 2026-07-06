@@ -473,6 +473,7 @@ export class InstanceImpl<TContextData>
       image: profile.image,
       properties: profile.properties,
       followerPolicy: profile.followerPolicy,
+      quotePolicy: profile.quotePolicy,
     });
     return wrapBotImpl(bot);
   }
