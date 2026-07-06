@@ -697,8 +697,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     );
     if (
       parsedObj?.type !== "object" ||
-      // deno-lint-ignore no-explicit-any
-      !messageClasses.includes(parsedObj.class as any) ||
+      !(messageClasses as readonly unknown[]).includes(parsedObj.class) ||
       parsedObj.values.identifier !== this.identifier
     ) return;
     const stored = await this.repository.getMessage(
@@ -794,6 +793,12 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       quote,
       target,
     );
+    const revokeAndRejectQuoteRequest = async () => {
+      if (existingAuthorization != null) {
+        await target.unauthorizeQuote(quote);
+      }
+      await quoteRequest.reject();
+    };
     const rule = targetObject.interactionPolicy?.canQuote;
     if (rule == null) {
       const policy = normalizeQuotePolicy(this.quotePolicy);
@@ -804,7 +809,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       ) {
         // Leave pending for the event handler below.
       } else {
-        await quoteRequest.reject();
+        await revokeAndRejectQuoteRequest();
       }
     } else if (
       await this.#matchesQuoteApprovals(ctx, actor.id, rule.automaticApprovals)
@@ -815,7 +820,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     ) {
       // Leave pending for the event handler below.
     } else {
-      await quoteRequest.reject();
+      await revokeAndRejectQuoteRequest();
     }
     await this.onQuoteRequest?.(session, quoteRequest);
   }

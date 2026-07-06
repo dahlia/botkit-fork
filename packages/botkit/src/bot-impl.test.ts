@@ -3802,6 +3802,73 @@ test("BotImpl.onQuoteRequested() revokes widened quote stamps", async () => {
   assert.ok(ctx.sentActivities[2].activity instanceof Reject);
 });
 
+test("BotImpl.onQuoteRequested() revokes disallowed quote stamps", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+    quotePolicy: "public",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const target = await session.publish(text`Quote me`);
+  ctx.sentActivities = [];
+  const actor = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const quoteId = new URL("https://remote.example/notes/stale-quote");
+  const quote = new Note({
+    id: quoteId,
+    attribution: actor.id,
+    quoteUrl: target.id,
+    content: "Quoted directly.",
+    to: PUBLIC_COLLECTION,
+  });
+
+  await bot.onQuoteRequested(
+    ctx,
+    new QuoteRequest({
+      id: new URL("https://remote.example/quote-requests/old-policy"),
+      actor,
+      object: target.id,
+      instrument: quote,
+    }),
+  );
+
+  const authorization = await repository.findQuoteAuthorization(
+    "bot",
+    quoteId,
+  );
+  assert.ok(authorization != null);
+  await target.update(text`Quote me`, { quotePolicy: "nobody" });
+  ctx.sentActivities = [];
+
+  await bot.onQuoteRequested(
+    ctx,
+    new QuoteRequest({
+      id: new URL("https://remote.example/quote-requests/new-policy"),
+      actor,
+      object: target.id,
+      instrument: quote,
+    }),
+  );
+
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorization("bot", quoteId),
+    undefined,
+  );
+  assert.deepStrictEqual(ctx.sentActivities.length, 3);
+  assert.ok(ctx.sentActivities[0].activity instanceof Delete);
+  assert.deepStrictEqual(
+    ctx.sentActivities[0].activity.objectId,
+    authorization.id,
+  );
+  assert.deepStrictEqual(ctx.sentActivities[1].recipients, "followers");
+  assert.ok(ctx.sentActivities[2].activity instanceof Reject);
+});
+
 test("BotImpl.onQuoteRequested() does not accept a raced stamp", async () => {
   class RacedQuoteAuthorizationRepository extends MemoryRepository {
     readonly racedAuthorization: QuoteAuthorization;
