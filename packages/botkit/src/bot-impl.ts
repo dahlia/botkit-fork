@@ -1139,7 +1139,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       }
     }
     const fepQuoteUrl = object.quoteId;
-    const requiresQuoteAuthorization = quoteUrl == null && fepQuoteUrl != null;
+    const requiresQuoteAuthorization = fepQuoteUrl != null;
     if (quoteUrl == null) quoteUrl = fepQuoteUrl ?? object.quoteUrl;
     const quoteTarget = parseLocalUri(
       ctx,

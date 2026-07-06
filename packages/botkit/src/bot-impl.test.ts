@@ -29,6 +29,7 @@ import {
   Follow,
   Image,
   Like as RawLike,
+  Link,
   Mention,
   Note,
   Person,
@@ -2090,6 +2091,54 @@ test("BotImpl.onCreated()", async (t) => {
         quote: new URL(
           "https://example.com/ap/note/a6358f1b-c978-49d3-8065-37a1df6168de",
         ),
+      }),
+    });
+    let quoted: [Session<void>, Message<MessageClass, void>][] = [];
+    bot.onQuote = (session, msg) => void (quoted.push([session, msg]));
+
+    await bot.onCreated(ctx, create);
+
+    assert.deepStrictEqual(quoted, []);
+    assert.deepStrictEqual(replied, []);
+    assert.deepStrictEqual(mentioned, []);
+    assert.deepStrictEqual(messaged.length, 1);
+    assert.deepStrictEqual(ctx.sentActivities, []);
+    assert.deepStrictEqual(ctx.forwardedRecipients, []);
+
+    quoted = [];
+    messaged = [];
+    ctx.forwardedRecipients = [];
+  });
+
+  await t.test("on unauthorized FEP quote with fallback link", async () => {
+    const targetId = new URL(
+      "https://example.com/ap/note/a6358f1b-c978-49d3-8065-37a1df6168de",
+    );
+    const create = new Create({
+      id: new URL(
+        "https://example.com/ap/create/9cfd7129-4cf0-4505-90d8-3cac2dc42436",
+      ),
+      actor: new URL("https://example.com/ap/actor/john"),
+      to: PUBLIC_COLLECTION,
+      cc: new URL("https://example.com/ap/actor/john/followers"),
+      object: new Note({
+        id: new URL(
+          "https://example.com/ap/note/9cfd7129-4cf0-4505-90d8-3cac2dc42436",
+        ),
+        attribution: new Person({
+          id: new URL("https://example.com/ap/actor/john"),
+          preferredUsername: "john",
+        }),
+        to: PUBLIC_COLLECTION,
+        cc: new URL("https://example.com/ap/actor/john/followers"),
+        content: "It's a FEP quote with a fallback link!",
+        quote: targetId,
+        tags: [
+          new Link({
+            href: targetId,
+            mediaType: "application/activity+json",
+          }),
+        ],
       }),
     });
     let quoted: [Session<void>, Message<MessageClass, void>][] = [];
