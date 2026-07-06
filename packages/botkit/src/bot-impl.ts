@@ -688,7 +688,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     ctx: InboxContext<TContextData>,
     request: RawQuoteRequest,
   ): Promise<void> {
-    if (request.actorId == null) return;
+    if (request.id == null || request.actorId == null) return;
     const parsedObj = parseLocalUri(
       ctx,
       request.objectId,
@@ -712,7 +712,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       documentLoader,
       suppressError: true,
     });
-    if (!isMessageObject(instrument)) return;
+    if (!isMessageObject(instrument) || instrument.id == null) return;
     const actor = await request.getActor({
       contextLoader: ctx.contextLoader,
       documentLoader,
@@ -721,17 +721,6 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     if (!isActor(actor) || actor.id == null) return;
     const session = this.getSession(ctx);
     if (!await this.#canActorSeeObject(ctx, actor.id, targetObject)) {
-      await session.context.sendActivity(
-        this,
-        actor,
-        new Reject({
-          id: new URL(`/#reject/${request.id?.href}`, session.actorId),
-          actor: session.actorId,
-          to: actor.id,
-          object: request,
-        }),
-        { excludeBaseUris: [new URL(session.context.origin)] },
-      );
       return;
     }
     if (
@@ -765,7 +754,30 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     const quote = await createMessage(quoteObject, session, {
       [actor.id.href]: actor,
     });
+    const existingAuthorization = await this.repository.findQuoteAuthorization(
+      quote.id,
+    );
+    if (
+      existingAuthorization != null &&
+      existingAuthorization.interactionTargetId?.href !== target.id.href
+    ) {
+      await session.context.sendActivity(
+        this,
+        actor,
+        new Reject({
+          id: new URL(`/#reject/${request.id.href}`, session.actorId),
+          actor: session.actorId,
+          to: actor.id,
+          object: request,
+        }),
+        { excludeBaseUris: [new URL(session.context.origin)] },
+      );
+      return;
+    }
     if (this.#isQuoteAudienceWider(quote.visibility, target.visibility)) {
+      if (existingAuthorization != null) {
+        await target.unauthorizeQuote(quote);
+      }
       await session.context.sendActivity(
         this,
         actor,

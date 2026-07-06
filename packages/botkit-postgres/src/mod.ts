@@ -1285,7 +1285,8 @@ function validateSchemaName(schema: string): string {
 }
 
 function hasTransaction(sql: Queryable): sql is TransactionalQueryable {
-  return typeof (sql as Partial<TransactionalQueryable>).begin === "function";
+  return sql != null &&
+    typeof (sql as Partial<TransactionalQueryable>).begin === "function";
 }
 
 async function execute<TRow extends object>(
