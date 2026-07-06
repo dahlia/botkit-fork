@@ -902,7 +902,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       !isActor(actor) || actor.id == null ||
       actor.id.href !== accept.actorId.href
     ) return undefined;
-    const target = await lookupObjectSafely(ctx, object.quoteId!);
+    const target = await lookupObjectSafely(this, ctx, object.quoteId!);
     if (
       !isMessageObject(target) ||
       target.attributionId?.href !== actor.id.href
@@ -913,7 +913,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       suppressError: true,
     });
     if (authorization == null) {
-      authorization = await lookupObjectSafely(ctx, accept.resultId);
+      authorization = await lookupObjectSafely(this, ctx, accept.resultId);
     }
     if (
       !(authorization instanceof QuoteAuthorization) ||
@@ -942,7 +942,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       !isActor(actor) || actor.id == null ||
       actor.id.href !== reject.actorId.href
     ) return undefined;
-    const target = await lookupObjectSafely(ctx, object.quoteId!);
+    const target = await lookupObjectSafely(this, ctx, object.quoteId!);
     if (
       !isMessageObject(target) ||
       target.attributionId?.href !== actor.id.href
@@ -1009,7 +1009,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       mentionUris.push(tag.href);
     }
     const mentionedActors = (await Promise.all(
-      mentionUris.map((uri) => lookupObjectSafely(ctx, uri)),
+      mentionUris.map((uri) => lookupObjectSafely(this, ctx, uri)),
     )).filter(isActor);
     if (mentionedActors.length > 0) {
       await ctx.sendActivity(
@@ -1020,7 +1020,11 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       );
     }
     if (object.replyTargetId != null) {
-      const replyTarget = await lookupObjectSafely(ctx, object.replyTargetId);
+      const replyTarget = await lookupObjectSafely(
+        this,
+        ctx,
+        object.replyTargetId,
+      );
       if (isMessageObject(replyTarget)) {
         const replyActor = await replyTarget.getAttribution({
           contextLoader: ctx.contextLoader,
@@ -1964,13 +1968,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function lookupObjectSafely<TContextData>(
+  bot: BotImpl<TContextData>,
   ctx: InboxContext<TContextData>,
   id: URL,
 ): Promise<Object | null> {
   try {
+    const documentLoader = await ctx.getDocumentLoader(bot);
     return await ctx.lookupObject(id, {
       contextLoader: ctx.contextLoader,
-      documentLoader: ctx.documentLoader,
+      documentLoader,
     });
   } catch {
     return null;

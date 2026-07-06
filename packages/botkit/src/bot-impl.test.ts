@@ -3685,6 +3685,82 @@ test("BotImpl.onFollowAccepted() accepts quote approvals", async () => {
   assert.deepStrictEqual(approver?.id, author.id);
 });
 
+test("BotImpl.onFollowAccepted() validates quote approvals with signed fetch", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const author = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const target = new Note({
+    id: new URL("https://remote.example/notes/followers-only"),
+    attribution: author,
+    content: "Followers only.",
+    to: author.followersId,
+  });
+  const defaultDocumentLoader = ctx.documentLoader;
+  const signedDocumentLoader: Awaited<
+    ReturnType<typeof ctx.getDocumentLoader>
+  > = (url, options) => defaultDocumentLoader(url, options);
+  Object.defineProperty(ctx, "getDocumentLoader", {
+    value: () => Promise.resolve(signedDocumentLoader),
+  });
+  let usedSignedFetch = false;
+  Object.defineProperty(ctx, "lookupObject", {
+    value: (
+      id: URL,
+      options?: Parameters<typeof ctx.lookupObject>[1],
+    ) => {
+      if (
+        id.href === target.id?.href &&
+        options?.documentLoader === signedDocumentLoader
+      ) {
+        usedSignedFetch = true;
+        return Promise.resolve(target);
+      }
+      return Promise.resolve(null);
+    },
+  });
+  const targetMessage = await createMessage(target, session, {});
+  const quote = await session.publish(text`Please approve this.`, {
+    quoteTarget: targetMessage,
+  });
+  const parsed = ctx.parseUri(quote.id);
+  assert.ok(parsed?.type === "object");
+  const messageId = parsed.values.id as Uuid;
+  const authorization = new QuoteAuthorization({
+    id: new URL("https://remote.example/stamps/1"),
+    attribution: author.id,
+    interactingObject: quote.id,
+    interactionTarget: target.id,
+  });
+
+  await bot.onFollowAccepted(
+    ctx,
+    new Accept({
+      actor: author,
+      object: ctx.getObjectUri(QuoteRequest, {
+        identifier: bot.identifier,
+        id: messageId,
+      }),
+      result: authorization,
+    }),
+  );
+
+  const stored = await repository.getMessage("bot", messageId);
+  assert.ok(stored instanceof Create);
+  const object = await stored.getObject(ctx);
+  assert.ok(object instanceof Note);
+  assert.ok(usedSignedFetch);
+  assert.deepStrictEqual(object.quoteAuthorizationId, authorization.id);
+});
+
 test("BotImpl.onFollowAccepted() sends quote updates to reply targets", async () => {
   const repository = new MemoryRepository();
   const bot = new BotImpl<void>({
