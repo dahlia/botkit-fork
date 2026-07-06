@@ -869,6 +869,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     const targetRecipients = new Set(
       [...targetObject.toIds, ...targetObject.ccIds].map((u) => u.href),
     );
+    targetRecipients.add(ctx.getActorUri(this.identifier).href);
     if (targetRecipients.has(PUBLIC_COLLECTION.href)) return true;
     const followerCollection = ctx.getFollowersUri(this.identifier).href;
     const actorIsFollower = targetRecipients.has(followerCollection) &&
