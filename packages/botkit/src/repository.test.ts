@@ -212,6 +212,34 @@ test("KvRepository serializes concurrent quote authorization inserts", async () 
   assert.deepStrictEqual(indexed?.id?.href, stored[0].id?.href);
 });
 
+test("KvRepository removes quote authorization indexes before parsing", async () => {
+  const kv = new MemoryKvStore();
+  const repository = new KvRepository(kv);
+  const id = "01942976-3400-7f34-872e-2cbf0f9eeac4" as Uuid;
+  const interactingObject = new URL("https://remote.example/notes/quote");
+  const authorizationKey = scopedKvKey("quoteAuthorizations", id);
+  const indexKey = scopedKvKey(
+    "quoteAuthorizationsByInteractingObject",
+    interactingObject.href,
+  );
+  await kv.set(authorizationKey, {
+    "@context": "https://www.w3.org/ns/activitystreams",
+    type: "QuoteAuthorization",
+    interactingObject: interactingObject.href,
+  });
+  await kv.set(indexKey, id);
+
+  const removed = await repository.removeQuoteAuthorization("bot", id);
+
+  assert.ok(removed?.interactingObjectId == null);
+  assert.deepStrictEqual(await kv.get(authorizationKey), undefined);
+  assert.deepStrictEqual(await kv.get(indexKey), undefined);
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorization("bot", interactingObject),
+    undefined,
+  );
+});
+
 function scopedKvKey(...rest: readonly string[]): KvKey {
   return ["_botkit", "bots", "bot", ...rest];
 }

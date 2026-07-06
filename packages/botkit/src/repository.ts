@@ -52,6 +52,20 @@ function isLegacyKvLock(value: unknown): value is string {
   return typeof value === "string" && !uuidPattern.test(value);
 }
 
+function getRawQuoteAuthorizationInteractingObject(
+  json: unknown,
+): URL | undefined {
+  if (typeof json !== "object" || json == null) return undefined;
+  if (!("interactingObject" in json)) return undefined;
+  const interactingObject = json.interactingObject;
+  if (typeof interactingObject !== "string") return undefined;
+  try {
+    return new URL(interactingObject);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * A UUID (universally unique identifier).
  * @since 0.3.0
@@ -1638,28 +1652,31 @@ export class KvRepository implements Repository {
     identifier: string,
     id: Uuid,
   ): Promise<QuoteAuthorization | undefined> {
-    const authorization = await this.getQuoteAuthorization(identifier, id);
-    if (authorization == null) return undefined;
-    const interactingObject = authorization.interactingObjectId;
+    const key = this.#key(identifier, "quoteAuthorizations", id);
+    const json = await this.kv.get(key);
+    if (json == null) return undefined;
+    const interactingObject = getRawQuoteAuthorizationInteractingObject(json);
     if (interactingObject == null) {
-      await this.kv.delete(this.#key(identifier, "quoteAuthorizations", id));
-      return authorization;
+      await this.kv.delete(key);
+    } else {
+      const indexKey = this.#quoteAuthorizationIndexKey(
+        identifier,
+        interactingObject,
+      );
+      await this.#withKvLock(
+        this.#quoteAuthorizationLockKey(identifier, interactingObject),
+        async () => {
+          await this.kv.delete(key);
+          const indexedId = await this.kv.get<Uuid>(indexKey);
+          if (indexedId === id) await this.kv.delete(indexKey);
+        },
+      );
     }
-    await this.#withKvLock(
-      this.#quoteAuthorizationLockKey(identifier, interactingObject),
-      async () => {
-        await this.kv.delete(this.#key(identifier, "quoteAuthorizations", id));
-        const indexedId = await this.kv.get<Uuid>(
-          this.#quoteAuthorizationIndexKey(identifier, interactingObject),
-        );
-        if (indexedId === id) {
-          await this.kv.delete(
-            this.#quoteAuthorizationIndexKey(identifier, interactingObject),
-          );
-        }
-      },
-    );
-    return authorization;
+    try {
+      return await QuoteAuthorization.fromJsonLd(json);
+    } catch {
+      return undefined;
+    }
   }
 
   async #addToFolloweeIndex(
