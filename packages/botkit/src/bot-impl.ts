@@ -773,7 +773,6 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     if (
       await this.#isQuoteAudienceWider(
         ctx,
-        actor.id,
         quoteObject,
         targetObject,
         quote.visibility,
@@ -846,7 +845,6 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
 
   async #isQuoteAudienceWider(
     ctx: InboxContext<TContextData>,
-    actorId: URL,
     quoteObject: Object,
     targetObject: Object,
     quoteVisibility: MessageVisibility,
@@ -856,7 +854,6 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       return quoteVisibility !== "direct" ||
         !await this.#isQuoteAudienceSubset(
           ctx,
-          actorId,
           quoteObject,
           targetObject,
         );
@@ -874,7 +871,6 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     if (ranks[quoteVisibility] > ranks[targetVisibility]) return true;
     return !await this.#isQuoteAudienceSubset(
       ctx,
-      actorId,
       quoteObject,
       targetObject,
     );
@@ -882,7 +878,6 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
 
   async #isQuoteAudienceSubset(
     ctx: InboxContext<TContextData>,
-    actorId: URL,
     quoteObject: Object,
     targetObject: Object,
   ): Promise<boolean> {
@@ -892,11 +887,13 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     targetRecipients.add(ctx.getActorUri(this.identifier).href);
     if (targetRecipients.has(PUBLIC_COLLECTION.href)) return true;
     const followerCollection = ctx.getFollowersUri(this.identifier).href;
-    const actorIsFollower = targetRecipients.has(followerCollection) &&
-      await this.repository.hasFollower(actorId);
+    const targetIncludesFollowers = targetRecipients.has(followerCollection);
     for (const recipient of [...quoteObject.toIds, ...quoteObject.ccIds]) {
       if (targetRecipients.has(recipient.href)) continue;
-      if (actorIsFollower && recipient.href === actorId.href) continue;
+      if (
+        targetIncludesFollowers &&
+        await this.repository.hasFollower(recipient)
+      ) continue;
       return false;
     }
     return true;

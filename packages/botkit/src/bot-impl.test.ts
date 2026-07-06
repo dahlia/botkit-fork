@@ -3848,6 +3848,68 @@ test("BotImpl.onQuoteRequested() accepts quotes to the target author", async () 
   assert.deepStrictEqual(authorization?.interactionTargetId, target.id);
 });
 
+test("BotImpl.onQuoteRequested() accepts quotes to target followers", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+    quotePolicy: "followers",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const target = await session.publish(text`Followers only`, {
+    visibility: "followers",
+  });
+  ctx.sentActivities = [];
+  const actor = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const otherFollower = new Person({
+    id: new URL("https://remote.example/users/bob"),
+    preferredUsername: "bob",
+  });
+  await repository.addFollower(
+    "bot",
+    new URL("https://remote.example/activities/follow/alice"),
+    actor,
+  );
+  await repository.addFollower(
+    "bot",
+    new URL("https://remote.example/activities/follow/bob"),
+    otherFollower,
+  );
+  const quote = new Note({
+    id: new URL("https://remote.example/notes/follower-only-quote"),
+    attribution: actor.id,
+    quoteUrl: target.id,
+    content: "Quoted to another follower.",
+    to: otherFollower.id,
+    tags: [new Mention({ href: otherFollower.id })],
+  });
+
+  await bot.onQuoteRequested(
+    ctx,
+    new QuoteRequest({
+      id: new URL("https://remote.example/quote-requests/other-follower"),
+      actor,
+      object: target.id,
+      instrument: quote,
+    }),
+  );
+
+  assert.deepStrictEqual(ctx.sentActivities.length, 1);
+  const { recipients, activity } = ctx.sentActivities[0];
+  assert.deepStrictEqual(recipients, [actor]);
+  assert.ok(activity instanceof Accept);
+  const authorization = await repository.findQuoteAuthorization(
+    "bot",
+    quote.id!,
+  );
+  assert.deepStrictEqual(authorization?.interactionTargetId, target.id);
+});
+
 test("BotImpl.onQuoteRequested() revokes widened quote stamps", async () => {
   const repository = new MemoryRepository();
   const bot = new BotImpl<void>({
