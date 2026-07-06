@@ -336,9 +336,10 @@ bot.onQuoteAccepted = (_session, message, approver) => {
 };
 ~~~~
 
-When the request is rejected, BotKit removes the quote target and fallback
-quote link from the stored message, sends an `Update` activity, and then calls
-`~Bot.onQuoteRejected`:
+When the request is rejected, or when a previously accepted
+`QuoteAuthorization` stamp is later deleted by the quoted author, BotKit
+removes the quote target and fallback quote link from the stored message,
+sends an `Update` activity, and then calls `~Bot.onQuoteRejected`:
 
 ~~~~ typescript twoslash
 import { type Bot } from "@fedify/botkit";

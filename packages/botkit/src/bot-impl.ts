@@ -835,16 +835,16 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     object: MessageClass,
     actor: Actor,
   ): Promise<void> {
-    if (object.quoteAuthorizationId != null) {
-      await this.repository.removeQuoteAuthorizationReference(
-        object.quoteAuthorizationId,
-      );
-    }
     const strippedObject = (await stripQuoteObject(object)).clone({
       updated: Temporal.Now.instant(),
     });
     const updated = stored.clone({ object: strippedObject });
     await this.repository.updateMessage(id, () => Promise.resolve(updated));
+    if (object.quoteAuthorizationId != null) {
+      await this.repository.removeQuoteAuthorizationReference(
+        object.quoteAuthorizationId,
+      );
+    }
     await this.#sendQuoteUpdate(ctx, strippedObject, actor);
     if (this.onQuoteRejected != null) {
       const session = this.getSession(ctx);

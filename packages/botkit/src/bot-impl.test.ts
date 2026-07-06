@@ -3943,6 +3943,104 @@ test("BotImpl.onDeleted() strips revoked quote authorizations", async () => {
   assert.deepStrictEqual(rejecter?.id, author.id);
 });
 
+test("BotImpl.onDeleted() keeps references after update failures", async () => {
+  class FailingUpdateRepository extends MemoryRepository {
+    #updateCount = 0;
+
+    override updateMessage(
+      identifier: string,
+      id: Uuid,
+      updater: (
+        existing: Create | Announce,
+      ) =>
+        | Create
+        | Announce
+        | undefined
+        | Promise<Create | Announce | undefined>,
+    ): Promise<boolean> {
+      this.#updateCount++;
+      if (identifier === "bot" && this.#updateCount > 1) {
+        return Promise.reject(new TypeError("Message update failed."));
+      }
+      return super.updateMessage(identifier, id, updater);
+    }
+  }
+  const repository = new FailingUpdateRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const author = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const target = new Note({
+    id: new URL("https://remote.example/notes/original"),
+    attribution: author,
+    content: "Original.",
+    to: PUBLIC_COLLECTION,
+  });
+  Object.defineProperty(ctx, "lookupObject", {
+    value: (id: URL) =>
+      Promise.resolve(id.href === target.id?.href ? target : null),
+  });
+  const targetMessage = await createMessage(target, session, {});
+  const quote = await session.publish(text`Please approve this.`, {
+    quoteTarget: targetMessage,
+  });
+  const parsed = ctx.parseUri(quote.id);
+  assert.ok(parsed?.type === "object");
+  const messageId = parsed.values.id as Uuid;
+  const authorization = new QuoteAuthorization({
+    id: new URL("https://remote.example/stamps/1"),
+    attribution: author.id,
+    interactingObject: quote.id,
+    interactionTarget: target.id,
+  });
+  await bot.onFollowAccepted(
+    ctx,
+    new Accept({
+      actor: author,
+      object: ctx.getObjectUri(QuoteRequest, {
+        identifier: bot.identifier,
+        id: messageId,
+      }),
+      result: authorization,
+    }),
+  );
+  ctx.sentActivities = [];
+
+  await assert.rejects(
+    () =>
+      bot.onDeleted(
+        ctx,
+        new Delete({
+          actor: author,
+          object: authorization.id,
+        }),
+      ),
+    TypeError,
+    "Message update failed.",
+  );
+
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference(
+      "bot",
+      authorization.id!,
+    ),
+    messageId,
+  );
+  const stored = await repository.getMessage("bot", messageId);
+  assert.ok(stored instanceof Create);
+  const object = await stored.getObject(ctx);
+  assert.ok(object instanceof Note);
+  assert.deepStrictEqual(object.quoteAuthorizationId, authorization.id);
+  assert.deepStrictEqual(ctx.sentActivities.length, 0);
+});
+
 test("BotImpl.onFollowAccepted() with canonical follow URIs", async () => {
   const repository = new MemoryRepository();
   const bot = new BotImpl<void>({

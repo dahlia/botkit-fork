@@ -2706,11 +2706,11 @@ export class MemoryCachedRepository implements Repository {
     identifier: string,
     authorization: URL,
   ): Promise<void> {
-    await this.cache.removeQuoteAuthorizationReference(
+    await this.underlying.removeQuoteAuthorizationReference(
       identifier,
       authorization,
     );
-    await this.underlying.removeQuoteAuthorizationReference(
+    await this.cache.removeQuoteAuthorizationReference(
       identifier,
       authorization,
     );

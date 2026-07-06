@@ -244,6 +244,41 @@ test("MemoryCachedRepository does not cache failed quote authorization reference
   );
 });
 
+test("MemoryCachedRepository keeps quote authorization reference cache on remove failures", async () => {
+  class FailingQuoteAuthorizationReferenceRepository extends MemoryRepository {
+    override removeQuoteAuthorizationReference(
+      _identifier: string,
+      _authorization: URL,
+    ): Promise<void> {
+      return Promise.reject(new TypeError("Durable delete failed."));
+    }
+  }
+  const underlying = new FailingQuoteAuthorizationReferenceRepository();
+  const repository = new MemoryCachedRepository(underlying);
+  const authorization = new URL("https://remote.example/stamps/1");
+  const messageId = "01942976-3400-7f34-872e-2cbf0f9eeac4" as Uuid;
+  await underlying.addQuoteAuthorizationReference(
+    "bot",
+    authorization,
+    messageId,
+  );
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference("bot", authorization),
+    messageId,
+  );
+
+  await assert.rejects(
+    () => repository.removeQuoteAuthorizationReference("bot", authorization),
+    TypeError,
+    "Durable delete failed.",
+  );
+
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference("bot", authorization),
+    messageId,
+  );
+});
+
 test("KvRepository serializes concurrent quote authorization inserts", async () => {
   const repository = new KvRepository(new RacingQuoteAuthorizationKvStore());
   const firstId = "01942976-3400-7f34-872e-2cbf0f9eeac4" as Uuid;

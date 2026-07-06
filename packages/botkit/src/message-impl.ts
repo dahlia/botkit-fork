@@ -585,6 +585,14 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
     if (create == null) return;
     const message = await create.getObject(this.session.context);
     if (message == null) return;
+    if (
+      isMessageObject(message) &&
+      message.quoteAuthorizationId != null
+    ) {
+      await this.session.bot.repository.removeQuoteAuthorizationReference(
+        message.quoteAuthorizationId,
+      );
+    }
     const mentionedActorIds: Set<string> = new Set();
     for await (const tag of message.getTags(this.session.context)) {
       if (tag instanceof Mention && tag.href != null) {
