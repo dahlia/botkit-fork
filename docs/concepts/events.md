@@ -313,6 +313,45 @@ the *Message* concept document.
 [FEP-044f]: https://w3id.org/fep/044f
 
 
+Quote accepted and rejected
+---------------------------
+
+*This API is available since BotKit 0.5.0.*
+
+The `~Bot.onQuoteAccepted` and `~Bot.onQuoteRejected` event handlers are called
+when a remote author responds to a quote request that your bot sent for one of
+its own quote posts.
+
+When the request is accepted, BotKit verifies the returned
+`QuoteAuthorization` stamp, applies it to the stored message, sends an `Update`
+activity, and then calls `~Bot.onQuoteAccepted`:
+
+~~~~ typescript twoslash
+import { type Bot } from "@fedify/botkit";
+const bot = {} as unknown as Bot<void>;
+// ---cut-before---
+bot.onQuoteAccepted = (_session, message, approver) => {
+  console.log(`${approver.id} approved ${message.id}`);
+  console.log(message.quoteApprovalState);  // "accepted"
+};
+~~~~
+
+When the request is rejected, or when a previously accepted
+`QuoteAuthorization` stamp is later deleted by the quoted author, BotKit
+removes the quote target and fallback quote link from the stored message,
+sends an `Update` activity, and then calls `~Bot.onQuoteRejected`:
+
+~~~~ typescript twoslash
+import { type Bot } from "@fedify/botkit";
+const bot = {} as unknown as Bot<void>;
+// ---cut-before---
+bot.onQuoteRejected = (_session, message, rejecter) => {
+  console.log(`${rejecter.id} rejected ${message.id}`);
+  console.log(message.quoteTarget);  // undefined
+};
+~~~~
+
+
 Message
 -------
 

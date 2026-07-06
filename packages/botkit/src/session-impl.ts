@@ -26,6 +26,7 @@ import {
   Note,
   type Object,
   PUBLIC_COLLECTION,
+  QuoteRequest,
   Undo,
   Update,
 } from "@fedify/vocab";
@@ -287,6 +288,14 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
         }),
       );
     }
+    const actorId = this.context.getActorUri(this.bot.identifier);
+    const quoteTargetActorId = options.quoteTarget?.actor.id;
+    const privateQuoteAudienceIds = quoteTargetActorId != null &&
+        quoteTargetActorId.href !== actorId.href &&
+        (visibility === "followers" || visibility === "direct") &&
+        !mentionedActorIds.some((id) => id.href === quoteTargetActorId.href)
+      ? [quoteTargetActorId]
+      : [];
     let inclusiveOptions: Note[] = [];
     let exclusiveOptions: Note[] = [];
     let voters: number | null = null;
@@ -321,14 +330,15 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
         ? [contentHtml]
         : [new LanguageString(contentHtml, options.language), contentHtml],
       replyTarget: options.replyTarget?.id,
+      quote: options.quoteTarget?.id,
       quoteUrl: options.quoteTarget?.id,
       tags,
       interactionPolicy: serializeQuotePolicy(
         options.quotePolicy ?? this.bot.quotePolicy,
-        this.context.getActorUri(this.bot.identifier),
+        actorId,
         this.context.getFollowersUri(this.bot.identifier),
       ),
-      attribution: this.context.getActorUri(this.bot.identifier),
+      attribution: actorId,
       attachments: options.attachments ?? [],
       inclusiveOptions,
       exclusiveOptions,
@@ -340,8 +350,9 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
         ? [
           this.context.getFollowersUri(this.bot.identifier),
           ...mentionedActorIds,
+          ...privateQuoteAudienceIds,
         ]
-        : mentionedActorIds,
+        : [...mentionedActorIds, ...privateQuoteAudienceIds],
       ccs: visibility === "public"
         ? [this.context.getFollowersUri(this.bot.identifier)]
         : visibility === "unlisted"
@@ -419,6 +430,28 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
         activity,
         { preferSharedInbox, excludeBaseUris, fanout: "skip" },
       );
+      if (
+        options.quoteTarget.actor.id != null &&
+        options.quoteTarget.actor.id.href !==
+          this.context.getActorUri(this.bot.identifier).href
+      ) {
+        const request = new QuoteRequest({
+          id: this.context.getObjectUri(QuoteRequest, {
+            identifier: this.bot.identifier,
+            id,
+          }),
+          actor: this.context.getActorUri(this.bot.identifier),
+          object: options.quoteTarget.id,
+          instrument: msg.id,
+          to: options.quoteTarget.actor.id,
+        });
+        await this.context.sendActivity(
+          this.bot,
+          options.quoteTarget.actor,
+          request,
+          { preferSharedInbox, excludeBaseUris, fanout: "skip" },
+        );
+      }
     }
     return await createMessage(
       msg,

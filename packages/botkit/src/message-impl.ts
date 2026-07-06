@@ -54,7 +54,11 @@ import type {
 } from "./message.ts";
 import type { AuthorizedLike, AuthorizedReaction } from "./reaction.ts";
 import type { Uuid } from "./repository.ts";
-import { serializeQuotePolicy } from "./quote.ts";
+import {
+  parseQuotePolicy,
+  type QuotePolicy,
+  serializeQuotePolicy,
+} from "./quote.ts";
 import type { SessionImpl } from "./session-impl.ts";
 import type {
   SessionPublishOptions,
@@ -94,6 +98,7 @@ export class MessageImpl<T extends MessageClass, TContextData>
   html: string;
   readonly replyTarget?: Message<MessageClass, TContextData> | undefined;
   readonly quoteTarget?: Message<MessageClass, TContextData> | undefined;
+  quotePolicy?: QuotePolicy | undefined;
   mentions: readonly Actor[];
   hashtags: readonly Hashtag[];
   readonly attachments: readonly Document[];
@@ -102,10 +107,14 @@ export class MessageImpl<T extends MessageClass, TContextData>
 
   constructor(
     session: SessionImpl<TContextData>,
-    message: Omit<
-      Message<T, TContextData>,
-      "delete" | "reply" | "share" | "like" | "react"
-    >,
+    message:
+      & Omit<
+        Message<T, TContextData>,
+        "delete" | "reply" | "share" | "like" | "react"
+      >
+      & {
+        readonly quoteApprovalState?: "pending" | "accepted" | "notRequired";
+      },
   ) {
     this.session = session;
     this.raw = message.raw;
@@ -117,6 +126,7 @@ export class MessageImpl<T extends MessageClass, TContextData>
     this.html = message.html;
     this.replyTarget = message.replyTarget;
     this.quoteTarget = message.quoteTarget;
+    this.quotePolicy = message.quotePolicy;
     this.mentions = message.mentions;
     this.hashtags = message.hashtags;
     this.attachments = message.attachments;
@@ -379,6 +389,25 @@ export class MessageImpl<T extends MessageClass, TContextData>
 export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
   extends MessageImpl<T, TContextData>
   implements AuthorizedMessage<T, TContextData> {
+  readonly quoteApprovalState?: "pending" | "accepted" | "notRequired";
+
+  constructor(
+    session: SessionImpl<TContextData>,
+    message: Omit<
+      AuthorizedMessage<T, TContextData>,
+      | "delete"
+      | "reply"
+      | "share"
+      | "like"
+      | "react"
+      | "update"
+      | "unauthorizeQuote"
+    >,
+  ) {
+    super(session, message);
+    this.quoteApprovalState = message.quoteApprovalState;
+  }
+
   async update(
     text: Text<"block", TContextData>,
     options: AuthorizedMessageUpdateOptions = {},
@@ -444,6 +473,13 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
         this.hashtags = hashtags;
         const updated = Temporal.Now.instant();
         this.updated = updated;
+        const quoteTargetActorId = this.quoteTarget?.actor.id;
+        const privateQuoteAudienceIds = quoteTargetActorId != null &&
+            quoteTargetActorId.href !== this.session.actorId.href &&
+            (this.visibility === "followers" || this.visibility === "direct") &&
+            !mentionedActorIds.some((id) => id.href === quoteTargetActorId.href)
+          ? [quoteTargetActorId]
+          : [];
         const newMessage = message.clone({
           contents: this.language == null
             ? [contentHtml]
@@ -455,8 +491,9 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
             ? [
               this.session.context.getFollowersUri(this.session.bot.identifier),
               ...mentionedActorIds,
+              ...privateQuoteAudienceIds,
             ]
-            : mentionedActorIds,
+            : [...mentionedActorIds, ...privateQuoteAudienceIds],
           ccs: this.visibility === "public"
             ? [
               this.session.context.getFollowersUri(this.session.bot.identifier),
@@ -476,6 +513,11 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
             ),
         });
         this.raw = newMessage as T;
+        this.quotePolicy = parseQuotePolicy(
+          newMessage.interactionPolicy?.canQuote,
+          this.session.actorId,
+          this.session.context.getFollowersUri(this.session.bot.identifier),
+        );
         create = create.clone({ object: newMessage, updated });
         const to = create.toIds.map((url) => url.href);
         for (const url of newMessage.toIds) {
@@ -556,6 +598,14 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
     if (create == null) return;
     const message = await create.getObject(this.session.context);
     if (message == null) return;
+    if (
+      isMessageObject(message) &&
+      message.quoteAuthorizationId != null
+    ) {
+      await this.session.bot.repository.removeQuoteAuthorizationReference(
+        message.quoteAuthorizationId,
+      );
+    }
     const mentionedActorIds: Set<string> = new Set();
     for await (const tag of message.getTags(this.session.context)) {
       if (tag instanceof Mention && tag.href != null) {
@@ -849,6 +899,24 @@ export async function createMessage<T extends MessageClass, TContextData>(
       quoteTarget = await createMessage(qt, session, cachedObjects);
     }
   }
+  const quotePolicy = actor.id == null && raw.attributionId == null
+    ? undefined
+    : parseQuotePolicy(
+      raw.interactionPolicy?.canQuote,
+      actor.id ?? raw.attributionId!,
+      actor.followersId,
+    );
+  const quoteApprovalState = !authorized || quoteTarget == null
+    ? undefined
+    : quoteTarget.actor.id?.href === actor.id?.href
+    ? "notRequired"
+    : raw.quoteAuthorizationId == null
+    ? "pending"
+    : "accepted";
+  const directRecipientIds = new Set(mentionedActorIds);
+  if (quoteTarget?.actor.id != null) {
+    directRecipientIds.add(quoteTarget.actor.id.href);
+  }
   return new (authorized ? AuthorizedMessageImpl : MessageImpl)(session, {
     raw,
     id: raw.id,
@@ -857,7 +925,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
       raw.toIds,
       raw.ccIds,
       actor,
-      mentionedActorIds,
+      directRecipientIds,
     ),
     language: raw.content instanceof LanguageString
       ? raw.content.locale
@@ -866,6 +934,8 @@ export async function createMessage<T extends MessageClass, TContextData>(
     html,
     replyTarget,
     quoteTarget,
+    quotePolicy,
+    quoteApprovalState,
     mentions,
     hashtags,
     attachments,

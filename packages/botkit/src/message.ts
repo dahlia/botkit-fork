@@ -30,7 +30,7 @@ import type {
   SessionPublishOptions,
   SessionPublishOptionsWithClass,
 } from "./session.ts";
-import type { QuotePolicyOption } from "./quote.ts";
+import type { QuotePolicy, QuotePolicyOption } from "./quote.ts";
 import type { Text } from "./text.ts";
 export {
   Article,
@@ -152,6 +152,12 @@ export interface Message<T extends MessageClass, TContextData> {
   readonly quoteTarget?: Message<MessageClass, TContextData>;
 
   /**
+   * The quote policy advertised by this message, if present.
+   * @since 0.5.0
+   */
+  readonly quotePolicy?: QuotePolicy;
+
+  /**
    * The published time of the message.
    */
   readonly published?: Temporal.Instant;
@@ -225,6 +231,13 @@ export interface Message<T extends MessageClass, TContextData> {
  */
 export interface AuthorizedMessage<T extends MessageClass, TContextData>
   extends Message<T, TContextData> {
+  /**
+   * The approval state for this message's quote target.  It is only present
+   * when this message quotes another message.
+   * @since 0.5.0
+   */
+  readonly quoteApprovalState?: "pending" | "accepted" | "notRequired";
+
   /**
    * Updates the message with new content.
    * @param text The new content of the message.

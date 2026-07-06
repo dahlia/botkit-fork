@@ -29,7 +29,9 @@ import type {
   LikeEventHandler,
   MentionEventHandler,
   MessageEventHandler,
+  QuoteAcceptedEventHandler,
   QuoteEventHandler,
+  QuoteRejectedEventHandler,
   QuoteRequestEventHandler,
   ReactionEventHandler,
   RejectEventHandler,
@@ -95,6 +97,18 @@ export interface BotEventHandlers<TContextData> {
    * @since 0.5.0
    */
   onQuoteRequest?: QuoteRequestEventHandler<TContextData>;
+
+  /**
+   * An event handler invoked when a quote request the bot sent is accepted.
+   * @since 0.5.0
+   */
+  onQuoteAccepted?: QuoteAcceptedEventHandler<TContextData>;
+
+  /**
+   * An event handler invoked when a quote request the bot sent is rejected.
+   * @since 0.5.0
+   */
+  onQuoteRejected?: QuoteRejectedEventHandler<TContextData>;
 
   /**
    * An event handler for a message shown to the bot's timeline.  To listen

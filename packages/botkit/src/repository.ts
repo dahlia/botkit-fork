@@ -72,6 +72,11 @@ function getRawQuoteAuthorizationInteractingObject(
  */
 export type Uuid = ReturnType<typeof crypto.randomUUID>;
 
+interface QuoteAuthorizationReferenceData {
+  readonly messageId: Uuid;
+  readonly attribution?: string;
+}
+
 /**
  * A repository for storing bot data.
  *
@@ -360,6 +365,58 @@ export interface Repository {
     identifier: string,
     id: Uuid,
   ): Promise<QuoteAuthorization | undefined>;
+
+  /**
+   * Adds a reference to a quote authorization stamp received for one of
+   * the bot's own quote posts.
+   * @param identifier The identifier of the bot actor that owns the message.
+   * @param authorization The URI of the received quote authorization stamp.
+   * @param messageId The UUID of the bot's quote message.
+   * @param attribution The actor that issued the authorization stamp.
+   * @since 0.5.0
+   */
+  addQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+    messageId: Uuid,
+    attribution?: URL,
+  ): Promise<void>;
+
+  /**
+   * Finds the bot's quote message that depends on a received quote
+   * authorization stamp.
+   * @param identifier The identifier of the bot actor that owns the message.
+   * @param authorization The URI of the received quote authorization stamp.
+   * @returns The UUID of the bot's quote message, or `undefined`.
+   * @since 0.5.0
+   */
+  findQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<Uuid | undefined>;
+
+  /**
+   * Finds the actor that issued a received quote authorization stamp.
+   * @param identifier The identifier of the bot actor that owns the message.
+   * @param authorization The URI of the received quote authorization stamp.
+   * @returns The URI of the actor that issued the stamp, or `undefined`.
+   * @since 0.5.0
+   */
+  findQuoteAuthorizationReferenceAttribution(
+    identifier: string,
+    authorization: URL,
+  ): Promise<URL | undefined>;
+
+  /**
+   * Removes the reference to a received quote authorization stamp.
+   * @param identifier The identifier of the bot actor that owns the message.
+   * @param authorization The URI of the received quote authorization stamp.
+   * @since 0.5.0
+   */
+  removeQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<void>;
 
   /**
    * Records a vote in a poll.  If the same voter had already voted for the
@@ -737,6 +794,68 @@ export class ActorScopedRepository {
   ): Promise<QuoteAuthorization | undefined> {
     return this.repository.removeQuoteAuthorization(this.identifier, id);
   }
+
+  /**
+   * Adds a received quote authorization reference.
+   * @param authorization The URI of the received quote authorization stamp.
+   * @param messageId The UUID of the bot's quote message.
+   * @param attribution The actor that issued the authorization stamp.
+   * @since 0.5.0
+   */
+  addQuoteAuthorizationReference(
+    authorization: URL,
+    messageId: Uuid,
+    attribution?: URL,
+  ): Promise<void> {
+    return this.repository.addQuoteAuthorizationReference(
+      this.identifier,
+      authorization,
+      messageId,
+      attribution,
+    );
+  }
+
+  /**
+   * Finds a message by received quote authorization stamp URI.
+   * @param authorization The URI of the received quote authorization stamp.
+   * @returns The UUID of the bot's quote message, or `undefined`.
+   * @since 0.5.0
+   */
+  findQuoteAuthorizationReference(
+    authorization: URL,
+  ): Promise<Uuid | undefined> {
+    return this.repository.findQuoteAuthorizationReference(
+      this.identifier,
+      authorization,
+    );
+  }
+
+  /**
+   * Finds the actor that issued a received quote authorization stamp.
+   * @param authorization The URI of the received quote authorization stamp.
+   * @returns The URI of the actor that issued the stamp, or `undefined`.
+   * @since 0.5.0
+   */
+  findQuoteAuthorizationReferenceAttribution(
+    authorization: URL,
+  ): Promise<URL | undefined> {
+    return this.repository.findQuoteAuthorizationReferenceAttribution(
+      this.identifier,
+      authorization,
+    );
+  }
+
+  /**
+   * Removes a received quote authorization reference.
+   * @param authorization The URI of the received quote authorization stamp.
+   * @since 0.5.0
+   */
+  removeQuoteAuthorizationReference(authorization: URL): Promise<void> {
+    return this.repository.removeQuoteAuthorizationReference(
+      this.identifier,
+      authorization,
+    );
+  }
 }
 
 /**
@@ -861,6 +980,17 @@ export class KvRepository implements Repository {
     );
   }
 
+  #quoteAuthorizationReferenceKey(
+    identifier: string,
+    authorization: URL,
+  ): KvKey {
+    return this.#key(
+      identifier,
+      "quoteAuthorizationRefs",
+      authorization.href,
+    );
+  }
+
   /**
    * Migrates data stored by BotKit 0.4 or earlier, which was not scoped by
    * bot actor identifiers, so that it belongs to the given identifier.
@@ -910,6 +1040,7 @@ export class KvRepository implements Repository {
       "follows",
       "quoteAuthorizations",
       "quoteAuthorizationsByInteractingObject",
+      "quoteAuthorizationRefs",
       "polls",
     ] as const;
     for (const category of categories) {
@@ -1688,6 +1819,56 @@ export class KvRepository implements Repository {
     }
   }
 
+  async addQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+    messageId: Uuid,
+    attribution?: URL,
+  ): Promise<void> {
+    await this.kv.set(
+      this.#quoteAuthorizationReferenceKey(identifier, authorization),
+      attribution == null
+        ? messageId
+        : { messageId, attribution: attribution.href },
+    );
+  }
+
+  async findQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<Uuid | undefined> {
+    const value = await this.kv.get<QuoteAuthorizationReferenceData | Uuid>(
+      this.#quoteAuthorizationReferenceKey(identifier, authorization),
+    );
+    if (typeof value === "string") return value as Uuid;
+    return value?.messageId;
+  }
+
+  async findQuoteAuthorizationReferenceAttribution(
+    identifier: string,
+    authorization: URL,
+  ): Promise<URL | undefined> {
+    const value = await this.kv.get<QuoteAuthorizationReferenceData | Uuid>(
+      this.#quoteAuthorizationReferenceKey(identifier, authorization),
+    );
+    if (typeof value !== "object" || value == null) return undefined;
+    if (value.attribution == null) return undefined;
+    try {
+      return new URL(value.attribution);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async removeQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<void> {
+    await this.kv.delete(
+      this.#quoteAuthorizationReferenceKey(identifier, authorization),
+    );
+  }
+
   async #addToFolloweeIndex(
     identifier: string,
     followeeId: URL,
@@ -1856,6 +2037,8 @@ interface MemoryActorData {
   followees: Record<string, Follow>;
   quoteAuthorizations: Map<Uuid, QuoteAuthorization>;
   quoteAuthorizationsByInteractingObject: Map<string, Uuid>;
+  quoteAuthorizationRefs: Map<string, Uuid>;
+  quoteAuthorizationRefAttributions: Map<string, URL>;
   polls: Record<Uuid, Record<string, Set<string>>>;
 }
 
@@ -1877,6 +2060,8 @@ export class MemoryRepository implements Repository {
         followees: {},
         quoteAuthorizations: new Map(),
         quoteAuthorizationsByInteractingObject: new Map(),
+        quoteAuthorizationRefs: new Map(),
+        quoteAuthorizationRefAttributions: new Map(),
         polls: {},
       };
       this.#data.set(identifier, data);
@@ -2163,6 +2348,57 @@ export class MemoryRepository implements Repository {
       }
     }
     return Promise.resolve(authorization);
+  }
+
+  addQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+    messageId: Uuid,
+    attribution?: URL,
+  ): Promise<void> {
+    const bucket = this.#bucket(identifier);
+    bucket.quoteAuthorizationRefs.set(authorization.href, messageId);
+    if (attribution == null) {
+      bucket.quoteAuthorizationRefAttributions.delete(authorization.href);
+    } else {
+      bucket.quoteAuthorizationRefAttributions.set(
+        authorization.href,
+        attribution,
+      );
+    }
+    return Promise.resolve();
+  }
+
+  findQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<Uuid | undefined> {
+    return Promise.resolve(
+      this.#data.get(identifier)?.quoteAuthorizationRefs.get(
+        authorization.href,
+      ),
+    );
+  }
+
+  findQuoteAuthorizationReferenceAttribution(
+    identifier: string,
+    authorization: URL,
+  ): Promise<URL | undefined> {
+    return Promise.resolve(
+      this.#data.get(identifier)?.quoteAuthorizationRefAttributions.get(
+        authorization.href,
+      ),
+    );
+  }
+
+  removeQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<void> {
+    const data = this.#data.get(identifier);
+    data?.quoteAuthorizationRefs.delete(authorization.href);
+    data?.quoteAuthorizationRefAttributions.delete(authorization.href);
+    return Promise.resolve();
   }
 
   vote(
@@ -2502,6 +2738,99 @@ export class MemoryCachedRepository implements Repository {
     );
     await this.cache.removeQuoteAuthorization(identifier, id);
     return removed;
+  }
+
+  async addQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+    messageId: Uuid,
+    attribution?: URL,
+  ): Promise<void> {
+    await this.underlying.addQuoteAuthorizationReference(
+      identifier,
+      authorization,
+      messageId,
+      attribution,
+    );
+    await this.cache.addQuoteAuthorizationReference(
+      identifier,
+      authorization,
+      messageId,
+      attribution,
+    );
+  }
+
+  async findQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<Uuid | undefined> {
+    const cached = await this.cache.findQuoteAuthorizationReference(
+      identifier,
+      authorization,
+    );
+    if (cached != null) return cached;
+    const found = await this.underlying.findQuoteAuthorizationReference(
+      identifier,
+      authorization,
+    );
+    if (found != null) {
+      const attribution = await this.underlying
+        .findQuoteAuthorizationReferenceAttribution(
+          identifier,
+          authorization,
+        );
+      await this.cache.addQuoteAuthorizationReference(
+        identifier,
+        authorization,
+        found,
+        attribution,
+      );
+    }
+    return found;
+  }
+
+  async findQuoteAuthorizationReferenceAttribution(
+    identifier: string,
+    authorization: URL,
+  ): Promise<URL | undefined> {
+    const cached = await this.cache.findQuoteAuthorizationReferenceAttribution(
+      identifier,
+      authorization,
+    );
+    if (cached != null) return cached;
+    const found = await this.underlying.findQuoteAuthorizationReference(
+      identifier,
+      authorization,
+    );
+    if (found == null) return undefined;
+    const attribution = await this.underlying
+      .findQuoteAuthorizationReferenceAttribution(
+        identifier,
+        authorization,
+      );
+    if (attribution != null) {
+      await this.cache.addQuoteAuthorizationReference(
+        identifier,
+        authorization,
+        found,
+        attribution,
+      );
+    }
+    return attribution;
+  }
+
+  async removeQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<void> {
+    await this.underlying.removeQuoteAuthorizationReference(
+      identifier,
+      authorization,
+    );
+    await this.cache.removeQuoteAuthorizationReference(
+      identifier,
+      authorization,
+    );
   }
 
   async vote(

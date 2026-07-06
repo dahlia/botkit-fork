@@ -34,6 +34,14 @@ incoming messages to the right bots), and the optional
 for a bot actor identifier.  The built-in repositories migrate legacy data
 automatically when the bot is created through `createBot()`.
 
+[FEP-044f] quote support also adds quote authorization storage methods and quote
+authorization reference methods.  The reference methods map a received
+`QuoteAuthorization` stamp URI back to the local quote message that depends
+on it, so BotKit can update that message when the remote author later changes
+the quote's authorization state.
+
+[FEP-044f]: https://w3id.org/fep/044f
+
 
 `KvRepository`
 --------------

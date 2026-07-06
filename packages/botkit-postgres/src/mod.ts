@@ -287,6 +287,25 @@ async function initializePostgresRepositorySchemaInTransaction(
   );
   await execute(
     sql,
+    `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."quote_authorization_refs" (
+       bot_id TEXT NOT NULL,
+       authorization_uri TEXT NOT NULL,
+       message_id TEXT NOT NULL,
+       attribution_uri TEXT,
+       PRIMARY KEY (bot_id, authorization_uri)
+     )`,
+    [],
+    prepare,
+  );
+  await execute(
+    sql,
+    `ALTER TABLE "${validatedSchema}"."quote_authorization_refs"
+       ADD COLUMN IF NOT EXISTS attribution_uri TEXT`,
+    [],
+    prepare,
+  );
+  await execute(
+    sql,
     `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."poll_votes" (
        bot_id TEXT NOT NULL,
        message_id TEXT NOT NULL,
@@ -1092,6 +1111,74 @@ export class PostgresRepository implements Repository, AsyncDisposable {
       [identifier, id],
     );
     return await parseQuoteAuthorization(rows[0]?.authorization_json);
+  }
+
+  async addQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+    messageId: Uuid,
+    attribution?: URL,
+  ): Promise<void> {
+    await this.ensureReady();
+    await this.query(
+      this.sql,
+      `INSERT INTO ${this.table("quote_authorization_refs")}
+         (bot_id, authorization_uri, message_id, attribution_uri)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (bot_id, authorization_uri) DO UPDATE
+       SET message_id = EXCLUDED.message_id,
+           attribution_uri = EXCLUDED.attribution_uri`,
+      [identifier, authorization.href, messageId, attribution?.href ?? null],
+    );
+  }
+
+  async findQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<Uuid | undefined> {
+    await this.ensureReady();
+    const rows = await this.query<{ readonly message_id: Uuid }>(
+      this.sql,
+      `SELECT message_id
+         FROM ${this.table("quote_authorization_refs")}
+        WHERE bot_id = $1 AND authorization_uri = $2`,
+      [identifier, authorization.href],
+    );
+    return rows[0]?.message_id;
+  }
+
+  async findQuoteAuthorizationReferenceAttribution(
+    identifier: string,
+    authorization: URL,
+  ): Promise<URL | undefined> {
+    await this.ensureReady();
+    const rows = await this.query<{ readonly attribution_uri: string | null }>(
+      this.sql,
+      `SELECT attribution_uri
+         FROM ${this.table("quote_authorization_refs")}
+        WHERE bot_id = $1 AND authorization_uri = $2`,
+      [identifier, authorization.href],
+    );
+    const attribution = rows[0]?.attribution_uri;
+    if (attribution == null) return undefined;
+    try {
+      return new URL(attribution);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async removeQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<void> {
+    await this.ensureReady();
+    await this.query(
+      this.sql,
+      `DELETE FROM ${this.table("quote_authorization_refs")}
+        WHERE bot_id = $1 AND authorization_uri = $2`,
+      [identifier, authorization.href],
+    );
   }
 
   async vote(

@@ -33,6 +33,7 @@ import {
   Article,
   ChatMessage,
   Create,
+  type Delete,
   Emoji as APEmoji,
   EmojiReact,
   Endpoints,
@@ -48,6 +49,7 @@ import {
   PUBLIC_COLLECTION,
   Question,
   QuoteAuthorization,
+  QuoteRequest,
   type QuoteRequest as RawQuoteRequest,
   type Recipient,
   Reject,
@@ -55,6 +57,7 @@ import {
   type Undo,
   Update,
 } from "@fedify/vocab";
+import { getLogger } from "@logtape/logtape";
 import type { Bot, CreateBotOptions, PagesOptions } from "./bot.ts";
 import type {
   BotDispatcher,
@@ -74,7 +77,9 @@ import type {
   LikeEventHandler,
   MentionEventHandler,
   MessageEventHandler,
+  QuoteAcceptedEventHandler,
   QuoteEventHandler,
+  QuoteRejectedEventHandler,
   QuoteRequestEventHandler,
   ReactionEventHandler,
   RejectEventHandler,
@@ -89,12 +94,14 @@ import { FollowRequestImpl } from "./follow-impl.ts";
 import { InstanceImpl } from "./instance-impl.ts";
 import {
   createMessage,
+  getMessageClass,
   getMessageVisibility,
   isMessageObject,
   isQuoteLink,
   messageClasses,
 } from "./message-impl.ts";
 import type {
+  AuthorizedMessage,
   Message,
   MessageClass,
   MessageVisibility,
@@ -116,6 +123,14 @@ import { parseLocalUri } from "./uri.ts";
 import { SessionImpl } from "./session-impl.ts";
 import type { Session } from "./session.ts";
 import type { Text } from "./text.ts";
+
+const logger = getLogger(["botkit", "bot"]);
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string): value is Uuid {
+  return uuidPattern.test(value);
+}
 
 export interface BotImplOptions<TContextData>
   extends CreateBotOptions<TContextData> {
@@ -148,6 +163,8 @@ export const botEventHandlerNames = [
   "onReply",
   "onQuote",
   "onQuoteRequest",
+  "onQuoteAccepted",
+  "onQuoteRejected",
   "onMessage",
   "onSharedMessage",
   "onLike",
@@ -221,6 +238,8 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
   onReply?: ReplyEventHandler<TContextData>;
   onQuote?: QuoteEventHandler<TContextData>;
   onQuoteRequest?: QuoteRequestEventHandler<TContextData>;
+  onQuoteAccepted?: QuoteAcceptedEventHandler<TContextData>;
+  onQuoteRejected?: QuoteRejectedEventHandler<TContextData>;
   onMessage?: MessageEventHandler<TContextData>;
   onSharedMessage?: SharedMessageEventHandler<TContextData>;
   onLike?: LikeEventHandler<TContextData>;
@@ -554,6 +573,33 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       null;
   }
 
+  async dispatchQuoteRequest(
+    ctx: RequestContext<TContextData>,
+    values: { identifier: string; id: string },
+  ): Promise<QuoteRequest | null> {
+    if (values.identifier !== this.identifier) return null;
+    if (!isUuid(values.id)) return null;
+    const stored = await this.repository.getMessage(values.id as Uuid);
+    if (!(stored instanceof Create)) return null;
+    const isVisible = await this.getPermissionChecker(ctx);
+    if (!isVisible(stored)) return null;
+    const object = await stored.getObject(ctx);
+    if (
+      !isMessageObject(object) || object.id == null || object.quoteId == null
+    ) {
+      return null;
+    }
+    return new QuoteRequest({
+      id: ctx.getObjectUri(QuoteRequest, {
+        identifier: this.identifier,
+        id: values.id,
+      }),
+      actor: ctx.getActorUri(this.identifier),
+      object: object.quoteId,
+      instrument: object.id,
+    });
+  }
+
   dispatchEmoji(
     ctx: Context<TContextData>,
     values: { name: string },
@@ -629,6 +675,14 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       this.legacyObjectUrisIdentifier,
     );
     if (
+      parsedObj?.type === "object" && parsedObj.class === QuoteRequest &&
+      parsedObj.values.identifier === this.identifier &&
+      isUuid(parsedObj.values.id)
+    ) {
+      await this.#onQuoteAccepted(ctx, accept, parsedObj.values.id);
+      return;
+    }
+    if (
       parsedObj?.type !== "object" || parsedObj.class !== Follow ||
       parsedObj.values.identifier !== this.identifier
     ) {
@@ -662,6 +716,14 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       this.legacyObjectUrisIdentifier,
     );
     if (
+      parsedObj?.type === "object" && parsedObj.class === QuoteRequest &&
+      parsedObj.values.identifier === this.identifier &&
+      isUuid(parsedObj.values.id)
+    ) {
+      await this.#onQuoteRejected(ctx, reject, parsedObj.values.id);
+      return;
+    }
+    if (
       parsedObj?.type !== "object" || parsedObj.class !== Follow ||
       parsedObj.values.identifier !== this.identifier
     ) {
@@ -682,6 +744,355 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       const session = this.getSession(ctx);
       await this.onRejectFollow(session, followee);
     }
+  }
+
+  async #onQuoteAccepted(
+    ctx: InboxContext<TContextData>,
+    accept: Accept,
+    id: Uuid,
+  ): Promise<void> {
+    const stored = await this.repository.getMessage(id);
+    if (!(stored instanceof Create)) return;
+    const object = await stored.getObject(ctx);
+    if (
+      !isMessageObject(object) || object.id == null || object.quoteId == null
+    ) {
+      return;
+    }
+    const quoteId = object.quoteId;
+    const approval = await this.#validateQuoteApproval(ctx, accept, object);
+    if (approval == null) return;
+    await this.repository.addQuoteAuthorizationReference(
+      approval.authorization.id!,
+      id,
+      approval.actor.id!,
+    );
+    let updatedObject: MessageClass | undefined;
+    const removeReference = async () => {
+      try {
+        await this.repository.removeQuoteAuthorizationReference(
+          approval.authorization.id!,
+        );
+      } catch (cleanupError) {
+        logger.warn(
+          "Failed to remove quote authorization reference after message update failure: {error}",
+          { error: cleanupError },
+        );
+      }
+    };
+    try {
+      const wasUpdated = await this.repository.updateMessage(
+        id,
+        async (existing) => {
+          if (!(existing instanceof Create)) return;
+          const existingObject = await existing.getObject(ctx);
+          if (
+            !isMessageObject(existingObject) || existingObject.id == null ||
+            existingObject.quoteId?.href !== quoteId.href
+          ) {
+            return;
+          }
+          updatedObject = existingObject.clone({
+            quoteAuthorization: approval.authorization.id,
+            updated: Temporal.Now.instant(),
+          });
+          return existing.clone({ object: updatedObject });
+        },
+      );
+      if (!wasUpdated || updatedObject == null) {
+        await removeReference();
+        return;
+      }
+    } catch (error) {
+      await removeReference();
+      throw error;
+    }
+    await this.#sendQuoteUpdate(ctx, updatedObject, approval.actor);
+    if (this.onQuoteAccepted != null) {
+      const session = this.getSession(ctx);
+      const message = await createMessage(
+        updatedObject,
+        session,
+        { [approval.actor.id!.href]: approval.actor },
+        undefined,
+        undefined,
+        true,
+      ) as AuthorizedMessage<MessageClass, TContextData>;
+      await this.onQuoteAccepted(session, message, approval.actor);
+    }
+  }
+
+  async #onQuoteRejected(
+    ctx: InboxContext<TContextData>,
+    reject: Reject,
+    id: Uuid,
+  ): Promise<void> {
+    const stored = await this.repository.getMessage(id);
+    if (!(stored instanceof Create)) return;
+    const object = await stored.getObject(ctx);
+    if (
+      !isMessageObject(object) || object.id == null || object.quoteId == null
+    ) {
+      return;
+    }
+    const rejecter = await this.#validateQuoteRejection(ctx, reject, object);
+    if (rejecter == null) return;
+    await this.#stripRejectedQuote(ctx, id, object, rejecter);
+  }
+
+  async onDeleted(
+    ctx: InboxContext<TContextData>,
+    del: Delete,
+  ): Promise<void> {
+    if (del.objectId == null) return;
+    const id = await this.repository.findQuoteAuthorizationReference(
+      del.objectId,
+    );
+    if (id == null) return;
+    const stored = await this.repository.getMessage(id);
+    if (!(stored instanceof Create)) {
+      await this.repository.removeQuoteAuthorizationReference(del.objectId);
+      return;
+    }
+    const object = await stored.getObject(ctx);
+    if (
+      !isMessageObject(object) || object.id == null ||
+      object.quoteAuthorizationId?.href !== del.objectId.href
+    ) {
+      await this.repository.removeQuoteAuthorizationReference(del.objectId);
+      return;
+    }
+    const actor = await this.#validateQuoteAuthorizationDeletion(
+      ctx,
+      del,
+      object,
+    );
+    if (actor == null) return;
+    await this.#stripRejectedQuote(ctx, id, object, actor);
+  }
+
+  async #stripRejectedQuote(
+    ctx: InboxContext<TContextData>,
+    id: Uuid,
+    object: MessageClass,
+    actor: Actor,
+  ): Promise<void> {
+    const quoteId = object.quoteId;
+    let strippedObject: MessageClass | undefined;
+    const wasUpdated = await this.repository.updateMessage(
+      id,
+      async (existing) => {
+        if (!(existing instanceof Create)) return;
+        const existingObject = await existing.getObject(ctx);
+        if (
+          !isMessageObject(existingObject) || existingObject.id == null ||
+          (quoteId != null && existingObject.quoteId?.href !== quoteId.href)
+        ) {
+          return;
+        }
+        strippedObject = (await stripQuoteObject(existingObject)).clone({
+          updated: Temporal.Now.instant(),
+        });
+        return existing.clone({ object: strippedObject });
+      },
+    );
+    if (object.quoteAuthorizationId != null) {
+      await this.repository.removeQuoteAuthorizationReference(
+        object.quoteAuthorizationId,
+      );
+    }
+    if (!wasUpdated || strippedObject == null) return;
+    await this.#sendQuoteUpdate(ctx, strippedObject, actor);
+    if (this.onQuoteRejected != null) {
+      const session = this.getSession(ctx);
+      const message = await createMessage(
+        strippedObject,
+        session,
+        { [actor.id!.href]: actor },
+        undefined,
+        undefined,
+        true,
+      ) as AuthorizedMessage<MessageClass, TContextData>;
+      await this.onQuoteRejected(session, message, actor);
+    }
+  }
+
+  async #validateQuoteApproval(
+    ctx: InboxContext<TContextData>,
+    accept: Accept,
+    object: MessageClass,
+  ): Promise<
+    | {
+      readonly actor: Actor;
+      readonly authorization: QuoteAuthorization;
+    }
+    | undefined
+  > {
+    if (accept.actorId == null || accept.resultId == null) return undefined;
+    const actor = await accept.getActor({
+      contextLoader: ctx.contextLoader,
+      documentLoader: ctx.documentLoader,
+      suppressError: true,
+    });
+    if (
+      !isActor(actor) || actor.id == null ||
+      actor.id.href !== accept.actorId.href
+    ) return undefined;
+    const target = await lookupObjectSafely(this, ctx, object.quoteId!);
+    if (
+      !isMessageObject(target) ||
+      target.attributionId?.href !== actor.id.href
+    ) return undefined;
+    let authorization = await accept.getResult({
+      contextLoader: ctx.contextLoader,
+      documentLoader: ctx.documentLoader,
+      suppressError: true,
+    });
+    if (authorization == null) {
+      authorization = await lookupObjectSafely(this, ctx, accept.resultId);
+    }
+    if (
+      !(authorization instanceof QuoteAuthorization) ||
+      authorization.id == null ||
+      authorization.id.href !== accept.resultId.href ||
+      authorization.id.origin !== actor.id.origin ||
+      authorization.attributionId?.href !== actor.id.href ||
+      authorization.interactingObjectId?.href !== object.id!.href ||
+      authorization.interactionTargetId?.href !== object.quoteId!.href
+    ) return undefined;
+    return { actor, authorization };
+  }
+
+  async #validateQuoteRejection(
+    ctx: InboxContext<TContextData>,
+    reject: Reject,
+    object: MessageClass,
+  ): Promise<Actor | undefined> {
+    if (reject.actorId == null) return undefined;
+    const actor = await reject.getActor({
+      contextLoader: ctx.contextLoader,
+      documentLoader: ctx.documentLoader,
+      suppressError: true,
+    });
+    if (
+      !isActor(actor) || actor.id == null ||
+      actor.id.href !== reject.actorId.href
+    ) return undefined;
+    const target = await lookupObjectSafely(this, ctx, object.quoteId!);
+    if (
+      !isMessageObject(target) ||
+      target.attributionId?.href !== actor.id.href
+    ) return undefined;
+    return actor;
+  }
+
+  async #validateQuoteAuthorizationDeletion(
+    ctx: InboxContext<TContextData>,
+    del: Delete,
+    object: MessageClass,
+  ): Promise<Actor | undefined> {
+    if (del.actorId == null || object.quoteAuthorizationId == null) {
+      return undefined;
+    }
+    const actor = await del.getActor({
+      contextLoader: ctx.contextLoader,
+      documentLoader: ctx.documentLoader,
+      suppressError: true,
+    });
+    if (
+      !isActor(actor) || actor.id == null ||
+      actor.id.href !== del.actorId.href
+    ) {
+      return undefined;
+    }
+    const attribution = await this.repository
+      .findQuoteAuthorizationReferenceAttribution(
+        object.quoteAuthorizationId,
+      );
+    if (attribution?.href !== actor.id.href) return undefined;
+    return actor;
+  }
+
+  async #sendQuoteUpdate(
+    ctx: InboxContext<TContextData>,
+    object: MessageClass,
+    quoteActor: Actor,
+  ): Promise<void> {
+    const update = new Update({
+      id: new URL(`#update/${crypto.randomUUID()}`, object.id ?? ctx.origin),
+      actor: ctx.getActorUri(this.identifier),
+      tos: object.toIds,
+      ccs: object.ccIds,
+      object,
+    });
+    const visibility = await this.#getMessageVisibility(ctx, object);
+    const excludeBaseUris = [new URL(ctx.origin)];
+    const preferSharedInbox = visibility === "public" ||
+      visibility === "unlisted" || visibility === "followers";
+    if (preferSharedInbox) {
+      await ctx.sendActivity(
+        this,
+        "followers",
+        update,
+        { preferSharedInbox, excludeBaseUris },
+      );
+    }
+    const mentionUris: URL[] = [];
+    for await (
+      const tag of object.getTags({
+        contextLoader: ctx.contextLoader,
+        documentLoader: ctx.documentLoader,
+        suppressError: true,
+      })
+    ) {
+      if (!(tag instanceof Mention) || tag.href == null) continue;
+      mentionUris.push(tag.href);
+    }
+    const mentionedActors = (await Promise.all(
+      mentionUris.map((uri) => lookupObjectSafely(this, ctx, uri)),
+    )).filter(isActor);
+    const sentActorIds = new Set<string>();
+    const sendActorOnce = async (actor: Actor) => {
+      if (actor.id == null || sentActorIds.has(actor.id.href)) return;
+      sentActorIds.add(actor.id.href);
+      await ctx.sendActivity(
+        this,
+        actor,
+        update,
+        { preferSharedInbox, excludeBaseUris, fanout: "skip" },
+      );
+    };
+    if (mentionedActors.length > 0) {
+      const unsentMentionedActors = mentionedActors.filter((actor) => {
+        if (actor.id == null || sentActorIds.has(actor.id.href)) return false;
+        sentActorIds.add(actor.id.href);
+        return true;
+      });
+      if (unsentMentionedActors.length > 0) {
+        await ctx.sendActivity(
+          this,
+          unsentMentionedActors,
+          update,
+          { preferSharedInbox, excludeBaseUris },
+        );
+      }
+    }
+    if (object.replyTargetId != null) {
+      const replyTarget = await lookupObjectSafely(
+        this,
+        ctx,
+        object.replyTargetId,
+      );
+      if (isMessageObject(replyTarget)) {
+        const replyActor = await replyTarget.getAttribution({
+          contextLoader: ctx.contextLoader,
+          documentLoader: ctx.documentLoader,
+          suppressError: true,
+        });
+        if (isActor(replyActor)) await sendActorOnce(replyActor);
+      }
+    }
+    await sendActorOnce(quoteActor);
   }
 
   async onQuoteRequested(
@@ -1545,6 +1956,79 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
   }
 }
 
+async function stripQuoteObject(object: MessageClass): Promise<MessageClass> {
+  const json = await object.toJsonLd({ format: "compact" });
+  if (!isRecord(json)) return object;
+  delete json.quote;
+  delete json.quoteUrl;
+  delete json.quoteUri;
+  delete json._misskey_quote;
+  delete json.quoteAuthorization;
+  json.content = stripQuoteFallback(json.content);
+  json.tag = stripQuoteTags(json.tag, object.quoteId ?? object.quoteUrl);
+  const cls = getMessageClass(object);
+  return await cls.fromJsonLd(json) as MessageClass;
+}
+
+function stripQuoteFallback(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replace(
+      /\n\n<p class="quote-inline"><br>RE: <a href="([^"]+)">\1<\/a><\/p>$/,
+      "",
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => stripQuoteFallback(item));
+  }
+  if (isRecord(value)) {
+    const stripped: Record<string, unknown> = {};
+    for (const [key, item] of globalThis.Object.entries(value)) {
+      stripped[key] = stripQuoteFallback(item);
+    }
+    return stripped;
+  }
+  return value;
+}
+
+function stripQuoteTags(value: unknown, quoteUrl: URL | null): unknown {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => !isMisskeyQuoteTag(item, quoteUrl))
+      .map((item) => stripQuoteTags(item, quoteUrl));
+  }
+  if (isMisskeyQuoteTag(value, quoteUrl)) return undefined;
+  return value;
+}
+
+function isMisskeyQuoteTag(value: unknown, quoteUrl: URL | null): boolean {
+  if (!isRecord(value)) return false;
+  if (
+    value.rel === "https://misskey-hub.net/ns#_misskey_quote" ||
+    value.rel === "misskey:_misskey_quote"
+  ) return true;
+  return quoteUrl != null && value.href === quoteUrl.href;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value != null && !Array.isArray(value);
+}
+
+async function lookupObjectSafely<TContextData>(
+  bot: BotImpl<TContextData>,
+  ctx: InboxContext<TContextData>,
+  id: URL,
+): Promise<Object | null> {
+  try {
+    const documentLoader = await ctx.getDocumentLoader(bot);
+    return await ctx.lookupObject(id, {
+      contextLoader: ctx.contextLoader,
+      documentLoader,
+    });
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Wraps a {@link BotImpl} instance with a plain object implementing
  * the {@link Bot} interface.  Since `deno serve` does not recognize a class
@@ -1624,6 +2108,18 @@ export function wrapBotImpl<TContextData>(
     },
     set onQuoteRequest(value) {
       bot.onQuoteRequest = value;
+    },
+    get onQuoteAccepted() {
+      return bot.onQuoteAccepted;
+    },
+    set onQuoteAccepted(value) {
+      bot.onQuoteAccepted = value;
+    },
+    get onQuoteRejected() {
+      return bot.onQuoteRejected;
+    },
+    set onQuoteRejected(value) {
+      bot.onQuoteRejected = value;
     },
     get onMessage() {
       return bot.onMessage;
@@ -1887,6 +2383,54 @@ export class MigrationGatedRepository implements Repository {
     return await this.#repository.removeQuoteAuthorization(identifier, id);
   }
 
+  async addQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+    messageId: Uuid,
+    attribution?: URL,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.addQuoteAuthorizationReference(
+      identifier,
+      authorization,
+      messageId,
+      attribution,
+    );
+  }
+
+  async findQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<Uuid | undefined> {
+    await this.#migration;
+    return await this.#repository.findQuoteAuthorizationReference(
+      identifier,
+      authorization,
+    );
+  }
+
+  async findQuoteAuthorizationReferenceAttribution(
+    identifier: string,
+    authorization: URL,
+  ): Promise<URL | undefined> {
+    await this.#migration;
+    return await this.#repository.findQuoteAuthorizationReferenceAttribution(
+      identifier,
+      authorization,
+    );
+  }
+
+  async removeQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<void> {
+    await this.#migration;
+    return await this.#repository.removeQuoteAuthorizationReference(
+      identifier,
+      authorization,
+    );
+  }
+
   async vote(
     identifier: string,
     messageId: Uuid,
@@ -1941,6 +2485,8 @@ export class BotGroupImpl<TContextData> implements BotGroup<TContextData> {
   onReply?: ReplyEventHandler<TContextData>;
   onQuote?: QuoteEventHandler<TContextData>;
   onQuoteRequest?: QuoteRequestEventHandler<TContextData>;
+  onQuoteAccepted?: QuoteAcceptedEventHandler<TContextData>;
+  onQuoteRejected?: QuoteRejectedEventHandler<TContextData>;
   onMessage?: MessageEventHandler<TContextData>;
   onSharedMessage?: SharedMessageEventHandler<TContextData>;
   onLike?: LikeEventHandler<TContextData>;

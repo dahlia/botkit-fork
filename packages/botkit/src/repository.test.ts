@@ -132,6 +132,46 @@ for (const [name, factory] of Object.entries(factories)) {
       undefined,
     );
   });
+
+  test(`${name} stores quote authorization references`, async () => {
+    const repository = factory();
+    const authorization = new URL("https://remote.example/stamps/1");
+    const firstMessageId = "01942976-3400-7f34-872e-2cbf0f9eeac4" as Uuid;
+    const secondMessageId = "01942976-3400-7f34-872e-2cbf0f9eeac5" as Uuid;
+
+    await repository.addQuoteAuthorizationReference(
+      "bot",
+      authorization,
+      firstMessageId,
+    );
+
+    assert.deepStrictEqual(
+      await repository.findQuoteAuthorizationReference("other", authorization),
+      undefined,
+    );
+    assert.deepStrictEqual(
+      await repository.findQuoteAuthorizationReference("bot", authorization),
+      firstMessageId,
+    );
+
+    await repository.addQuoteAuthorizationReference(
+      "bot",
+      authorization,
+      secondMessageId,
+    );
+
+    assert.deepStrictEqual(
+      await repository.findQuoteAuthorizationReference("bot", authorization),
+      secondMessageId,
+    );
+
+    await repository.removeQuoteAuthorizationReference("bot", authorization);
+
+    assert.deepStrictEqual(
+      await repository.findQuoteAuthorizationReference("bot", authorization),
+      undefined,
+    );
+  });
 }
 
 test("MemoryCachedRepository keeps duplicate quote authorizations out of cache", async () => {
@@ -169,6 +209,73 @@ test("MemoryCachedRepository keeps duplicate quote authorizations out of cache",
   assert.deepStrictEqual(
     await repository.getQuoteAuthorization("bot", secondId),
     undefined,
+  );
+});
+
+test("MemoryCachedRepository does not cache failed quote authorization references", async () => {
+  class FailingQuoteAuthorizationReferenceRepository extends MemoryRepository {
+    override addQuoteAuthorizationReference(
+      _identifier: string,
+      _authorization: URL,
+      _messageId: Uuid,
+    ): Promise<void> {
+      return Promise.reject(new TypeError("Durable write failed."));
+    }
+  }
+  const underlying = new FailingQuoteAuthorizationReferenceRepository();
+  const repository = new MemoryCachedRepository(underlying);
+  const authorization = new URL("https://remote.example/stamps/1");
+  const messageId = "01942976-3400-7f34-872e-2cbf0f9eeac4" as Uuid;
+
+  await assert.rejects(
+    () =>
+      repository.addQuoteAuthorizationReference(
+        "bot",
+        authorization,
+        messageId,
+      ),
+    TypeError,
+    "Durable write failed.",
+  );
+
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference("bot", authorization),
+    undefined,
+  );
+});
+
+test("MemoryCachedRepository keeps quote authorization reference cache on remove failures", async () => {
+  class FailingQuoteAuthorizationReferenceRepository extends MemoryRepository {
+    override removeQuoteAuthorizationReference(
+      _identifier: string,
+      _authorization: URL,
+    ): Promise<void> {
+      return Promise.reject(new TypeError("Durable delete failed."));
+    }
+  }
+  const underlying = new FailingQuoteAuthorizationReferenceRepository();
+  const repository = new MemoryCachedRepository(underlying);
+  const authorization = new URL("https://remote.example/stamps/1");
+  const messageId = "01942976-3400-7f34-872e-2cbf0f9eeac4" as Uuid;
+  await underlying.addQuoteAuthorizationReference(
+    "bot",
+    authorization,
+    messageId,
+  );
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference("bot", authorization),
+    messageId,
+  );
+
+  await assert.rejects(
+    () => repository.removeQuoteAuthorizationReference("bot", authorization),
+    TypeError,
+    "Durable delete failed.",
+  );
+
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference("bot", authorization),
+    messageId,
   );
 });
 

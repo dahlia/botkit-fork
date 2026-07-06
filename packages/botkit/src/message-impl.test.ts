@@ -44,7 +44,7 @@ import {
   getMessageVisibility,
   isMessageObject,
 } from "./message-impl.ts";
-import { MemoryRepository } from "./repository.ts";
+import { MemoryRepository, type Uuid } from "./repository.ts";
 import { InstanceImpl } from "./instance-impl.ts";
 import { createMockContext } from "./session-impl.test.ts";
 import { SessionImpl } from "./session-impl.ts";
@@ -238,6 +238,63 @@ test("AuthorizedMessageImpl.delete()", async () => {
   const tombstone = await activity.getObject();
   assert.ok(tombstone instanceof Tombstone);
   assert.deepStrictEqual(tombstone.id, note.id);
+});
+
+test("AuthorizedMessageImpl.delete() clears quote authorization references", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockContext(bot, "https://example.com");
+  const session = new SessionImpl(bot, ctx);
+  const messageId = "01950000-0000-7000-8000-000000000501" as Uuid;
+  const authorization = new URL("https://remote.example/stamps/1");
+  const note = new Note({
+    id: ctx.getObjectUri(Note, { identifier: bot.identifier, id: messageId }),
+    content: "<p>Hello, world!</p>",
+    attribution: ctx.getActorUri(bot.identifier),
+    to: PUBLIC_COLLECTION,
+    cc: ctx.getFollowersUri(bot.identifier),
+    quote: new URL("https://remote.example/notes/original"),
+    quoteAuthorization: authorization,
+  });
+  const msg = await createMessage<Note, void>(
+    note,
+    session,
+    {},
+    undefined,
+    undefined,
+    true,
+  );
+  await repository.addMessage(
+    "bot",
+    messageId,
+    new Create({
+      id: ctx.getObjectUri(Create, {
+        identifier: bot.identifier,
+        id: messageId,
+      }),
+      actor: ctx.getActorUri(bot.identifier),
+      to: PUBLIC_COLLECTION,
+      cc: ctx.getFollowersUri(bot.identifier),
+      object: note,
+    }),
+  );
+  await repository.addQuoteAuthorizationReference(
+    "bot",
+    authorization,
+    messageId,
+  );
+
+  await msg.delete();
+
+  assert.deepStrictEqual(await repository.countMessages("bot"), 0);
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference("bot", authorization),
+    undefined,
+  );
 });
 
 test("MessageImpl.reply()", async () => {
@@ -606,7 +663,15 @@ test("AuthorizedMessage.update()", async (t) => {
     const ctx = createMockContext(bot, "https://example.com");
     const session = new SessionImpl(bot, ctx);
     const msg = await session.publish(text`Hello`);
+    assert.deepStrictEqual(msg.quotePolicy, {
+      automatic: "public",
+      manual: undefined,
+    });
     await msg.update(text`Hello again`, { quotePolicy: "nobody" });
+    assert.deepStrictEqual(msg.quotePolicy, {
+      automatic: "nobody",
+      manual: undefined,
+    });
     const [create] = await Array.fromAsync(repository.getMessages("bot"));
     assert.ok(create instanceof Create);
     const object = await create.getObject(ctx);

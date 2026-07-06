@@ -136,6 +136,7 @@ if (postgresUrl == null) {
             "key_pairs",
             "messages",
             "poll_votes",
+            "quote_authorization_refs",
             "quote_authorizations",
             "sent_follows",
           ],
@@ -1077,6 +1078,51 @@ if (postgresUrl == null) {
         );
         assert.deepStrictEqual(
           await repo.getQuoteAuthorization("bot", secondId),
+          undefined,
+        );
+      } finally {
+        await harness.cleanup();
+      }
+    });
+
+    test("stores quote authorization references", async () => {
+      const harness = createHarness();
+      try {
+        const repo = harness.repository;
+        const authorization = new URL("https://remote.example/stamps/1");
+        const firstMessageId = "01942976-3400-7f34-872e-2cbf0f9eeac4";
+        const secondMessageId = "01942976-3400-7f34-872e-2cbf0f9eeac5";
+
+        await repo.addQuoteAuthorizationReference(
+          "bot",
+          authorization,
+          firstMessageId,
+        );
+
+        assert.deepStrictEqual(
+          await repo.findQuoteAuthorizationReference("other", authorization),
+          undefined,
+        );
+        assert.deepStrictEqual(
+          await repo.findQuoteAuthorizationReference("bot", authorization),
+          firstMessageId,
+        );
+
+        await repo.addQuoteAuthorizationReference(
+          "bot",
+          authorization,
+          secondMessageId,
+        );
+
+        assert.deepStrictEqual(
+          await repo.findQuoteAuthorizationReference("bot", authorization),
+          secondMessageId,
+        );
+
+        await repo.removeQuoteAuthorizationReference("bot", authorization);
+
+        assert.deepStrictEqual(
+          await repo.findQuoteAuthorizationReference("bot", authorization),
           undefined,
         );
       } finally {

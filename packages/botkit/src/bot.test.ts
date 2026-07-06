@@ -21,7 +21,13 @@ import type { BotImpl } from "./bot-impl.ts";
 import { MemoryRepository } from "./repository.ts";
 import { createBot, type ReadonlyBot } from "./bot.ts";
 import type { FollowRequest } from "./follow.ts";
-import type { Message, MessageClass, SharedMessage } from "./message.ts";
+import type {
+  AuthorizedMessage,
+  Message,
+  MessageClass,
+  SharedMessage,
+} from "./message.ts";
+import type { QuoteRequest } from "./quote.ts";
 import type { Like } from "./reaction.ts";
 import type { Session } from "./session.ts";
 
@@ -53,6 +59,32 @@ test("createBot()", async () => {
   bot.onRejectFollow = onRejectFollow;
   assert.strictEqual(bot.onRejectFollow, onRejectFollow);
   assert.strictEqual(impl.onRejectFollow, onRejectFollow);
+
+  function onQuoteRequest(
+    _session: Session<void>,
+    _request: QuoteRequest<void>,
+  ) {}
+  bot.onQuoteRequest = onQuoteRequest;
+  assert.strictEqual(bot.onQuoteRequest, onQuoteRequest);
+  assert.strictEqual(impl.onQuoteRequest, onQuoteRequest);
+
+  function onQuoteAccepted(
+    _session: Session<void>,
+    _message: AuthorizedMessage<MessageClass, void>,
+    _approver: Actor,
+  ) {}
+  bot.onQuoteAccepted = onQuoteAccepted;
+  assert.strictEqual(bot.onQuoteAccepted, onQuoteAccepted);
+  assert.strictEqual(impl.onQuoteAccepted, onQuoteAccepted);
+
+  function onQuoteRejected(
+    _session: Session<void>,
+    _message: AuthorizedMessage<MessageClass, void>,
+    _rejecter: Actor,
+  ) {}
+  bot.onQuoteRejected = onQuoteRejected;
+  assert.strictEqual(bot.onQuoteRejected, onQuoteRejected);
+  assert.strictEqual(impl.onQuoteRejected, onQuoteRejected);
 
   function onMention(
     _session: Session<void>,
