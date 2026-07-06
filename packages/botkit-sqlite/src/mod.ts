@@ -1059,13 +1059,14 @@ export class SqliteRepository implements Repository, Disposable {
     identifier: string,
     id: Uuid,
   ): Promise<QuoteAuthorization | undefined> {
-    const authorization = await this.getQuoteAuthorization(identifier, id);
-    if (authorization == null) return undefined;
     const stmt = this.db.prepare(
-      "DELETE FROM quote_authorizations WHERE bot_id = ? AND id = ?",
+      "DELETE FROM quote_authorizations WHERE bot_id = ? AND id = ? " +
+        "RETURNING authorization_json",
     );
-    stmt.run(identifier, id);
-    return authorization;
+    const row = stmt.get(identifier, id) as
+      | { authorization_json: string }
+      | undefined;
+    return await parseQuoteAuthorizationJson(row?.authorization_json);
   }
 
   vote(

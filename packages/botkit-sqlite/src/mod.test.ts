@@ -370,6 +370,49 @@ describe("SqliteRepository", () => {
     }
   });
 
+  test("removes quote authorization rows before parsing", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "botkit_sqlite_test_"));
+    const dbPath = `${tempDir}/test.db`;
+    const repo = createSqliteRepository({ path: dbPath });
+    repo.close();
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare(`
+        INSERT INTO quote_authorizations
+          (bot_id, id, interacting_object, authorization_json)
+        VALUES (?, ?, ?, ?)
+      `).run(
+        "bot",
+        "01942976-3400-7f34-872e-2cbf0f9eeac4",
+        "https://remote.example/notes/quote",
+        "{",
+      );
+    } finally {
+      db.close();
+    }
+
+    const reopened = createSqliteRepository({ path: dbPath });
+    try {
+      assert.deepStrictEqual(
+        await reopened.removeQuoteAuthorization(
+          "bot",
+          "01942976-3400-7f34-872e-2cbf0f9eeac4",
+        ),
+        undefined,
+      );
+      assert.deepStrictEqual(
+        await reopened.findQuoteAuthorization(
+          "bot",
+          new URL("https://remote.example/notes/quote"),
+        ),
+        undefined,
+      );
+    } finally {
+      reopened.close();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("file-based database persistence", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "botkit_sqlite_test_"));
     const dbPath = `${tempDir}/test.db`;

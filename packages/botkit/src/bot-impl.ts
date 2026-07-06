@@ -714,7 +714,8 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       suppressError: true,
     });
     if (!isMessageObject(instrument) || instrument.id == null) return;
-    if (instrument.quoteUrl?.href !== targetObject.id.href) return;
+    const quotedObjectId = instrument.quoteId ?? instrument.quoteUrl;
+    if (quotedObjectId?.href !== targetObject.id.href) return;
     const actor = await request.getActor({
       contextLoader: ctx.contextLoader,
       documentLoader,
