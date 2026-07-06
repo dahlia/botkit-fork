@@ -770,9 +770,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       approval.authorization.id!,
       id,
     );
-    try {
-      await this.repository.updateMessage(id, () => Promise.resolve(updated));
-    } catch (error) {
+    const removeReference = async () => {
       try {
         await this.repository.removeQuoteAuthorizationReference(
           approval.authorization.id!,
@@ -783,6 +781,18 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
           { error: cleanupError },
         );
       }
+    };
+    try {
+      const wasUpdated = await this.repository.updateMessage(
+        id,
+        () => Promise.resolve(updated),
+      );
+      if (!wasUpdated) {
+        await removeReference();
+        return;
+      }
+    } catch (error) {
+      await removeReference();
       throw error;
     }
     await this.#sendQuoteUpdate(ctx, updatedObject, approval.actor);

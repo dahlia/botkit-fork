@@ -3926,6 +3926,92 @@ test("BotImpl.onFollowAccepted() cleans references after update failures", async
   assert.deepStrictEqual(ctx.sentActivities.length, 0);
 });
 
+test("BotImpl.onFollowAccepted() cleans references after missing updates", async () => {
+  class MissingUpdateRepository extends MemoryRepository {
+    override updateMessage(
+      identifier: string,
+      id: Uuid,
+      updater: (
+        existing: Create | Announce,
+      ) =>
+        | Create
+        | Announce
+        | undefined
+        | Promise<Create | Announce | undefined>,
+    ): Promise<boolean> {
+      if (identifier === "bot") return Promise.resolve(false);
+      return super.updateMessage(identifier, id, updater);
+    }
+  }
+  const repository = new MissingUpdateRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const author = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const target = new Note({
+    id: new URL("https://remote.example/notes/original"),
+    attribution: author,
+    content: "Original.",
+    to: PUBLIC_COLLECTION,
+  });
+  Object.defineProperty(ctx, "lookupObject", {
+    value: (id: URL) =>
+      Promise.resolve(id.href === target.id?.href ? target : null),
+  });
+  const targetMessage = await createMessage(target, session, {});
+  const quote = await session.publish(text`Please approve this.`, {
+    quoteTarget: targetMessage,
+  });
+  const parsed = ctx.parseUri(quote.id);
+  assert.ok(parsed?.type === "object");
+  const messageId = parsed.values.id as Uuid;
+  const authorization = new QuoteAuthorization({
+    id: new URL("https://remote.example/stamps/1"),
+    attribution: author.id,
+    interactingObject: quote.id,
+    interactionTarget: target.id,
+  });
+  let accepted: AuthorizedMessage<MessageClass, void> | undefined;
+  bot.onQuoteAccepted = (_session, message) => {
+    accepted = message;
+  };
+  ctx.sentActivities = [];
+
+  await bot.onFollowAccepted(
+    ctx,
+    new Accept({
+      actor: author,
+      object: ctx.getObjectUri(QuoteRequest, {
+        identifier: bot.identifier,
+        id: messageId,
+      }),
+      result: authorization,
+    }),
+  );
+
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference(
+      "bot",
+      authorization.id!,
+    ),
+    undefined,
+  );
+  const stored = await repository.getMessage("bot", messageId);
+  assert.ok(stored instanceof Create);
+  const object = await stored.getObject(ctx);
+  assert.ok(object instanceof Note);
+  assert.deepStrictEqual(object.quoteAuthorizationId, null);
+  assert.deepStrictEqual(ctx.sentActivities.length, 0);
+  assert.deepStrictEqual(accepted, undefined);
+});
+
 test("BotImpl.onFollowRejected() strips rejected quotes", async () => {
   const repository = new MemoryRepository();
   const bot = new BotImpl<void>({
