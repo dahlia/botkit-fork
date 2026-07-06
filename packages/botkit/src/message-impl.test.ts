@@ -218,12 +218,20 @@ test("createMessage() verifies quote approvals", async (t) => {
       readonly quoteAuthorization?: URL;
       readonly authorization?: QuoteAuthorization | null;
       readonly throwOnAuthorization?: boolean;
+      readonly signal?: AbortSignal;
+      readonly onAuthorizationLookup?: (
+        options: Parameters<typeof ctx.lookupObject>[1],
+      ) => void;
     } = {},
   ) => {
     Object.defineProperty(ctx, "lookupObject", {
-      value: (id: URL) => {
+      value: (
+        id: URL,
+        lookupOptions?: Parameters<typeof ctx.lookupObject>[1],
+      ) => {
         if (id.href === targetId.href) return Promise.resolve(target);
         if (id.href === authorizationId.href) {
+          options.onAuthorizationLookup?.(lookupOptions);
           if (options.throwOnAuthorization === true) {
             return Promise.reject(new TypeError("Fetch failed."));
           }
@@ -245,6 +253,10 @@ test("createMessage() verifies quote approvals", async (t) => {
       }),
       session,
       {},
+      undefined,
+      undefined,
+      undefined,
+      options.signal,
     );
   };
 
@@ -345,6 +357,27 @@ test("createMessage() verifies quote approvals", async (t) => {
       throwOnAuthorization: true,
     });
     assert.deepStrictEqual(message.quoteApproved, false);
+  });
+
+  await t.test("passes abort signal to remote stamp lookup", async () => {
+    const controller = new AbortController();
+    let lookupSignal: AbortSignal | undefined;
+    const message = await materialize({
+      quote: targetId,
+      quoteAuthorization: authorizationId,
+      authorization: new QuoteAuthorization({
+        id: authorizationId,
+        attribution: author.id,
+        interactingObject: quoteId,
+        interactionTarget: targetId,
+      }),
+      signal: controller.signal,
+      onAuthorizationLookup: (options) => {
+        lookupSignal = options?.signal;
+      },
+    });
+    assert.deepStrictEqual(message.quoteApproved, true);
+    assert.deepStrictEqual(lookupSignal, controller.signal);
   });
 
   await t.test("legacy quote", async () => {

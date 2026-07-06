@@ -4493,7 +4493,7 @@ test("BotImpl.onDeleted() strips revoked quote authorizations", async () => {
   assert.deepStrictEqual(revoker?.id, author.id);
 });
 
-test("BotImpl.onDeleted() strips quote revocations from same-origin actors", async () => {
+test("BotImpl.onDeleted() ignores same-origin quote revocations without attribution", async () => {
   const repository = new MemoryRepository();
   const bot = new BotImpl<void>({
     kv: new MemoryKvStore(),
@@ -4566,25 +4566,82 @@ test("BotImpl.onDeleted() strips quote revocations from same-origin actors", asy
   assert.ok(stored instanceof Create);
   const object = await stored.getObject(ctx);
   assert.ok(object instanceof Note);
-  assert.deepStrictEqual(object.quoteId, null);
-  assert.deepStrictEqual(object.quoteAuthorizationId, null);
+  assert.deepStrictEqual(object.quoteId, target.id);
+  assert.deepStrictEqual(object.quoteAuthorizationId, authorization.id);
   assert.deepStrictEqual(
     await repository.findQuoteAuthorizationReference(
       "bot",
       authorization.id!,
     ),
+    messageId,
+  );
+  assert.deepStrictEqual(ctx.forwardedRecipients, []);
+  assert.deepStrictEqual(ctx.forwardedActivities, []);
+  assert.deepStrictEqual(ctx.sentActivities, []);
+  assert.deepStrictEqual(revoked, undefined);
+  assert.deepStrictEqual(revoker, undefined);
+});
+
+test("BotImpl.onDeleted() does not forward private quote revocations to followers", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const messageId = "01950000-0000-7000-8000-000000000208" as Uuid;
+  const author = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const authorization = new URL("https://remote.example/stamps/1");
+  await repository.addMessage(
+    "bot",
+    messageId,
+    new Create({
+      id: new URL(`https://example.com/ap/actor/bot/create/${messageId}`),
+      actor: new URL("https://example.com/ap/actor/bot"),
+      object: new Note({
+        id: new URL(`https://example.com/ap/actor/bot/note/${messageId}`),
+        attribution: new URL("https://example.com/ap/actor/bot"),
+        content: "Quote.",
+        to: author.id,
+        quote: new URL("https://remote.example/notes/original"),
+        quoteAuthorization: authorization,
+      }),
+    }),
+  );
+  await repository.addQuoteAuthorizationReference(
+    "bot",
+    authorization,
+    messageId,
+    author.id!,
+  );
+
+  await bot.onDeleted(
+    ctx,
+    new Delete({
+      actor: author,
+      object: authorization,
+    }),
+  );
+
+  const stored = await repository.getMessage("bot", messageId);
+  assert.ok(stored instanceof Create);
+  const object = await stored.getObject(ctx);
+  assert.ok(object instanceof Note);
+  assert.deepStrictEqual(object.quoteId, null);
+  assert.deepStrictEqual(object.quoteAuthorizationId, null);
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference("bot", authorization),
     undefined,
   );
-  assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
-  assert.deepStrictEqual(ctx.forwardedActivities.length, 1);
-  assert.deepStrictEqual(ctx.sentActivities.length, 2);
-  assert.deepStrictEqual(ctx.sentActivities[0].recipients, "followers");
+  assert.deepStrictEqual(ctx.forwardedRecipients, []);
+  assert.deepStrictEqual(ctx.forwardedActivities, []);
+  assert.deepStrictEqual(ctx.sentActivities.length, 1);
+  assert.deepStrictEqual(ctx.sentActivities[0].recipients, [author]);
   assert.ok(ctx.sentActivities[0].activity instanceof Update);
-  assert.deepStrictEqual(ctx.sentActivities[1].recipients, [otherActor]);
-  assert.ok(ctx.sentActivities[1].activity instanceof Update);
-  assert.deepStrictEqual(revoked?.id, quote.id);
-  assert.deepStrictEqual(revoked?.quoteTarget, undefined);
-  assert.deepStrictEqual(revoker?.id, otherActor.id);
 });
 
 test("BotImpl.onDeleted() ignores quote revocations from wrong origins", async () => {

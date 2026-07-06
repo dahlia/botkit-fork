@@ -769,6 +769,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
   replyTarget: Message<MessageClass, TContextData> | undefined,
   quote: Message<MessageClass, TContextData> | undefined,
   authorized: true,
+  signal?: AbortSignal,
 ): Promise<AuthorizedMessage<T, TContextData>>;
 export async function createMessage<T extends MessageClass, TContextData>(
   raw: T,
@@ -777,6 +778,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
   replyTarget?: Message<MessageClass, TContextData>,
   quote?: Message<MessageClass, TContextData>,
   authorized?: boolean,
+  signal?: AbortSignal,
 ): Promise<Message<T, TContextData>>;
 export async function createMessage<T extends MessageClass, TContextData>(
   raw: T,
@@ -785,6 +787,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
   replyTarget?: Message<MessageClass, TContextData>,
   quoteTarget?: Message<MessageClass, TContextData>,
   authorized: boolean = false,
+  signal?: AbortSignal,
 ): Promise<Message<T, TContextData>> {
   if (raw.id == null) throw new TypeError("The raw.id is required.");
   else if (raw.content == null) {
@@ -795,6 +798,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
     contextLoader: session.context.contextLoader,
     documentLoader,
     suppressError: true,
+    signal,
   };
   const rawActor = raw.attributionId?.href === session.actorId?.href
     ? await session.getActor()
@@ -860,7 +864,15 @@ export async function createMessage<T extends MessageClass, TContextData>(
       rt instanceof Article || rt instanceof ChatMessage ||
       rt instanceof Note || rt instanceof Question
     ) {
-      replyTarget = await createMessage(rt, session, cachedObjects);
+      replyTarget = await createMessage(
+        rt,
+        session,
+        cachedObjects,
+        undefined,
+        undefined,
+        undefined,
+        signal,
+      );
     }
   }
   if (quoteTarget == null) {
@@ -899,7 +911,15 @@ export async function createMessage<T extends MessageClass, TContextData>(
       qt instanceof Article || qt instanceof ChatMessage ||
       qt instanceof Note || qt instanceof Question
     ) {
-      quoteTarget = await createMessage(qt, session, cachedObjects);
+      quoteTarget = await createMessage(
+        qt,
+        session,
+        cachedObjects,
+        undefined,
+        undefined,
+        undefined,
+        signal,
+      );
     }
   }
   const quotePolicy = actor.id == null && raw.attributionId == null
@@ -917,6 +937,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
       raw,
       quoteTarget,
       session,
+      signal,
     );
   const quoteApprovalState = !authorized || quoteTarget == null
     ? undefined
@@ -961,6 +982,7 @@ async function verifyQuoteApproval<TContextData>(
   raw: MessageClass,
   quoteTarget: Message<MessageClass, TContextData>,
   session: SessionImpl<TContextData>,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   if (
     raw.id == null ||
@@ -988,6 +1010,7 @@ async function verifyQuoteApproval<TContextData>(
           documentLoader: await session.context.getDocumentLoader(
             session.bot,
           ),
+          signal,
         },
       );
     return validateQuoteAuthorization(authorization, {

@@ -879,11 +879,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       object,
     );
     if (actor == null) return;
-    await ctx.forwardActivity(this, "followers", {
-      skipIfUnsigned: true,
-      preferSharedInbox: true,
-      excludeBaseUris: [new URL(ctx.origin)],
-    });
+    await this.#forwardQuoteAuthorizationDeletion(ctx, object);
     const stripped = await this.#stripRejectedQuote(ctx, id, object, actor);
     if (stripped != null && this.onQuoteRevoked != null) {
       await this.onQuoteRevoked(stripped.session, stripped.message, actor);
@@ -1030,7 +1026,28 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     if (actor.id.origin !== object.quoteAuthorizationId.origin) {
       return undefined;
     }
+    const attribution = await this.repository
+      .findQuoteAuthorizationReferenceAttribution(
+        object.quoteAuthorizationId,
+      );
+    if (attribution?.href !== actor.id.href) return undefined;
     return actor;
+  }
+
+  async #forwardQuoteAuthorizationDeletion(
+    ctx: InboxContext<TContextData>,
+    object: MessageClass,
+  ): Promise<void> {
+    const visibility = await this.#getMessageVisibility(ctx, object);
+    if (
+      visibility !== "public" && visibility !== "unlisted" &&
+      visibility !== "followers"
+    ) return;
+    await ctx.forwardActivity(this, "followers", {
+      skipIfUnsigned: true,
+      preferSharedInbox: true,
+      excludeBaseUris: [new URL(ctx.origin)],
+    });
   }
 
   async #sendQuoteUpdate(
