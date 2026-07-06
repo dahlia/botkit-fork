@@ -1603,7 +1603,16 @@ export class KvRepository implements Repository {
         const existing = await this.kv.get<Uuid>(
           this.#quoteAuthorizationIndexKey(identifier, interactingObject),
         );
-        if (existing != null) return;
+        if (existing != null) {
+          const authorization = await this.getQuoteAuthorization(
+            identifier,
+            existing,
+          );
+          if (authorization != null) return;
+          await this.kv.delete(
+            this.#quoteAuthorizationIndexKey(identifier, interactingObject),
+          );
+        }
         await this.kv.set(
           this.#key(identifier, "quoteAuthorizations", id),
           await authorization.toJsonLd({ format: "compact" }),
