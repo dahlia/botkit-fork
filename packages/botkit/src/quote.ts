@@ -151,6 +151,35 @@ export function serializeQuotePolicy(
   });
 }
 
+/**
+ * Parses a serialized interaction policy rule into BotKit's quote policy
+ * shape.
+ * @param rule The interaction policy rule to parse.
+ * @param actorUri The URI of the actor that published the message.
+ * @param followersUri The URI of the actor's followers collection.
+ * @returns The parsed quote policy.
+ * @since 0.5.0
+ */
+export function parseQuotePolicy(
+  rule: InteractionRule | null | undefined,
+  actorUri: URL,
+  followersUri?: URL | null,
+): QuotePolicy | undefined {
+  if (rule == null) return undefined;
+  return {
+    automatic: parseQuoteAcceptance(
+      rule.automaticApprovals,
+      actorUri,
+      followersUri,
+    ),
+    manual: parseQuoteAcceptance(
+      rule.manualApprovals,
+      actorUri,
+      followersUri,
+    ),
+  };
+}
+
 function serializeQuoteAcceptance(
   acceptance: QuoteAcceptance | undefined,
   actorUri: URL,
@@ -167,4 +196,27 @@ function serializeQuoteAcceptance(
     default:
       return [];
   }
+}
+
+function parseQuoteAcceptance(
+  approvals: readonly URL[],
+  actorUri: URL,
+  followersUri?: URL | null,
+): QuoteAcceptance | undefined {
+  if (approvals.some((approval) => approval.href === PUBLIC_COLLECTION.href)) {
+    return "public";
+  }
+  if (
+    followersUri != null &&
+    approvals.some((approval) => approval.href === followersUri.href)
+  ) {
+    return "followers";
+  }
+  if (
+    approvals.length > 0 &&
+    approvals.every((approval) => approval.href === actorUri.href)
+  ) {
+    return "nobody";
+  }
+  return undefined;
 }

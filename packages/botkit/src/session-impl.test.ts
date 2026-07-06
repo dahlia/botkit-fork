@@ -22,6 +22,7 @@ import {
   Person,
   PUBLIC_COLLECTION,
   Question,
+  QuoteRequest,
   type Recipient,
   Undo,
   Update,
@@ -493,7 +494,7 @@ test("SessionImpl.publish()", async (t) => {
     const quote = await session.publish(text`Check this out!`, {
       quoteTarget: originalMsg,
     });
-    assert.deepStrictEqual(ctx.sentActivities.length, 2);
+    assert.deepStrictEqual(ctx.sentActivities.length, 3);
     const { recipients, activity } = ctx.sentActivities[0];
     assert.deepStrictEqual(recipients, "followers");
     assert.ok(activity instanceof Create);
@@ -525,7 +526,19 @@ test("SessionImpl.publish()", async (t) => {
 
 <p class="quote-inline"><br>RE: <a href="${originalMsg.id.href}">${originalMsg.id.href}</a></p>`,
     );
+    assert.deepStrictEqual(object.quoteId, originalMsg.id);
     assert.deepStrictEqual(object.quoteUrl, originalMsg.id);
+    const { recipients: requestRecipients, activity: requestActivity } =
+      ctx.sentActivities[2];
+    assert.deepStrictEqual(requestRecipients, [originalAuthor]);
+    assert.ok(requestActivity instanceof QuoteRequest);
+    assert.deepStrictEqual(requestActivity.actorId, session.actorId);
+    assert.deepStrictEqual(requestActivity.objectId, originalMsg.id);
+    assert.deepStrictEqual(requestActivity.instrumentId, quote.id);
+    const parsedRequest = ctx.parseUri(requestActivity.id);
+    assert.deepStrictEqual(parsedRequest?.type, "object");
+    assert.ok(parsedRequest?.type === "object");
+    assert.deepStrictEqual(parsedRequest.class, QuoteRequest);
     assert.deepStrictEqual(quote.id, object.id);
     assert.deepStrictEqual(
       quote.text,

@@ -15,7 +15,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import type { Actor } from "@fedify/vocab";
 import type { FollowRequest } from "./follow.ts";
-import type { Message, MessageClass, SharedMessage } from "./message.ts";
+import type {
+  AuthorizedMessage,
+  Message,
+  MessageClass,
+  SharedMessage,
+} from "./message.ts";
 import type { Vote } from "./poll.ts";
 import type { QuoteRequest } from "./quote.ts";
 import type { Like, Reaction } from "./reaction.ts";
@@ -109,6 +114,34 @@ export type QuoteEventHandler<TContextData> = (
 export type QuoteRequestEventHandler<TContextData> = (
   session: Session<TContextData>,
   quoteRequest: QuoteRequest<TContextData>,
+) => void | Promise<void>;
+
+/**
+ * An event handler invoked when a quote request the bot sent is accepted.
+ * @typeParam TContextData The type of the context data.
+ * @param session The session of the bot.
+ * @param message The bot's quote message with the authorization stamp applied.
+ * @param approver The actor who approved the quote.
+ * @since 0.5.0
+ */
+export type QuoteAcceptedEventHandler<TContextData> = (
+  session: Session<TContextData>,
+  message: AuthorizedMessage<MessageClass, TContextData>,
+  approver: Actor,
+) => void | Promise<void>;
+
+/**
+ * An event handler invoked when a quote request the bot sent is rejected.
+ * @typeParam TContextData The type of the context data.
+ * @param session The session of the bot.
+ * @param message The bot's quote message after the quote target was removed.
+ * @param rejecter The actor who rejected the quote.
+ * @since 0.5.0
+ */
+export type QuoteRejectedEventHandler<TContextData> = (
+  session: Session<TContextData>,
+  message: AuthorizedMessage<MessageClass, TContextData>,
+  rejecter: Actor,
 ) => void | Promise<void>;
 
 /**

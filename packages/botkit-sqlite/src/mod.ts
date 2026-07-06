@@ -439,6 +439,15 @@ export class SqliteRepository implements Repository, Disposable {
       )
     `);
 
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS quote_authorization_refs (
+        bot_id TEXT NOT NULL,
+        authorization TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        PRIMARY KEY (bot_id, authorization)
+      )
+    `);
+
     // Poll votes table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS poll_votes (
@@ -1067,6 +1076,46 @@ export class SqliteRepository implements Repository, Disposable {
       | { authorization_json: string }
       | undefined;
     return await parseQuoteAuthorizationJson(row?.authorization_json);
+  }
+
+  addQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+    messageId: Uuid,
+  ): Promise<void> {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO quote_authorization_refs
+        (bot_id, authorization, message_id)
+      VALUES (?, ?, ?)
+    `);
+    stmt.run(identifier, authorization.href, messageId);
+    return Promise.resolve();
+  }
+
+  findQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<Uuid | undefined> {
+    const stmt = this.db.prepare(`
+      SELECT message_id FROM quote_authorization_refs
+      WHERE bot_id = ? AND authorization = ?
+    `);
+    const row = stmt.get(identifier, authorization.href) as
+      | { message_id: Uuid }
+      | undefined;
+    return Promise.resolve(row?.message_id);
+  }
+
+  removeQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<void> {
+    const stmt = this.db.prepare(`
+      DELETE FROM quote_authorization_refs
+      WHERE bot_id = ? AND authorization = ?
+    `);
+    stmt.run(identifier, authorization.href);
+    return Promise.resolve();
   }
 
   vote(

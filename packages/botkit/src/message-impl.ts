@@ -54,7 +54,11 @@ import type {
 } from "./message.ts";
 import type { AuthorizedLike, AuthorizedReaction } from "./reaction.ts";
 import type { Uuid } from "./repository.ts";
-import { serializeQuotePolicy } from "./quote.ts";
+import {
+  parseQuotePolicy,
+  type QuotePolicy,
+  serializeQuotePolicy,
+} from "./quote.ts";
 import type { SessionImpl } from "./session-impl.ts";
 import type {
   SessionPublishOptions,
@@ -94,6 +98,7 @@ export class MessageImpl<T extends MessageClass, TContextData>
   html: string;
   readonly replyTarget?: Message<MessageClass, TContextData> | undefined;
   readonly quoteTarget?: Message<MessageClass, TContextData> | undefined;
+  readonly quotePolicy?: QuotePolicy | undefined;
   mentions: readonly Actor[];
   hashtags: readonly Hashtag[];
   readonly attachments: readonly Document[];
@@ -102,10 +107,14 @@ export class MessageImpl<T extends MessageClass, TContextData>
 
   constructor(
     session: SessionImpl<TContextData>,
-    message: Omit<
-      Message<T, TContextData>,
-      "delete" | "reply" | "share" | "like" | "react"
-    >,
+    message:
+      & Omit<
+        Message<T, TContextData>,
+        "delete" | "reply" | "share" | "like" | "react"
+      >
+      & {
+        readonly quoteApprovalState?: "pending" | "accepted" | "notRequired";
+      },
   ) {
     this.session = session;
     this.raw = message.raw;
@@ -117,6 +126,7 @@ export class MessageImpl<T extends MessageClass, TContextData>
     this.html = message.html;
     this.replyTarget = message.replyTarget;
     this.quoteTarget = message.quoteTarget;
+    this.quotePolicy = message.quotePolicy;
     this.mentions = message.mentions;
     this.hashtags = message.hashtags;
     this.attachments = message.attachments;
@@ -379,6 +389,25 @@ export class MessageImpl<T extends MessageClass, TContextData>
 export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
   extends MessageImpl<T, TContextData>
   implements AuthorizedMessage<T, TContextData> {
+  readonly quoteApprovalState?: "pending" | "accepted" | "notRequired";
+
+  constructor(
+    session: SessionImpl<TContextData>,
+    message: Omit<
+      AuthorizedMessage<T, TContextData>,
+      | "delete"
+      | "reply"
+      | "share"
+      | "like"
+      | "react"
+      | "update"
+      | "unauthorizeQuote"
+    >,
+  ) {
+    super(session, message);
+    this.quoteApprovalState = message.quoteApprovalState;
+  }
+
   async update(
     text: Text<"block", TContextData>,
     options: AuthorizedMessageUpdateOptions = {},
@@ -849,6 +878,20 @@ export async function createMessage<T extends MessageClass, TContextData>(
       quoteTarget = await createMessage(qt, session, cachedObjects);
     }
   }
+  const quotePolicy = actor.id == null && raw.attributionId == null
+    ? undefined
+    : parseQuotePolicy(
+      raw.interactionPolicy?.canQuote,
+      actor.id ?? raw.attributionId!,
+      actor.followersId,
+    );
+  const quoteApprovalState = !authorized || quoteTarget == null
+    ? undefined
+    : quoteTarget.actor.id?.href === actor.id?.href
+    ? "notRequired"
+    : raw.quoteAuthorizationId == null
+    ? "pending"
+    : "accepted";
   return new (authorized ? AuthorizedMessageImpl : MessageImpl)(session, {
     raw,
     id: raw.id,
@@ -866,6 +909,8 @@ export async function createMessage<T extends MessageClass, TContextData>(
     html,
     replyTarget,
     quoteTarget,
+    quotePolicy,
+    quoteApprovalState,
     mentions,
     hashtags,
     attachments,

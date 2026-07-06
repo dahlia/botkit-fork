@@ -324,6 +324,28 @@ bot.onMention = async (session, message) => {
 > while others like Mastodon might implement quotes differently or not support
 > them at all.
 
+When the quoted message supports [FEP-044f], BotKit also sends a quote request
+to the quoted message's author.  Until that author accepts the request,
+the returned `AuthorizedMessage` reports a pending approval state:
+
+~~~~ typescript twoslash
+import { type Message, type MessageClass, type Session, text } from "@fedify/botkit";
+declare const session: Session<void>;
+declare const quoted: Message<MessageClass, void>;
+// ---cut-before---
+const message = await session.publish(text`This message quotes another one.`, {
+  quoteTarget: quoted,
+});
+
+console.log(message.quoteApprovalState);  // "pending"
+~~~~
+
+If the author accepts the quote request, BotKit stores the received
+authorization stamp on the message and sends an `Update` activity.  If the
+author rejects it, BotKit removes the quote target and the fallback quote link
+from the stored message and sends an `Update` activity with the stripped
+content.
+
 ### Polls
 
 *This API is available since BotKit 0.3.0.*
@@ -596,6 +618,12 @@ object.
 You can get the message that is quoted in the message through
 the `~Message.quoteTarget` property.  It is either another `Message` object
 or `undefined` if the message is not a quote.
+
+For authorized messages created by your bot,
+`~AuthorizedMessage.quoteApprovalState` describes whether the quote target
+still awaits FEP-044f approval.  It is `"pending"` for remote quote targets
+that have not sent an authorization stamp, `"accepted"` after a valid stamp has
+been received, and `"notRequired"` for self-quotes.
 
 Since the quoted message itself can be a quote, you can traverse the
 conversation by following the `~Message.quoteTarget` property recursively:

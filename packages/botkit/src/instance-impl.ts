@@ -308,6 +308,14 @@ export class InstanceImpl<TContextData>
       },
     );
     this.federation.setObjectDispatcher(
+      QuoteRequest,
+      "/ap/actor/{identifier}/quote-request/{id}",
+      async (ctx, values) => {
+        const bot = await this.resolveBot(ctx, values.identifier);
+        return await bot?.dispatchQuoteRequest(ctx, values) ?? null;
+      },
+    );
+    this.federation.setObjectDispatcher(
       APEmoji,
       "/ap/emoji/{name}",
       (ctx, values) => this.dispatchEmoji(ctx, values),
@@ -324,6 +332,7 @@ export class InstanceImpl<TContextData>
       .on(Reject, (ctx, reject) => this.onFollowRejected(ctx, reject))
       .on(Create, (ctx, create) => this.onCreated(ctx, create))
       .on(Update, (ctx, update) => this.onUpdated(ctx, update))
+      .on(Delete, (ctx, del) => this.onDeleted(ctx, del))
       .on(Announce, (ctx, announce) => this.onAnnounced(ctx, announce))
       .on(RawLike, (ctx, like) => this.onLiked(ctx, like))
       .setSharedKeyDispatcher((ctx) => this.dispatchSharedKey(ctx));
@@ -665,6 +674,23 @@ export class InstanceImpl<TContextData>
       () => this.#localObjectTarget(ctx, reject.objectId),
     );
     for (const bot of bots) await bot.onFollowRejected(ctx, reject);
+  }
+
+  async onDeleted(
+    ctx: InboxContext<TContextData>,
+    del: Delete,
+  ): Promise<void> {
+    const bots = await this.#resolveTargets(ctx, () => {
+      const targets = new Set<string>();
+      for (const uri of [...del.toIds, ...del.ccIds]) {
+        const parsed = ctx.parseUri(uri);
+        if (parsed?.type === "actor" || parsed?.type === "followers") {
+          if (parsed.identifier != null) targets.add(parsed.identifier);
+        }
+      }
+      return targets;
+    });
+    for (const bot of bots) await bot.onDeleted(ctx, del);
   }
 
   async onLiked(

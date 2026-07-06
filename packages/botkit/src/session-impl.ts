@@ -26,6 +26,7 @@ import {
   Note,
   type Object,
   PUBLIC_COLLECTION,
+  QuoteRequest,
   Undo,
   Update,
 } from "@fedify/vocab";
@@ -321,6 +322,7 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
         ? [contentHtml]
         : [new LanguageString(contentHtml, options.language), contentHtml],
       replyTarget: options.replyTarget?.id,
+      quote: options.quoteTarget?.id,
       quoteUrl: options.quoteTarget?.id,
       tags,
       interactionPolicy: serializeQuotePolicy(
@@ -419,6 +421,28 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
         activity,
         { preferSharedInbox, excludeBaseUris, fanout: "skip" },
       );
+      if (
+        options.quoteTarget.actor.id != null &&
+        options.quoteTarget.actor.id.href !==
+          this.context.getActorUri(this.bot.identifier).href
+      ) {
+        const request = new QuoteRequest({
+          id: this.context.getObjectUri(QuoteRequest, {
+            identifier: this.bot.identifier,
+            id,
+          }),
+          actor: this.context.getActorUri(this.bot.identifier),
+          object: options.quoteTarget.id,
+          instrument: msg.id,
+          to: options.quoteTarget.actor.id,
+        });
+        await this.context.sendActivity(
+          this.bot,
+          options.quoteTarget.actor,
+          request,
+          { preferSharedInbox, excludeBaseUris, fanout: "skip" },
+        );
+      }
     }
     return await createMessage(
       msg,

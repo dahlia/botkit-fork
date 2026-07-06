@@ -287,6 +287,17 @@ async function initializePostgresRepositorySchemaInTransaction(
   );
   await execute(
     sql,
+    `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."quote_authorization_refs" (
+       bot_id TEXT NOT NULL,
+       authorization_uri TEXT NOT NULL,
+       message_id TEXT NOT NULL,
+       PRIMARY KEY (bot_id, authorization_uri)
+     )`,
+    [],
+    prepare,
+  );
+  await execute(
+    sql,
     `CREATE TABLE IF NOT EXISTS "${validatedSchema}"."poll_votes" (
        bot_id TEXT NOT NULL,
        message_id TEXT NOT NULL,
@@ -1092,6 +1103,51 @@ export class PostgresRepository implements Repository, AsyncDisposable {
       [identifier, id],
     );
     return await parseQuoteAuthorization(rows[0]?.authorization_json);
+  }
+
+  async addQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+    messageId: Uuid,
+  ): Promise<void> {
+    await this.ensureReady();
+    await this.query(
+      this.sql,
+      `INSERT INTO ${this.table("quote_authorization_refs")}
+         (bot_id, authorization_uri, message_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (bot_id, authorization_uri) DO UPDATE
+       SET message_id = EXCLUDED.message_id`,
+      [identifier, authorization.href, messageId],
+    );
+  }
+
+  async findQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<Uuid | undefined> {
+    await this.ensureReady();
+    const rows = await this.query<{ readonly message_id: Uuid }>(
+      this.sql,
+      `SELECT message_id
+         FROM ${this.table("quote_authorization_refs")}
+        WHERE bot_id = $1 AND authorization_uri = $2`,
+      [identifier, authorization.href],
+    );
+    return rows[0]?.message_id;
+  }
+
+  async removeQuoteAuthorizationReference(
+    identifier: string,
+    authorization: URL,
+  ): Promise<void> {
+    await this.ensureReady();
+    await this.query(
+      this.sql,
+      `DELETE FROM ${this.table("quote_authorization_refs")}
+        WHERE bot_id = $1 AND authorization_uri = $2`,
+      [identifier, authorization.href],
+    );
   }
 
   async vote(
