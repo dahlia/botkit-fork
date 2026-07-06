@@ -356,6 +356,24 @@ describe("shared inbox routing", () => {
     const targetId = new URL(
       "https://example.com/ap/actor/alpha/note/01950000-0000-7000-8000-000000000301",
     );
+    const targetMessageId = "01950000-0000-7000-8000-000000000301" as Uuid;
+    await repository.addMessage(
+      "alpha",
+      targetMessageId,
+      new Create({
+        id: new URL(
+          `https://example.com/ap/actor/alpha/create/${targetMessageId}`,
+        ),
+        actor: new URL("https://example.com/ap/actor/alpha"),
+        to: PUBLIC_COLLECTION,
+        object: new Note({
+          id: targetId,
+          attribution: new URL("https://example.com/ap/actor/alpha"),
+          to: PUBLIC_COLLECTION,
+          content: "Alpha's quoteable post",
+        }),
+      }),
+    );
     const authorizationId = "01950000-0000-7000-8000-000000000302" as Uuid;
     const authorizationUrl = new URL(
       `https://example.com/ap/actor/alpha/quote-authorization/${authorizationId}`,

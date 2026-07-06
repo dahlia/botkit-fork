@@ -2316,6 +2316,82 @@ test("BotImpl.onCreated()", async (t) => {
     ctx.forwardedRecipients = [];
   });
 
+  await t.test("on authorized FEP quote with widened audience", async () => {
+    const quoteId = new URL(
+      "https://example.com/ap/note/9cfd7129-4cf0-4505-90d8-3cac2dc42438",
+    );
+    const targetId = new URL(
+      "https://example.com/ap/note/a6358f1b-c978-49d3-8065-37a1df6168e0",
+    );
+    await repository.addMessage(
+      "bot",
+      "a6358f1b-c978-49d3-8065-37a1df6168e0",
+      new Create({
+        id: new URL(
+          "https://example.com/ap/create/a6358f1b-c978-49d3-8065-37a1df6168e0",
+        ),
+        actor: new URL("https://example.com/ap/actor/bot"),
+        to: new URL("https://example.com/ap/actor/bot/followers"),
+        object: new Note({
+          id: targetId,
+          attribution: new URL("https://example.com/ap/actor/bot"),
+          to: new URL("https://example.com/ap/actor/bot/followers"),
+          content: "Followers only",
+        }),
+      }),
+    );
+    const authorizationId = "01950000-0000-7000-8000-000000000203" as Uuid;
+    const authorizationUrl = new URL(
+      "https://example.com/ap/actor/bot/quote-authorization/" +
+        authorizationId,
+    );
+    await repository.addQuoteAuthorization(
+      "bot",
+      authorizationId,
+      new QuoteAuthorization({
+        id: authorizationUrl,
+        attribution: new URL("https://example.com/ap/actor/bot"),
+        interactingObject: quoteId,
+        interactionTarget: targetId,
+      }),
+    );
+    const actor = new Person({
+      id: new URL("https://example.com/ap/actor/john"),
+      preferredUsername: "john",
+      followers: new URL("https://example.com/ap/actor/john/followers"),
+    });
+    const create = new Create({
+      id: new URL(
+        "https://example.com/ap/create/9cfd7129-4cf0-4505-90d8-3cac2dc42438",
+      ),
+      actor,
+      to: PUBLIC_COLLECTION,
+      object: new Note({
+        id: quoteId,
+        attribution: actor,
+        to: PUBLIC_COLLECTION,
+        content: "It's a public FEP quote of a followers-only post!",
+        quote: targetId,
+        quoteAuthorization: authorizationUrl,
+      }),
+    });
+    let quoted: [Session<void>, Message<MessageClass, void>][] = [];
+    bot.onQuote = (session, msg) => void (quoted.push([session, msg]));
+
+    await bot.onCreated(ctx, create);
+
+    assert.deepStrictEqual(quoted, []);
+    assert.deepStrictEqual(replied, []);
+    assert.deepStrictEqual(mentioned, []);
+    assert.deepStrictEqual(messaged.length, 1);
+    assert.deepStrictEqual(ctx.sentActivities, []);
+    assert.deepStrictEqual(ctx.forwardedRecipients, []);
+
+    quoted = [];
+    messaged = [];
+    ctx.forwardedRecipients = [];
+  });
+
   await t.test("on message", async () => {
     const create = new Create({
       id: new URL(

@@ -899,6 +899,40 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     return true;
   }
 
+  async #getMessageVisibility(
+    ctx: InboxContext<TContextData>,
+    object: Object,
+  ): Promise<MessageVisibility | null> {
+    const documentLoader = await ctx.getDocumentLoader(this);
+    const actor = object.attributionId?.href ===
+        ctx.getActorUri(this.identifier).href
+      ? await this.getSession(ctx).getActor()
+      : await object.getAttribution({
+        contextLoader: ctx.contextLoader,
+        documentLoader,
+        suppressError: true,
+      });
+    if (!isActor(actor)) return null;
+    const mentionedActorIds = new Set<string>();
+    for await (
+      const tag of object.getTags({
+        contextLoader: ctx.contextLoader,
+        documentLoader,
+        suppressError: true,
+      })
+    ) {
+      if (tag instanceof Mention && tag.href != null) {
+        mentionedActorIds.add(tag.href.href);
+      }
+    }
+    return getMessageVisibility(
+      object.toIds,
+      object.ccIds,
+      actor,
+      mentionedActorIds,
+    );
+  }
+
   async #matchesQuoteAcceptance(
     ctx: InboxContext<TContextData>,
     actorId: URL,
@@ -957,10 +991,52 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     const authorization = await this.repository.getQuoteAuthorization(
       parsed.values.id as Uuid,
     );
-    return authorization?.attributionId?.href ===
-        ctx.getActorUri(this.identifier).href &&
-      authorization.interactingObjectId?.href === object.id.href &&
-      authorization.interactionTargetId?.href === targetId.href;
+    if (
+      authorization?.attributionId?.href !==
+        ctx.getActorUri(this.identifier).href ||
+      authorization.interactingObjectId?.href !== object.id.href ||
+      authorization.interactionTargetId?.href !== targetId.href
+    ) {
+      return false;
+    }
+    const parsedTarget = parseLocalUri(
+      ctx,
+      targetId,
+      this.legacyObjectUrisIdentifier,
+    );
+    if (
+      parsedTarget?.type !== "object" ||
+      parsedTarget.values.identifier !== this.identifier
+    ) return false;
+    const stored = await this.repository.getMessage(
+      parsedTarget.values.id as Uuid,
+    );
+    if (!(stored instanceof Create)) return false;
+    const targetObject = await stored.getObject(ctx);
+    if (
+      !isMessageObject(targetObject) || targetObject.id?.href !== targetId.href
+    ) {
+      return false;
+    }
+    const quoteVisibility = await this.#getMessageVisibility(ctx, object);
+    const targetVisibility = await this.#getMessageVisibility(
+      ctx,
+      targetObject,
+    );
+    if (quoteVisibility == null || targetVisibility == null) return false;
+    if (
+      await this.#isQuoteAudienceWider(
+        ctx,
+        object,
+        targetObject,
+        quoteVisibility,
+        targetVisibility,
+      )
+    ) {
+      await this.repository.removeQuoteAuthorization(parsed.values.id as Uuid);
+      return false;
+    }
+    return true;
   }
 
   async onCreated(
