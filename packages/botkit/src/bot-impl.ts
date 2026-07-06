@@ -57,6 +57,7 @@ import {
   type Undo,
   Update,
 } from "@fedify/vocab";
+import { getLogger } from "@logtape/logtape";
 import type { Bot, CreateBotOptions, PagesOptions } from "./bot.ts";
 import type {
   BotDispatcher,
@@ -122,6 +123,14 @@ import { parseLocalUri } from "./uri.ts";
 import { SessionImpl } from "./session-impl.ts";
 import type { Session } from "./session.ts";
 import type { Text } from "./text.ts";
+
+const logger = getLogger(["botkit", "bot"]);
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string): value is Uuid {
+  return uuidPattern.test(value);
+}
 
 export interface BotImplOptions<TContextData>
   extends CreateBotOptions<TContextData> {
@@ -569,6 +578,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     values: { identifier: string; id: string },
   ): Promise<QuoteRequest | null> {
     if (values.identifier !== this.identifier) return null;
+    if (!isUuid(values.id)) return null;
     const stored = await this.repository.getMessage(values.id as Uuid);
     if (!(stored instanceof Create)) return null;
     const object = await stored.getObject(ctx);
@@ -664,9 +674,10 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     );
     if (
       parsedObj?.type === "object" && parsedObj.class === QuoteRequest &&
-      parsedObj.values.identifier === this.identifier
+      parsedObj.values.identifier === this.identifier &&
+      isUuid(parsedObj.values.id)
     ) {
-      await this.#onQuoteAccepted(ctx, accept, parsedObj.values.id as Uuid);
+      await this.#onQuoteAccepted(ctx, accept, parsedObj.values.id);
       return;
     }
     if (
@@ -704,9 +715,10 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     );
     if (
       parsedObj?.type === "object" && parsedObj.class === QuoteRequest &&
-      parsedObj.values.identifier === this.identifier
+      parsedObj.values.identifier === this.identifier &&
+      isUuid(parsedObj.values.id)
     ) {
-      await this.#onQuoteRejected(ctx, reject, parsedObj.values.id as Uuid);
+      await this.#onQuoteRejected(ctx, reject, parsedObj.values.id);
       return;
     }
     if (
@@ -759,9 +771,16 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     try {
       await this.repository.updateMessage(id, () => Promise.resolve(updated));
     } catch (error) {
-      await this.repository.removeQuoteAuthorizationReference(
-        approval.authorization.id!,
-      );
+      try {
+        await this.repository.removeQuoteAuthorizationReference(
+          approval.authorization.id!,
+        );
+      } catch (cleanupError) {
+        logger.warn(
+          "Failed to remove quote authorization reference after message update failure: {error}",
+          { error: cleanupError },
+        );
+      }
       throw error;
     }
     await this.#sendQuoteUpdate(ctx, updatedObject, approval.actor);
@@ -997,6 +1016,24 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
         update,
         { preferSharedInbox, excludeBaseUris },
       );
+    }
+    if (object.replyTargetId != null) {
+      const replyTarget = await lookupObjectSafely(ctx, object.replyTargetId);
+      if (isMessageObject(replyTarget)) {
+        const replyActor = await replyTarget.getAttribution({
+          contextLoader: ctx.contextLoader,
+          documentLoader: ctx.documentLoader,
+          suppressError: true,
+        });
+        if (isActor(replyActor)) {
+          await ctx.sendActivity(
+            this,
+            replyActor,
+            update,
+            { preferSharedInbox, excludeBaseUris, fanout: "skip" },
+          );
+        }
+      }
     }
     await ctx.sendActivity(
       this,

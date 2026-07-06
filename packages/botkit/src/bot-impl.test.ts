@@ -13,7 +13,7 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import type { UnverifiedActivityReason } from "@fedify/fedify";
+import type { RequestContext, UnverifiedActivityReason } from "@fedify/fedify";
 import { type InboxContext, MemoryKvStore } from "@fedify/fedify/federation";
 import {
   Accept,
@@ -3685,6 +3685,83 @@ test("BotImpl.onFollowAccepted() accepts quote approvals", async () => {
   assert.deepStrictEqual(approver?.id, author.id);
 });
 
+test("BotImpl.onFollowAccepted() sends quote updates to reply targets", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const author = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const replyAuthor = new Person({
+    id: new URL("https://reply.example/users/bob"),
+    preferredUsername: "bob",
+  });
+  const target = new Note({
+    id: new URL("https://remote.example/notes/original"),
+    attribution: author,
+    content: "Original.",
+    to: PUBLIC_COLLECTION,
+  });
+  const replyTarget = new Note({
+    id: new URL("https://reply.example/notes/thread"),
+    attribution: replyAuthor,
+    content: "Thread starter.",
+    to: PUBLIC_COLLECTION,
+  });
+  Object.defineProperty(ctx, "lookupObject", {
+    value: (id: URL) =>
+      Promise.resolve(
+        id.href === target.id?.href
+          ? target
+          : id.href === replyTarget.id?.href
+          ? replyTarget
+          : null,
+      ),
+  });
+  const targetMessage = await createMessage(target, session, {});
+  const replyMessage = await createMessage(replyTarget, session, {});
+  const quote = await session.publish(text`Please approve this.`, {
+    quoteTarget: targetMessage,
+    replyTarget: replyMessage,
+  });
+  const parsed = ctx.parseUri(quote.id);
+  assert.ok(parsed?.type === "object");
+  const messageId = parsed.values.id as Uuid;
+  const authorization = new QuoteAuthorization({
+    id: new URL("https://remote.example/stamps/1"),
+    attribution: author.id,
+    interactingObject: quote.id,
+    interactionTarget: target.id,
+  });
+  ctx.sentActivities = [];
+
+  await bot.onFollowAccepted(
+    ctx,
+    new Accept({
+      actor: author,
+      object: ctx.getObjectUri(QuoteRequest, {
+        identifier: bot.identifier,
+        id: messageId,
+      }),
+      result: authorization,
+    }),
+  );
+
+  assert.deepStrictEqual(ctx.sentActivities.length, 3);
+  assert.deepStrictEqual(ctx.sentActivities[0].recipients, "followers");
+  assert.ok(ctx.sentActivities[0].activity instanceof Update);
+  assert.deepStrictEqual(ctx.sentActivities[1].recipients, [replyAuthor]);
+  assert.ok(ctx.sentActivities[1].activity instanceof Update);
+  assert.deepStrictEqual(ctx.sentActivities[2].recipients, [author]);
+  assert.ok(ctx.sentActivities[2].activity instanceof Update);
+});
+
 test("BotImpl.onFollowAccepted() cleans references after update failures", async () => {
   class FailingUpdateRepository extends MemoryRepository {
     override updateMessage(
@@ -4039,6 +4116,78 @@ test("BotImpl.onDeleted() keeps references after update failures", async () => {
   assert.ok(object instanceof Note);
   assert.deepStrictEqual(object.quoteAuthorizationId, authorization.id);
   assert.deepStrictEqual(ctx.sentActivities.length, 0);
+});
+
+test("BotImpl ignores malformed quote request IDs", async (t) => {
+  class ThrowingMessageRepository extends MemoryRepository {
+    override getMessage(
+      identifier: string,
+      id: Uuid,
+    ): Promise<Create | Announce | undefined> {
+      if (identifier === "bot" && id === ("not-a-uuid" as Uuid)) {
+        return Promise.reject(new TypeError("Malformed UUID reached storage."));
+      }
+      return super.getMessage(identifier, id);
+    }
+  }
+
+  await t.test("dispatchQuoteRequest()", async () => {
+    const repository = new ThrowingMessageRepository();
+    const bot = new BotImpl<void>({
+      kv: new MemoryKvStore(),
+      repository,
+      username: "bot",
+    });
+    const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+
+    assert.deepStrictEqual(
+      await bot.dispatchQuoteRequest(ctx as unknown as RequestContext<void>, {
+        identifier: "bot",
+        id: "not-a-uuid",
+      }),
+      null,
+    );
+  });
+
+  await t.test("onFollowAccepted()", async () => {
+    const repository = new ThrowingMessageRepository();
+    const bot = new BotImpl<void>({
+      kv: new MemoryKvStore(),
+      repository,
+      username: "bot",
+    });
+    const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+    await bot.onFollowAccepted(
+      ctx,
+      new Accept({
+        actor: new URL("https://remote.example/users/alice"),
+        object: ctx.getObjectUri(QuoteRequest, {
+          identifier: bot.identifier,
+          id: "not-a-uuid",
+        }),
+      }),
+    );
+  });
+
+  await t.test("onFollowRejected()", async () => {
+    const repository = new ThrowingMessageRepository();
+    const bot = new BotImpl<void>({
+      kv: new MemoryKvStore(),
+      repository,
+      username: "bot",
+    });
+    const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+    await bot.onFollowRejected(
+      ctx,
+      new Reject({
+        actor: new URL("https://remote.example/users/alice"),
+        object: ctx.getObjectUri(QuoteRequest, {
+          identifier: bot.identifier,
+          id: "not-a-uuid",
+        }),
+      }),
+    );
+  });
 });
 
 test("BotImpl.onFollowAccepted() with canonical follow URIs", async () => {
