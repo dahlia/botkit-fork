@@ -473,6 +473,12 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
         this.hashtags = hashtags;
         const updated = Temporal.Now.instant();
         this.updated = updated;
+        const quoteTargetActorId = this.quoteTarget?.actor.id;
+        const privateQuoteAudienceIds = quoteTargetActorId != null &&
+            (this.visibility === "followers" || this.visibility === "direct") &&
+            !mentionedActorIds.some((id) => id.href === quoteTargetActorId.href)
+          ? [quoteTargetActorId]
+          : [];
         const newMessage = message.clone({
           contents: this.language == null
             ? [contentHtml]
@@ -484,8 +490,9 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
             ? [
               this.session.context.getFollowersUri(this.session.bot.identifier),
               ...mentionedActorIds,
+              ...privateQuoteAudienceIds,
             ]
-            : mentionedActorIds,
+            : [...mentionedActorIds, ...privateQuoteAudienceIds],
           ccs: this.visibility === "public"
             ? [
               this.session.context.getFollowersUri(this.session.bot.identifier),
@@ -905,6 +912,10 @@ export async function createMessage<T extends MessageClass, TContextData>(
     : raw.quoteAuthorizationId == null
     ? "pending"
     : "accepted";
+  const directRecipientIds = new Set(mentionedActorIds);
+  if (quoteTarget?.actor.id != null) {
+    directRecipientIds.add(quoteTarget.actor.id.href);
+  }
   return new (authorized ? AuthorizedMessageImpl : MessageImpl)(session, {
     raw,
     id: raw.id,
@@ -913,7 +924,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
       raw.toIds,
       raw.ccIds,
       actor,
-      mentionedActorIds,
+      directRecipientIds,
     ),
     language: raw.content instanceof LanguageString
       ? raw.content.locale

@@ -759,18 +759,15 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     ) {
       return;
     }
+    const quoteId = object.quoteId;
     const approval = await this.#validateQuoteApproval(ctx, accept, object);
     if (approval == null) return;
-    const updatedObject = object.clone({
-      quoteAuthorization: approval.authorization.id,
-      updated: Temporal.Now.instant(),
-    });
-    const updated = stored.clone({ object: updatedObject });
     await this.repository.addQuoteAuthorizationReference(
       approval.authorization.id!,
       id,
       approval.actor.id!,
     );
+    let updatedObject: MessageClass | undefined;
     const removeReference = async () => {
       try {
         await this.repository.removeQuoteAuthorizationReference(
@@ -786,9 +783,23 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     try {
       const wasUpdated = await this.repository.updateMessage(
         id,
-        () => Promise.resolve(updated),
+        async (existing) => {
+          if (!(existing instanceof Create)) return;
+          const existingObject = await existing.getObject(ctx);
+          if (
+            !isMessageObject(existingObject) || existingObject.id == null ||
+            existingObject.quoteId?.href !== quoteId.href
+          ) {
+            return;
+          }
+          updatedObject = existingObject.clone({
+            quoteAuthorization: approval.authorization.id,
+            updated: Temporal.Now.instant(),
+          });
+          return existing.clone({ object: updatedObject });
+        },
       );
-      if (!wasUpdated) {
+      if (!wasUpdated || updatedObject == null) {
         await removeReference();
         return;
       }
@@ -1030,13 +1041,31 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     const mentionedActors = (await Promise.all(
       mentionUris.map((uri) => lookupObjectSafely(this, ctx, uri)),
     )).filter(isActor);
-    if (mentionedActors.length > 0) {
+    const sentActorIds = new Set<string>();
+    const sendActorOnce = async (actor: Actor) => {
+      if (actor.id == null || sentActorIds.has(actor.id.href)) return;
+      sentActorIds.add(actor.id.href);
       await ctx.sendActivity(
         this,
-        mentionedActors,
+        actor,
         update,
-        { preferSharedInbox, excludeBaseUris },
+        { preferSharedInbox, excludeBaseUris, fanout: "skip" },
       );
+    };
+    if (mentionedActors.length > 0) {
+      const unsentMentionedActors = mentionedActors.filter((actor) => {
+        if (actor.id == null || sentActorIds.has(actor.id.href)) return false;
+        sentActorIds.add(actor.id.href);
+        return true;
+      });
+      if (unsentMentionedActors.length > 0) {
+        await ctx.sendActivity(
+          this,
+          unsentMentionedActors,
+          update,
+          { preferSharedInbox, excludeBaseUris },
+        );
+      }
     }
     if (object.replyTargetId != null) {
       const replyTarget = await lookupObjectSafely(
@@ -1050,22 +1079,10 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
           documentLoader: ctx.documentLoader,
           suppressError: true,
         });
-        if (isActor(replyActor)) {
-          await ctx.sendActivity(
-            this,
-            replyActor,
-            update,
-            { preferSharedInbox, excludeBaseUris, fanout: "skip" },
-          );
-        }
+        if (isActor(replyActor)) await sendActorOnce(replyActor);
       }
     }
-    await ctx.sendActivity(
-      this,
-      quoteActor,
-      update,
-      { preferSharedInbox, excludeBaseUris, fanout: "skip" },
-    );
+    await sendActorOnce(quoteActor);
   }
 
   async onQuoteRequested(

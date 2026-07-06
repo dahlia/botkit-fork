@@ -312,7 +312,8 @@ test("SessionImpl.republishProfile()", async () => {
 
 test("SessionImpl.publish()", async (t) => {
   const kv = new MemoryKvStore();
-  const bot = new BotImpl<void>({ kv, username: "bot" });
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({ kv, repository, username: "bot" });
   const ctx = createMockContext(bot, "https://example.com");
   const session = new SessionImpl(bot, ctx);
 
@@ -585,6 +586,45 @@ test("SessionImpl.publish()", async (t) => {
       assert.ok(object instanceof Note);
       assert.ok(object.toIds.includes(originalAuthorId));
     }
+  });
+
+  await t.test("direct quote preserves quoted author on update", async () => {
+    const originalAuthorId = new URL("https://remote.example/ap/actor/john");
+    const originalAuthor = new Person({
+      id: originalAuthorId,
+      preferredUsername: "john",
+    });
+    const originalPost = new Note({
+      id: new URL("https://remote.example/ap/note/direct"),
+      content: "<p>Direct post</p>",
+      attribution: originalAuthor,
+      to: originalAuthorId,
+    });
+    const originalMsg = await createMessage<Note, void>(
+      originalPost,
+      session,
+      {},
+    );
+    ctx.sentActivities = [];
+    const quote = await session.publish(text`Direct quote`, {
+      quoteTarget: originalMsg,
+      visibility: "direct",
+    });
+
+    assert.deepStrictEqual(quote.visibility, "direct");
+    assert.ok(quote.raw.toIds.includes(originalAuthorId));
+    ctx.sentActivities = [];
+    await quote.update(text`Updated direct quote`);
+
+    assert.deepStrictEqual(quote.visibility, "direct");
+    assert.ok(quote.raw.toIds.includes(originalAuthorId));
+    const parsed = ctx.parseUri(quote.id);
+    assert.ok(parsed?.type === "object");
+    const stored = await repository.getMessage("bot", parsed.values.id as Uuid);
+    assert.ok(stored instanceof Create);
+    const object = await stored.getObject(ctx);
+    assert.ok(object instanceof Note);
+    assert.ok(object.toIds.includes(originalAuthorId));
   });
 
   await t.test("poll single choice", async () => {
