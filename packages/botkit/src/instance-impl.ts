@@ -688,7 +688,11 @@ export class InstanceImpl<TContextData>
           if (parsed.identifier != null) targets.add(parsed.identifier);
         }
       }
-      if (del.objectId != null) {
+      if (
+        del.objectId != null &&
+        typeof this.repository.findQuoteAuthorizationReferenceIdentifiers ===
+          "function"
+      ) {
         for await (
           const identifier of this.repository
             .findQuoteAuthorizationReferenceIdentifiers(del.objectId)

@@ -1700,8 +1700,11 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       // @ts-ignore: quoteTarget.class satisfies (typeof messageClasses)[number]
       messageClasses.includes(quoteTarget.class) &&
       quoteTarget.values.identifier === this.identifier;
-    if (requiresQuoteAuthorization && isLocalQuoteTarget) {
-      await this.#hasValidQuoteAuthorization(ctx, object, fepQuoteUrl);
+    if (
+      requiresQuoteAuthorization && isLocalQuoteTarget &&
+      !await this.#hasValidQuoteAuthorization(ctx, object, fepQuoteUrl)
+    ) {
+      return;
     }
     if (
       this.onQuote != null &&
@@ -2454,6 +2457,10 @@ export class MigrationGatedRepository implements Repository {
     authorization: URL,
   ): AsyncIterable<string> {
     await this.#migration;
+    if (
+      typeof this.#repository.findQuoteAuthorizationReferenceIdentifiers !==
+        "function"
+    ) return;
     yield* this.#repository.findQuoteAuthorizationReferenceIdentifiers(
       authorization,
     );
@@ -2464,6 +2471,10 @@ export class MigrationGatedRepository implements Repository {
     authorization: URL,
   ): Promise<URL | undefined> {
     await this.#migration;
+    if (
+      typeof this.#repository.findQuoteAuthorizationReferenceAttribution !==
+        "function"
+    ) return undefined;
     return await this.#repository.findQuoteAuthorizationReferenceAttribution(
       identifier,
       authorization,

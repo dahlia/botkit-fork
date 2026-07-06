@@ -47,7 +47,7 @@ import {
 } from "@fedify/vocab";
 import assert from "node:assert";
 import { describe, test } from "node:test";
-import { BotImpl } from "./bot-impl.ts";
+import { BotImpl, MigrationGatedRepository } from "./bot-impl.ts";
 import type { CustomEmoji } from "./emoji.ts";
 import type { FollowRequest } from "./follow.ts";
 import { createMessage, isQuoteLink } from "./message-impl.ts";
@@ -59,7 +59,7 @@ import type {
 } from "./message.ts";
 import type { Vote } from "./poll.ts";
 import type { Like, Reaction } from "./reaction.ts";
-import { MemoryRepository, type Uuid } from "./repository.ts";
+import { MemoryRepository, type Repository, type Uuid } from "./repository.ts";
 import { SessionImpl } from "./session-impl.ts";
 import type { Session } from "./session.ts";
 import { mention, strong, text } from "./text.ts";
@@ -2099,21 +2099,12 @@ test("BotImpl.onCreated()", async (t) => {
 
     await bot.onCreated(ctx, create);
 
-    assert.deepStrictEqual(quoted.length, 1);
-    const [, msg] = quoted[0];
-    assert.ok(msg.quoteTarget != null);
-    assert.deepStrictEqual(
-      msg.quoteTarget.id,
-      new URL(
-        "https://example.com/ap/note/a6358f1b-c978-49d3-8065-37a1df6168de",
-      ),
-    );
-    assert.deepStrictEqual(msg.quoteApproved, false);
+    assert.deepStrictEqual(quoted, []);
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
-    assert.deepStrictEqual(messaged, quoted);
+    assert.deepStrictEqual(messaged, []);
     assert.deepStrictEqual(ctx.sentActivities, []);
-    assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
+    assert.deepStrictEqual(ctx.forwardedRecipients, []);
 
     quoted = [];
     messaged = [];
@@ -2156,16 +2147,12 @@ test("BotImpl.onCreated()", async (t) => {
 
     await bot.onCreated(ctx, create);
 
-    assert.deepStrictEqual(quoted.length, 1);
-    const [, msg] = quoted[0];
-    assert.ok(msg.quoteTarget != null);
-    assert.deepStrictEqual(msg.quoteTarget.id, targetId);
-    assert.deepStrictEqual(msg.quoteApproved, false);
+    assert.deepStrictEqual(quoted, []);
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
-    assert.deepStrictEqual(messaged, quoted);
+    assert.deepStrictEqual(messaged, []);
     assert.deepStrictEqual(ctx.sentActivities, []);
-    assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
+    assert.deepStrictEqual(ctx.forwardedRecipients, []);
 
     quoted = [];
     messaged = [];
@@ -2459,14 +2446,10 @@ test("BotImpl.onCreated()", async (t) => {
 
     await bot.onCreated(ctx, create);
 
-    assert.deepStrictEqual(quoted.length, 1);
-    const [, msg] = quoted[0];
-    assert.ok(msg.quoteTarget != null);
-    assert.deepStrictEqual(msg.quoteTarget.id, targetId);
-    assert.deepStrictEqual(msg.quoteApproved, false);
+    assert.deepStrictEqual(quoted, []);
     assert.deepStrictEqual(replied, []);
     assert.deepStrictEqual(mentioned, []);
-    assert.deepStrictEqual(messaged, quoted);
+    assert.deepStrictEqual(messaged, []);
     assert.deepStrictEqual(ctx.sentActivities.length, 2);
     const [actorDelete, followersDelete] = ctx.sentActivities;
     assert.deepStrictEqual(
@@ -2478,7 +2461,7 @@ test("BotImpl.onCreated()", async (t) => {
     assert.deepStrictEqual(followersDelete.recipients, "followers");
     assert.ok(followersDelete.activity instanceof Delete);
     assert.deepStrictEqual(followersDelete.activity.objectId, authorizationUrl);
-    assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
+    assert.deepStrictEqual(ctx.forwardedRecipients, []);
 
     quoted = [];
     messaged = [];
@@ -2879,6 +2862,22 @@ test("BotImpl.dispatchNodeInfo()", () => {
   });
 });
 
+test("MigrationGatedRepository tolerates missing quote reference indexes", async () => {
+  const underlying = hideRepositoryMethods(new MemoryRepository(), [
+    "findQuoteAuthorizationReferenceIdentifiers",
+  ]);
+  const repository = new MigrationGatedRepository(underlying, "bot");
+
+  assert.deepStrictEqual(
+    await Array.fromAsync(
+      repository.findQuoteAuthorizationReferenceIdentifiers(
+        new URL("https://remote.example/stamps/1"),
+      ),
+    ),
+    [],
+  );
+});
+
 test("BotImpl.fetch()", async () => {
   const bot = new BotImpl<void>({
     kv: new MemoryKvStore(),
@@ -3268,6 +3267,19 @@ function createMockInboxContext(
     return Promise.resolve();
   };
   return ctx;
+}
+
+function hideRepositoryMethods(
+  repository: Repository,
+  hiddenMethods: readonly PropertyKey[],
+): Repository {
+  return new Proxy(repository, {
+    get(target, prop, receiver) {
+      if (hiddenMethods.includes(prop)) return undefined;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 test("BotImpl.onVote()", async (t) => {

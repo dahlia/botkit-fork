@@ -33,7 +33,7 @@ import { describe, test } from "node:test";
 import type { Bot } from "./bot.ts";
 import { BotImpl } from "./bot-impl.ts";
 import { InstanceImpl } from "./instance-impl.ts";
-import { MemoryRepository, type Uuid } from "./repository.ts";
+import { MemoryRepository, type Repository, type Uuid } from "./repository.ts";
 
 function createMockInboxContext<TContextData>(
   instance: InstanceImpl<TContextData>,
@@ -85,6 +85,19 @@ function createHarness(): Harness {
     undefined,
   );
   return { instance, repository, alpha, beta, ctx };
+}
+
+function hideRepositoryMethods(
+  repository: Repository,
+  hiddenMethods: readonly PropertyKey[],
+): Repository {
+  return new Proxy(repository, {
+    get(target, prop, receiver) {
+      if (hiddenMethods.includes(prop)) return undefined;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 function remotePerson(handle: string): Person {
@@ -555,6 +568,33 @@ describe("shared inbox routing", () => {
     assert.ok(object instanceof Note);
     assert.deepStrictEqual(object.quoteAuthorizationId, null);
     assert.deepStrictEqual(object.quoteId, null);
+  });
+
+  test("routes Deletes when quote reference indexes are unsupported", async () => {
+    const repository = hideRepositoryMethods(new MemoryRepository(), [
+      "findQuoteAuthorizationReferenceIdentifiers",
+    ]);
+    const instance = new InstanceImpl<void>({
+      kv: new MemoryKvStore(),
+      repository,
+    });
+    instance.createBot("alpha", { username: "alphabot" });
+    const ctx = createMockInboxContext(
+      instance,
+      "https://example.com/",
+      undefined,
+    );
+
+    await assert.doesNotReject(() =>
+      instance.onDeleted(
+        ctx,
+        new Delete({
+          actor: remotePerson("john"),
+          object: new URL("https://remote.example/stamps/1"),
+          to: new URL("https://example.com/ap/actor/alpha"),
+        }),
+      )
+    );
   });
 
   test("routes dynamic bot quote authorization Deletes by reference index", async () => {

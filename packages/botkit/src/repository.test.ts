@@ -57,6 +57,19 @@ const factories: Record<string, () => Repository> = {
   MemoryCachedRepository: createMemoryCachedRepository,
 };
 
+function hideRepositoryMethods(
+  repository: Repository,
+  hiddenMethods: readonly PropertyKey[],
+): Repository {
+  return new Proxy(repository, {
+    get(target, prop, receiver) {
+      if (hiddenMethods.includes(prop)) return undefined;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 for (const [name, factory] of Object.entries(factories)) {
   test(`${name} stores quote authorizations`, async () => {
     const repository = factory();
@@ -299,6 +312,42 @@ test("MemoryCachedRepository keeps quote authorization reference cache on remove
   assert.deepStrictEqual(
     await repository.findQuoteAuthorizationReference("bot", authorization),
     messageId,
+  );
+});
+
+test("MemoryCachedRepository tolerates missing quote reference index methods", async () => {
+  const underlying = new MemoryRepository();
+  const authorization = new URL("https://remote.example/stamps/1");
+  const messageId = "01942976-3400-7f34-872e-2cbf0f9eeac4" as Uuid;
+  await underlying.addQuoteAuthorizationReference(
+    "bot",
+    authorization,
+    messageId,
+    new URL("https://remote.example/actors/alice"),
+  );
+  const repository = new MemoryCachedRepository(
+    hideRepositoryMethods(underlying, [
+      "findQuoteAuthorizationReferenceAttribution",
+      "findQuoteAuthorizationReferenceIdentifiers",
+    ]),
+  );
+
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference("bot", authorization),
+    messageId,
+  );
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReferenceAttribution(
+      "bot",
+      authorization,
+    ),
+    undefined,
+  );
+  assert.deepStrictEqual(
+    await Array.fromAsync(
+      repository.findQuoteAuthorizationReferenceIdentifiers(authorization),
+    ),
+    [],
   );
 });
 

@@ -850,6 +850,10 @@ export class ActorScopedRepository {
   findQuoteAuthorizationReferenceAttribution(
     authorization: URL,
   ): Promise<URL | undefined> {
+    if (
+      typeof this.repository.findQuoteAuthorizationReferenceAttribution !==
+        "function"
+    ) return Promise.resolve(undefined);
     return this.repository.findQuoteAuthorizationReferenceAttribution(
       this.identifier,
       authorization,
@@ -2882,11 +2886,14 @@ export class MemoryCachedRepository implements Repository {
       authorization,
     );
     if (found != null) {
-      const attribution = await this.underlying
-        .findQuoteAuthorizationReferenceAttribution(
-          identifier,
-          authorization,
-        );
+      const attribution =
+        typeof this.underlying.findQuoteAuthorizationReferenceAttribution ===
+            "function"
+          ? await this.underlying.findQuoteAuthorizationReferenceAttribution(
+            identifier,
+            authorization,
+          )
+          : undefined;
       await this.cache.addQuoteAuthorizationReference(
         identifier,
         authorization,
@@ -2900,6 +2907,10 @@ export class MemoryCachedRepository implements Repository {
   async *findQuoteAuthorizationReferenceIdentifiers(
     authorization: URL,
   ): AsyncIterable<string> {
+    if (
+      typeof this.underlying.findQuoteAuthorizationReferenceIdentifiers !==
+        "function"
+    ) return;
     for await (
       const identifier of this.underlying
         .findQuoteAuthorizationReferenceIdentifiers(authorization)
@@ -2909,11 +2920,14 @@ export class MemoryCachedRepository implements Repository {
         authorization,
       );
       if (found != null) {
-        const attribution = await this.underlying
-          .findQuoteAuthorizationReferenceAttribution(
-            identifier,
-            authorization,
-          );
+        const attribution =
+          typeof this.underlying.findQuoteAuthorizationReferenceAttribution ===
+              "function"
+            ? await this.underlying.findQuoteAuthorizationReferenceAttribution(
+              identifier,
+              authorization,
+            )
+            : undefined;
         await this.cache.addQuoteAuthorizationReference(
           identifier,
           authorization,
@@ -2934,16 +2948,17 @@ export class MemoryCachedRepository implements Repository {
       authorization,
     );
     if (cached != null) return cached;
+    if (
+      typeof this.underlying.findQuoteAuthorizationReferenceAttribution !==
+        "function"
+    ) return undefined;
     const found = await this.underlying.findQuoteAuthorizationReference(
       identifier,
       authorization,
     );
     if (found == null) return undefined;
     const attribution = await this.underlying
-      .findQuoteAuthorizationReferenceAttribution(
-        identifier,
-        authorization,
-      );
+      .findQuoteAuthorizationReferenceAttribution(identifier, authorization);
     if (attribution != null) {
       await this.cache.addQuoteAuthorizationReference(
         identifier,
