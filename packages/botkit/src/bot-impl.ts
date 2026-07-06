@@ -807,7 +807,10 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       } else if (
         await this.#matchesQuoteAcceptance(ctx, actor.id, policy.manual)
       ) {
-        // Leave pending for the event handler below.
+        if (existingAuthorization != null) {
+          await quoteRequest.accept();
+          return;
+        }
       } else {
         await revokeAndRejectQuoteRequest();
       }
@@ -818,7 +821,10 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     } else if (
       await this.#matchesQuoteApprovals(ctx, actor.id, rule.manualApprovals)
     ) {
-      // Leave pending for the event handler below.
+      if (existingAuthorization != null) {
+        await quoteRequest.accept();
+        return;
+      }
     } else {
       await revokeAndRejectQuoteRequest();
     }
@@ -1098,7 +1104,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
         break;
       }
     }
-    if (quoteUrl == null) quoteUrl = object.quoteUrl;
+    if (quoteUrl == null) quoteUrl = object.quoteId ?? object.quoteUrl;
     const quoteTarget = parseLocalUri(
       ctx,
       quoteUrl,

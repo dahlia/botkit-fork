@@ -817,7 +817,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
       quoteUrl = quoteLink.href;
       break;
     }
-    if (quoteUrl == null) quoteUrl = raw.quoteUrl;
+    if (quoteUrl == null) quoteUrl = raw.quoteId ?? raw.quoteUrl;
     let qt: Object | null = null;
     const parsed = parseLocalUri(
       session.context,
