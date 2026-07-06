@@ -38,6 +38,7 @@ import {
   type Repository,
   type Uuid,
 } from "./repository.ts";
+import { hideRepositoryMethods } from "./helpers.ts";
 
 function createKvRepository(): Repository {
   return new KvRepository(new MemoryKvStore());
@@ -56,19 +57,6 @@ const factories: Record<string, () => Repository> = {
   MemoryRepository: createMemoryRepository,
   MemoryCachedRepository: createMemoryCachedRepository,
 };
-
-function hideRepositoryMethods(
-  repository: Repository,
-  hiddenMethods: readonly PropertyKey[],
-): Repository {
-  return new Proxy(repository, {
-    get(target, prop, receiver) {
-      if (hiddenMethods.includes(prop)) return undefined;
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-}
 
 for (const [name, factory] of Object.entries(factories)) {
   test(`${name} stores quote authorizations`, async () => {

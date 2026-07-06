@@ -899,6 +899,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     | undefined
   > {
     const quoteId = object.quoteId;
+    const quoteAuthorizationId = object.quoteAuthorizationId;
     let strippedObject: MessageClass | undefined;
     const wasUpdated = await this.repository.updateMessage(
       id,
@@ -907,7 +908,10 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
         const existingObject = await existing.getObject(ctx);
         if (
           !isMessageObject(existingObject) || existingObject.id == null ||
-          (quoteId != null && existingObject.quoteId?.href !== quoteId.href)
+          (quoteId != null && existingObject.quoteId?.href !== quoteId.href) ||
+          (quoteAuthorizationId != null &&
+            existingObject.quoteAuthorizationId?.href !==
+              quoteAuthorizationId.href)
         ) {
           return;
         }
@@ -2221,6 +2225,7 @@ export function wrapBotImpl<TContextData>(
 export class MigrationGatedRepository implements Repository {
   readonly #repository: Repository;
   readonly #migration: Promise<void>;
+  readonly #missingQuoteAuthorizationReferenceMethods = new Set<string>();
 
   constructor(repository: Repository, identifier: string) {
     this.#repository = repository;
@@ -2228,6 +2233,15 @@ export class MigrationGatedRepository implements Repository {
     // The rejection is re-thrown by the first awaiting operation; this
     // no-op handler only prevents an unhandled rejection warning:
     this.#migration.catch(() => {});
+  }
+
+  #warnMissingQuoteAuthorizationReferenceMethod(method: string): void {
+    if (this.#missingQuoteAuthorizationReferenceMethods.has(method)) return;
+    this.#missingQuoteAuthorizationReferenceMethods.add(method);
+    logger.warn(
+      "Repository does not implement {method}; quote-authorization revocation and cleanup are disabled for this repository.",
+      { method },
+    );
   }
 
   async setKeyPairs(
@@ -2460,7 +2474,12 @@ export class MigrationGatedRepository implements Repository {
     if (
       typeof this.#repository.findQuoteAuthorizationReferenceIdentifiers !==
         "function"
-    ) return;
+    ) {
+      this.#warnMissingQuoteAuthorizationReferenceMethod(
+        "findQuoteAuthorizationReferenceIdentifiers",
+      );
+      return;
+    }
     yield* this.#repository.findQuoteAuthorizationReferenceIdentifiers(
       authorization,
     );
@@ -2474,7 +2493,12 @@ export class MigrationGatedRepository implements Repository {
     if (
       typeof this.#repository.findQuoteAuthorizationReferenceAttribution !==
         "function"
-    ) return undefined;
+    ) {
+      this.#warnMissingQuoteAuthorizationReferenceMethod(
+        "findQuoteAuthorizationReferenceAttribution",
+      );
+      return undefined;
+    }
     return await this.#repository.findQuoteAuthorizationReferenceAttribution(
       identifier,
       authorization,

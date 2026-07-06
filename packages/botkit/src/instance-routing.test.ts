@@ -33,7 +33,8 @@ import { describe, test } from "node:test";
 import type { Bot } from "./bot.ts";
 import { BotImpl } from "./bot-impl.ts";
 import { InstanceImpl } from "./instance-impl.ts";
-import { MemoryRepository, type Repository, type Uuid } from "./repository.ts";
+import { MemoryRepository, type Uuid } from "./repository.ts";
+import { hideRepositoryMethods } from "./helpers.ts";
 
 function createMockInboxContext<TContextData>(
   instance: InstanceImpl<TContextData>,
@@ -85,19 +86,6 @@ function createHarness(): Harness {
     undefined,
   );
   return { instance, repository, alpha, beta, ctx };
-}
-
-function hideRepositoryMethods(
-  repository: Repository,
-  hiddenMethods: readonly PropertyKey[],
-): Repository {
-  return new Proxy(repository, {
-    get(target, prop, receiver) {
-      if (hiddenMethods.includes(prop)) return undefined;
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
 }
 
 function remotePerson(handle: string): Person {

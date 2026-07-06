@@ -45,6 +45,7 @@ import {
   Undo,
   Update,
 } from "@fedify/vocab";
+import { configureSync, type LogRecord, resetSync } from "@logtape/logtape";
 import assert from "node:assert";
 import { describe, test } from "node:test";
 import { BotImpl, MigrationGatedRepository } from "./bot-impl.ts";
@@ -59,9 +60,10 @@ import type {
 } from "./message.ts";
 import type { Vote } from "./poll.ts";
 import type { Like, Reaction } from "./reaction.ts";
-import { MemoryRepository, type Repository, type Uuid } from "./repository.ts";
+import { MemoryRepository, type Uuid } from "./repository.ts";
 import { SessionImpl } from "./session-impl.ts";
 import type { Session } from "./session.ts";
+import { hideRepositoryMethods } from "./helpers.ts";
 import { mention, strong, text } from "./text.ts";
 
 describe("BotImpl.getActorSummary()", () => {
@@ -2865,16 +2867,70 @@ test("BotImpl.dispatchNodeInfo()", () => {
 test("MigrationGatedRepository tolerates missing quote reference indexes", async () => {
   const underlying = hideRepositoryMethods(new MemoryRepository(), [
     "findQuoteAuthorizationReferenceIdentifiers",
+    "findQuoteAuthorizationReferenceAttribution",
   ]);
   const repository = new MigrationGatedRepository(underlying, "bot");
+  const records: LogRecord[] = [];
 
-  assert.deepStrictEqual(
-    await Array.fromAsync(
-      repository.findQuoteAuthorizationReferenceIdentifiers(
+  configureSync({
+    sinks: {
+      capture: (record) => records.push(record),
+    },
+    loggers: [
+      {
+        category: ["botkit", "bot"],
+        sinks: ["capture"],
+        lowestLevel: "warning",
+      },
+      {
+        category: ["logtape", "meta"],
+        lowestLevel: null,
+      },
+    ],
+    reset: true,
+  });
+
+  try {
+    assert.deepStrictEqual(
+      await Array.fromAsync(
+        repository.findQuoteAuthorizationReferenceIdentifiers(
+          new URL("https://remote.example/stamps/1"),
+        ),
+      ),
+      [],
+    );
+    assert.deepStrictEqual(
+      await Array.fromAsync(
+        repository.findQuoteAuthorizationReferenceIdentifiers(
+          new URL("https://remote.example/stamps/1"),
+        ),
+      ),
+      [],
+    );
+    assert.deepStrictEqual(
+      await repository.findQuoteAuthorizationReferenceAttribution(
+        "bot",
         new URL("https://remote.example/stamps/1"),
       ),
-    ),
-    [],
+      undefined,
+    );
+    assert.deepStrictEqual(
+      await repository.findQuoteAuthorizationReferenceAttribution(
+        "bot",
+        new URL("https://remote.example/stamps/1"),
+      ),
+      undefined,
+    );
+  } finally {
+    resetSync();
+  }
+
+  assert.deepStrictEqual(
+    records.map((record) => record.properties.method),
+    [
+      "findQuoteAuthorizationReferenceIdentifiers",
+      "findQuoteAuthorizationReferenceAttribution",
+    ],
   );
 });
 
@@ -3267,19 +3323,6 @@ function createMockInboxContext(
     return Promise.resolve();
   };
   return ctx;
-}
-
-function hideRepositoryMethods(
-  repository: Repository,
-  hiddenMethods: readonly PropertyKey[],
-): Repository {
-  return new Proxy(repository, {
-    get(target, prop, receiver) {
-      if (hiddenMethods.includes(prop)) return undefined;
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
 }
 
 test("BotImpl.onVote()", async (t) => {
@@ -4503,6 +4546,151 @@ test("BotImpl.onDeleted() strips revoked quote authorizations", async () => {
   assert.deepStrictEqual(revoked?.id, quote.id);
   assert.deepStrictEqual(revoked?.quoteTarget, undefined);
   assert.deepStrictEqual(revoker?.id, author.id);
+});
+
+test("BotImpl.onDeleted() keeps newer quote authorizations", async () => {
+  class ConcurrentQuoteAuthorizationRepository extends MemoryRepository {
+    replaceOnNextUpdate = false;
+
+    constructor(
+      readonly replacementAuthorization: URL,
+      readonly attribution: URL,
+    ) {
+      super();
+    }
+
+    override async updateMessage(
+      identifier: string,
+      id: Uuid,
+      updater: (
+        existing: Create | Announce,
+      ) =>
+        | Create
+        | Announce
+        | undefined
+        | Promise<Create | Announce | undefined>,
+    ): Promise<boolean> {
+      if (identifier === "bot" && this.replaceOnNextUpdate) {
+        this.replaceOnNextUpdate = false;
+        const existing = await this.getMessage(identifier, id);
+        if (existing instanceof Create) {
+          const object = await existing.getObject();
+          if (object instanceof Note) {
+            await super.updateMessage(
+              identifier,
+              id,
+              (current) =>
+                current instanceof Create
+                  ? current.clone({
+                    object: object.clone({
+                      quoteAuthorization: this.replacementAuthorization,
+                    }),
+                  })
+                  : current,
+            );
+            await this.addQuoteAuthorizationReference(
+              identifier,
+              this.replacementAuthorization,
+              id,
+              this.attribution,
+            );
+          }
+        }
+      }
+      return await super.updateMessage(identifier, id, updater);
+    }
+  }
+  const newerAuthorization = new URL("https://remote.example/stamps/2");
+  const author = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const repository = new ConcurrentQuoteAuthorizationRepository(
+    newerAuthorization,
+    author.id!,
+  );
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const target = new Note({
+    id: new URL("https://remote.example/notes/original"),
+    attribution: author,
+    content: "Original.",
+    to: PUBLIC_COLLECTION,
+  });
+  Object.defineProperty(ctx, "lookupObject", {
+    value: (id: URL) =>
+      Promise.resolve(id.href === target.id?.href ? target : null),
+  });
+  const targetMessage = await createMessage(target, session, {});
+  const quote = await session.publish(text`Please approve this.`, {
+    quoteTarget: targetMessage,
+  });
+  const parsed = ctx.parseUri(quote.id);
+  assert.ok(parsed?.type === "object");
+  const messageId = parsed.values.id as Uuid;
+  const revokedAuthorization = new QuoteAuthorization({
+    id: new URL("https://remote.example/stamps/1"),
+    attribution: author.id,
+    interactingObject: quote.id,
+    interactionTarget: target.id,
+  });
+  await bot.onFollowAccepted(
+    ctx,
+    new Accept({
+      actor: author,
+      object: ctx.getObjectUri(QuoteRequest, {
+        identifier: bot.identifier,
+        id: messageId,
+      }),
+      result: revokedAuthorization,
+    }),
+  );
+  let revoked: AuthorizedMessage<MessageClass, void> | undefined;
+  bot.onQuoteRevoked = (_session, message) => {
+    revoked = message;
+  };
+  repository.replaceOnNextUpdate = true;
+  ctx.sentActivities = [];
+  ctx.forwardedRecipients = [];
+  ctx.forwardedActivities = [];
+
+  await bot.onDeleted(
+    ctx,
+    new Delete({
+      actor: author,
+      object: revokedAuthorization.id,
+    }),
+  );
+
+  const stored = await repository.getMessage("bot", messageId);
+  assert.ok(stored instanceof Create);
+  const object = await stored.getObject(ctx);
+  assert.ok(object instanceof Note);
+  assert.deepStrictEqual(object.quoteId, target.id);
+  assert.deepStrictEqual(object.quoteAuthorizationId, newerAuthorization);
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference(
+      "bot",
+      revokedAuthorization.id!,
+    ),
+    undefined,
+  );
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference(
+      "bot",
+      newerAuthorization,
+    ),
+    messageId,
+  );
+  assert.deepStrictEqual(ctx.forwardedRecipients, ["followers"]);
+  assert.deepStrictEqual(ctx.forwardedActivities.length, 1);
+  assert.deepStrictEqual(ctx.sentActivities, []);
+  assert.deepStrictEqual(revoked, undefined);
 });
 
 test("BotImpl.onDeleted() ignores same-origin quote revocations without attribution", async () => {
