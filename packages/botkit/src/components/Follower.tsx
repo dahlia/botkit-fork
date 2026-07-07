@@ -31,7 +31,6 @@ export async function Follower({ actor, session }: FollowerProps) {
     contextLoader: context.contextLoader,
     suppressError: true,
   });
-  const authorHandle = await getActorHandle(author);
   if (author?.id == null) {
     return (
       <div class="bk-actor">
@@ -40,6 +39,7 @@ export async function Follower({ actor, session }: FollowerProps) {
       </div>
     );
   }
+  const authorHandle = await getActorHandle(author);
   const iconUrl = authorIcon?.url == null
     ? null
     : authorIcon.url instanceof Link
