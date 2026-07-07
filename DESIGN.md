@@ -185,9 +185,9 @@ of the typographic work: names and section titles are 700, everything else is
 
 Expression mode is where a more characterful display face belongs. BotKit's own
 sites pair Inter with [Space Grotesk] for headlines, used with restraint. Space
-Grotesk is loaded only on those surfaces (the project site links it from Google
-Fonts); it is not bundled with the library and never reaches a hosted bot's
-pages.
+Grotesk is loaded only on those surfaces, self-hosted as woff2 rather than
+pulled from a font CDN so a visitor's IP is never handed to a third party; it is
+not bundled with the library and never reaches a hosted bot's pages.
 
 [Inter]: https://rsms.me/inter/
 [Space Grotesk]: https://fonts.google.com/specimen/Space+Grotesk
