@@ -233,6 +233,22 @@ function createDelayedCommandClient(
   };
 }
 
+function createRecordingClient(
+  client: TestRedisClient,
+  commands: string[][],
+) {
+  return {
+    get isOpen(): boolean {
+      return client.isOpen;
+    },
+
+    async sendCommand(args: readonly string[]): Promise<unknown> {
+      commands.push([...args]);
+      return await client.sendCommand([...args]);
+    },
+  };
+}
+
 if (redisUrl == null) {
   test("RedisRepository integration tests", { skip: true }, () => {});
 } else {
@@ -423,6 +439,47 @@ if (redisUrl == null) {
         assert.deepStrictEqual(await repository.countMessages("bot"), 1);
       } finally {
         await cleanup();
+      }
+    });
+
+    test("fetches listed messages in one Redis command", async () => {
+      const prefix = `botkit_test_${crypto.randomUUID()}`;
+      const client = createClient({ url: redisUrl });
+      await client.connect();
+      const commands: string[][] = [];
+      const repository = new RedisRepository({
+        client: createRecordingClient(client, commands),
+        prefix,
+      });
+      try {
+        const firstId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+        const secondId = "01942976-3400-7f34-872e-2cbf0f9eeac4";
+        await repository.addMessage(
+          "bot",
+          firstId,
+          createMessage(firstId, "first", "2025-01-01T00:00:00Z"),
+        );
+        await repository.addMessage(
+          "bot",
+          secondId,
+          createMessage(secondId, "second", "2025-01-02T00:00:00Z"),
+        );
+
+        commands.length = 0;
+        assert.deepStrictEqual(
+          (await Array.fromAsync(repository.getMessages("bot"))).length,
+          2,
+        );
+        assert.ok(commands.some(([command]) => command === "MGET"));
+        assert.ok(
+          !commands.some(([command, key]) =>
+            command === "GET" && key?.includes(":messages:")
+          ),
+        );
+      } finally {
+        await repository.close();
+        await client.quit();
+        await cleanupPrefix(redisUrl, prefix);
       }
     });
 
@@ -778,6 +835,53 @@ if (redisUrl == null) {
       } finally {
         await client.quit();
         await cleanup();
+      }
+    });
+
+    test("fetches listed followers in one Redis command", async () => {
+      const prefix = `botkit_test_${crypto.randomUUID()}`;
+      const client = createClient({ url: redisUrl });
+      await client.connect();
+      const commands: string[][] = [];
+      const repository = new RedisRepository({
+        client: createRecordingClient(client, commands),
+        prefix,
+      });
+      try {
+        const alice = new Person({
+          id: new URL("https://example.com/ap/actor/alice"),
+          preferredUsername: "alice",
+        });
+        const bob = new Person({
+          id: new URL("https://example.com/ap/actor/bob"),
+          preferredUsername: "bob",
+        });
+        await repository.addFollower(
+          "bot",
+          new URL("https://example.com/ap/follow/alice"),
+          alice,
+        );
+        await repository.addFollower(
+          "bot",
+          new URL("https://example.com/ap/follow/bob"),
+          bob,
+        );
+
+        commands.length = 0;
+        assert.deepStrictEqual(
+          (await Array.fromAsync(repository.getFollowers("bot"))).length,
+          2,
+        );
+        assert.ok(commands.some(([command]) => command === "MGET"));
+        assert.ok(
+          !commands.some(([command, key]) =>
+            command === "GET" && key?.includes(":followers:")
+          ),
+        );
+      } finally {
+        await repository.close();
+        await client.quit();
+        await cleanupPrefix(redisUrl, prefix);
       }
     });
 

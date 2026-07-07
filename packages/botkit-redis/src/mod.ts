@@ -534,9 +534,10 @@ export class RedisRepository implements Repository, AsyncDisposable {
       options.order == null || options.order === "newest",
       options.limit,
     );
-    for (const id of ids) {
-      const json = await this.get(this.botKey(identifier, "messages", id));
-      if (json == null) continue;
+    if (ids.length < 1) return;
+    const keys = ids.map((id) => this.botKey(identifier, "messages", id));
+    const jsons = toStringArray(await this.command(["MGET", ...keys]));
+    for (const json of jsons) {
       try {
         const activity = await Activity.fromJsonLd(JSON.parse(json));
         if (activity instanceof Create || activity instanceof Announce) {
@@ -699,9 +700,10 @@ export class RedisRepository implements Repository, AsyncDisposable {
         stop.toString(),
       ]),
     );
-    for (const id of ids) {
-      const json = await this.get(this.botKey(identifier, "followers", id));
-      if (json == null) continue;
+    if (ids.length < 1) return;
+    const keys = ids.map((id) => this.botKey(identifier, "followers", id));
+    const jsons = toStringArray(await this.command(["MGET", ...keys]));
+    for (const json of jsons) {
       try {
         const actor = await Object.fromJsonLd(JSON.parse(json));
         if (isActor(actor)) yield actor;
