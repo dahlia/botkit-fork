@@ -13,10 +13,10 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-/** @jsx react-jsx */
 /** @jsxImportSource hono/jsx */
 import { LanguageString } from "@fedify/vocab-runtime";
 import { Document, Emoji, getActorHandle, Image, Link } from "@fedify/vocab";
+import { htmlXss } from "../message-impl.ts";
 import type { MessageClass } from "../message.ts";
 import type { Session } from "../session.ts";
 
@@ -51,79 +51,135 @@ export async function Message({ session, message }: MessageProps) {
     if (url == null) continue;
     customEmojis[tag.name.toString()] = url;
   }
+  const permalink = message.url?.href?.toString() ?? message.id?.href;
+  const authorLink = author?.url?.href?.toString() ?? author?.id?.href;
+  const authorIconUrl = authorIcon?.url == null
+    ? null
+    : authorIcon.url instanceof Link
+    ? authorIcon.url.href?.href
+    : authorIcon.url.href;
+  const images = attachments
+    .filter((a) => a instanceof Image || a instanceof Document)
+    .filter((a) => a.mediaType?.startsWith("image/") && a.url != null);
+  // On a bot's own profile every post is by that bot, so the author is only
+  // worth showing when it differs (e.g. a boosted post from someone else).
+  const isSelf = author?.id?.href != null &&
+    author.id.href === session.actorId?.href;
   return (
-    <article>
-      <header>
-        {author?.id
-          ? (
-            <hgroup>
-              {authorIcon?.url && (
-                <img
-                  src={authorIcon.url instanceof Link
-                    ? authorIcon.url.href?.href
-                    : authorIcon.url.href}
-                  width={authorIcon.width ?? undefined}
-                  height={authorIcon.height ?? undefined}
-                  alt={authorIcon.name?.toString() ?? undefined}
-                  style="float: left; margin-right: 1em; height: 64px;"
-                />
-              )}
-              <h3>
-                <a href={author.url?.href?.toString() ?? author.id.href}>
-                  {author.name}
-                </a>
-              </h3>{" "}
-              <p>
-                <span style="user-select: all;">{authorHandle}</span>
-              </p>
-            </hgroup>
-          )
-          : <em>(Deleted account)</em>}
-      </header>
+    <article class="bk-post">
+      {!isSelf && (
+        <div class="bk-repost">
+          <BoostIcon />
+          Reposted
+        </div>
+      )}
+      {!isSelf && (
+        <div class="bk-post__author">
+          {author?.id
+            ? (
+              <>
+                {authorIconUrl && (
+                  <img
+                    src={authorIconUrl}
+                    alt={authorIcon?.name?.toString() ?? undefined}
+                    loading="lazy"
+                  />
+                )}
+                <div>
+                  <div class="bk-post__author-name">
+                    <a href={authorLink}>{author.name?.toString()}</a>
+                  </div>
+                  <div class="bk-post__author-handle">{authorHandle}</div>
+                </div>
+              </>
+            )
+            : <em class="bk-post__author-handle">Deleted account</em>}
+        </div>
+      )}
       <div
+        class="bk-prose"
         dangerouslySetInnerHTML={{
-          __html: renderCustomEmojis(`${message.content}`, customEmojis),
+          __html: renderCustomEmojis(
+            htmlXss.process(message.content?.toString() ?? ""),
+            customEmojis,
+          ),
         }}
         lang={message.content instanceof LanguageString
           ? message.content.locale.toString()
           : undefined}
       />
-      {attachments.length > 0 && (
-        <div>
-          {attachments.filter((a) =>
-            a instanceof Image || a instanceof Document
-          ).filter((a) => a.mediaType?.startsWith("image/") && a.url != null)
-            .map((a) => (
-              <figure>
+      {images.length > 0 && (
+        <div class="bk-attachments">
+          {images.map((a, index) => {
+            const name = a.name?.toString();
+            return (
+              <figure class="bk-attachment" key={a.id?.href ?? index}>
                 <img
                   src={a.url instanceof Link ? a.url.href?.href : a.url!.href}
                   width={a.width ?? undefined}
                   height={a.height ?? undefined}
-                  alt={a.name?.toString() ?? undefined}
-                  style="max-width: 75%;"
+                  alt={name ?? undefined}
+                  loading="lazy"
                 />
-                <figcaption>{a.name?.toString()}</figcaption>
+                {name && <figcaption>{name}</figcaption>}
               </figure>
-            ))}
+            );
+          })}
         </div>
       )}
-      <footer>
-        {message.published &&
-          (
-            <a href={message.url?.href?.toString() ?? message.id?.href}>
-              <small>
-                <time dateTime={message.published.toString()}>
-                  {message.published.toLocaleString("en", {
-                    dateStyle: "full",
-                    timeStyle: "short",
-                  })}
-                </time>
-              </small>
-            </a>
-          )}
-      </footer>
+      {message.published && (
+        <div class="bk-post__foot">
+          <a class="bk-post__date" href={permalink}>
+            <time dateTime={message.published.toString()}>
+              {formatDate(message.published)}
+            </time>
+          </a>
+        </div>
+      )}
     </article>
   );
+}
+
+/** A repost/boost glyph: two arrows forming a loop. */
+function BoostIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M4.5 5.5h6.5A1.5 1.5 0 0 1 12.5 7v1.5"
+        stroke="currentColor"
+        stroke-width="1.3"
+        stroke-linecap="round"
+      />
+      <path
+        d="M6 3.5 4 5.5l2 2"
+        stroke="currentColor"
+        stroke-width="1.3"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+      <path
+        d="M11.5 10.5H5A1.5 1.5 0 0 1 3.5 9V7.5"
+        stroke="currentColor"
+        stroke-width="1.3"
+        stroke-linecap="round"
+      />
+      <path
+        d="M10 12.5 12 10.5l-2-2"
+        stroke="currentColor"
+        stroke-width="1.3"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Formats an instant as a friendly, readable date and time. */
+function formatDate(published: Temporal.Instant): string {
+  return published.toLocaleString("en", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
 const HTML_ELEMENT_REGEXP = /<\/?[^>]+>/g;
@@ -147,7 +203,7 @@ export function renderCustomEmojis(
     return html.replaceAll(CUSTOM_EMOJI_REGEXP, (match) => {
       const emoji = emojis[match] ?? emojis[match.replace(/^:|:$/g, "")];
       if (emoji == null) return match;
-      return `<img src="${emoji}" alt="${match}" style="height: 1em">`;
+      return `<img src="${emoji}" alt="${match}" class="emoji">`;
     });
   }
 }

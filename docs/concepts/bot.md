@@ -358,9 +358,16 @@ Turned off by default.
 
 The options for the web pages of the bot.
 
+BotKit serves a bot's profile, posts, and follower list with a quiet, modern
+design that foregrounds the bot's own identity.  The whole look is driven by a
+single accent color, adapts to light and dark automatically, and needs no build
+step or external CDN: the stylesheet and fonts are bundled with the package.
+See the [design language document][DESIGN.md] for the full system.
+
 `~PagesOptions.color`
-:   The color of the theme.  It will be used for the theme color of the web
-    pages.  The default color is `"green"`.
+:   The accent color of the bot's pages.  It tints links, the follow button,
+    and small highlights, and is used as the theme color for browser chrome.
+    The default color is `"green"`.
 
     Here's the list of available colors:
 
@@ -385,12 +392,20 @@ The options for the web pages of the bot.
      -  `"yellow"`
      -  `"zinc"`
 
-    See also the [*Colors* section] of the Pico CSS docs.
+    The accent values are taken from the [*Colors* section] of the Pico CSS
+    docs, so each name looks the same as it does there.
+
+`~PagesOptions.theme`
+:   The color scheme of the web pages: `"auto"` (the default) follows the
+    visitor's operating system preference, while `"light"` and `"dark"` force a
+    fixed scheme.  *This option is available since BotKit 0.5.0.*
 
 `~PagesOptions.css`
-:   The custom CSS to be injected into the web pages.  It should be a string
-    of CSS code.
+:   Custom CSS injected after BotKit's own stylesheet, so it can override any of
+    the design system's tokens or rules.  It should be a string of CSS code.
+    For example, `:root { --bk-radius: 6px; }` gives the pages squarer corners.
 
+[DESIGN.md]: https://github.com/fedify-dev/botkit/blob/main/DESIGN.md
 [*Colors* section]: https://picocss.com/docs/colors
 
 

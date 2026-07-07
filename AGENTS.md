@@ -152,6 +152,36 @@ Architecture
  -  Node.js support via *package.json* and tsdown transpilation
  -  Separate import maps for each runtime (JSR for Deno, npm for Node.js)
 
+### Web pages and design language
+
+BotKit renders each bot's public web pages (the profile, individual posts, the
+follower list, and the multi-bot instance index).  Their appearance follows
+a deliberate brand and design language, not ad-hoc styling.
+
+> [!IMPORTANT]
+> Before touching anything about the web front end, read [*DESIGN.md*].  That
+> includes the page components (*src/pages.tsx*, *src/components/*), the
+> stylesheet (*src/css/botkit.css*), accent colors and theming
+> (`~PagesOptions.color`, `~PagesOptions.theme`, `~PagesOptions.css`), and the
+> asset pipeline.  *DESIGN.md* is the source of truth for how these fit
+> together; keep changes consistent with it, and update it when the language
+> itself changes.
+
+Two rules from *DESIGN.md* matter most in everyday work:
+
+ -  *Two modes.*  Pages the library serves for a user's bot use the restrained
+    *Canvas mode*, which foregrounds the bot's own identity and keeps BotKit
+    quiet.  BotKit's expressive *Expression mode* is reserved for BotKit's own
+    sites (its homepage and docs) and must never leak into a hosted bot's pages.
+
+ -  *Bundled assets, no user build step.*  The stylesheet and web fonts are
+    authored under *src/css/* and *src/fonts/*, then compiled into the committed
+    _src/static/\*.ts_ modules by `mise run generate:assets`.  Never hand-edit
+    _src/static/\*.ts_; edit the sources and regenerate.  The assets are served
+    from a content-hashed path, so regenerating busts caches automatically.
+
+[*DESIGN.md*]: DESIGN.md
+
 
 Development practices
 ---------------------

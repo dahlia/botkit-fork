@@ -84,9 +84,10 @@
     },
     "./package.json": "./package.json"
   },
-  "sideEffects": false,
+  "sideEffects": true,
   "files": [
     "dist",
+    "src/fonts/LICENSE-inter.txt",
     "LICENSE",
     "package.json",
     "README.md"

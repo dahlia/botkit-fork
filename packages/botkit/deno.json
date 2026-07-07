@@ -33,8 +33,14 @@
   "exclude": [
     "dist",
     "junit.xml",
-    "src/css"
+    "src/css",
+    "src/fonts/*.woff2"
   ],
+  "publish": {
+    "exclude": [
+      "scripts"
+    ]
+  },
   "fmt": {
     "exclude": [
       "*.md",

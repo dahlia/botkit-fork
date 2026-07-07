@@ -54,6 +54,7 @@ import mimeDb from "mime-db";
 import fs from "node:fs/promises";
 import { getXForwardedRequest } from "x-forwarded-fetch";
 import metadata from "../deno.json" with { type: "json" };
+import { serveAsset } from "./assets.ts";
 import { BotImpl } from "./bot-impl.ts";
 import type { Bot, PagesOptions } from "./bot.ts";
 import { BotGroupImpl, GroupBotImpl, wrapBotImpl } from "./bot-impl.ts";
@@ -158,9 +159,9 @@ export class InstanceImpl<TContextData>
     this.software = options.software;
     this.behindProxy = options.behindProxy ?? false;
     this.pages = {
-      color: "green",
-      css: "",
-      ...(options.pages ?? {}),
+      color: options.pages?.color ?? "green",
+      theme: options.pages?.theme ?? "auto",
+      css: options.pages?.css ?? "",
     };
     this.collectionWindow = options.collectionWindow ?? 50;
     this.legacyObjectUrisIdentifier = options.legacyObjectUris?.identifier;
@@ -1092,6 +1093,10 @@ export class InstanceImpl<TContextData>
         contextData,
         response,
       );
+    }
+    if (url.pathname.startsWith("/.botkit/")) {
+      const assetResponse = serveAsset(url.pathname);
+      if (assetResponse != null) return assetResponse;
     }
     const match = /^\/emojis\/([a-z0-9-_]+)(?:$|\.)/.exec(url.pathname);
     if (match != null) {

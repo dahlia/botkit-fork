@@ -749,8 +749,17 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
 
 // @ts-ignore: The `xss` module has `getDefaultWhiteList` function.
 const allowList = xss.getDefaultWhiteList();
+/**
+ * The configured `xss.FilterXSS` instance used to sanitize user-provided HTML,
+ * such as a message's content, before it is rendered on the web pages.  It
+ * keeps the default allowlist of safe tags, additionally permitting the `class`
+ * and `translate` attributes on `<a>` elements, while stripping scripts, event
+ * handlers, and unsafe URLs.
+ *
+ * @since 0.5.0
+ */
 // @ts-ignore: The `xss` module has `FilterXSS` class.
-const htmlXss = new xss.FilterXSS({
+export const htmlXss = new xss.FilterXSS({
   allowList: {
     ...allowList,
     a: [...allowList.a ?? [], "class", "translate"],

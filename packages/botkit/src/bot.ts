@@ -468,6 +468,15 @@ export interface PagesOptions {
     | "zinc";
 
   /**
+   * The color scheme of the web pages.  `"auto"` follows the visitor's
+   * operating system preference, while `"light"` and `"dark"` force a fixed
+   * scheme.  The default is `"auto"`.
+   * @default `"auto"`
+   * @since 0.5.0
+   */
+  readonly theme?: "auto" | "light" | "dark";
+
+  /**
    * The CSS code for the bot.  It will be used for the custom CSS of the web
    * pages.
    */

@@ -258,3 +258,135 @@ describe("custom CSS", () => {
     assert.ok(html.includes(css));
   });
 });
+
+describe("web assets", () => {
+  async function profileHtml(
+    pages?: { color?: "azure"; theme?: "dark" },
+  ): Promise<string> {
+    const bot = new BotImpl<void>({
+      kv: new MemoryKvStore(),
+      username: "mybot",
+      pages,
+    });
+    const response = await bot.fetch(
+      new Request("https://example.com/"),
+      undefined,
+    );
+    return await response.text();
+  }
+
+  test("link the bundled stylesheet instead of a CDN", async () => {
+    const html = await profileHtml();
+    assert.ok(!html.includes("cdn.jsdelivr"));
+    assert.ok(!html.includes("picocss"));
+    assert.match(
+      html,
+      /<link rel="stylesheet" href="\/\.botkit\/[^"]+\/botkit\.css"/,
+    );
+  });
+
+  test("reflect the theme name and default to green/auto", async () => {
+    const def = await profileHtml();
+    assert.ok(def.includes('data-botkit-color="green"'));
+    assert.ok(!def.includes("data-theme="));
+
+    const themed = await profileHtml({ color: "azure", theme: "dark" });
+    assert.ok(themed.includes('data-botkit-color="azure"'));
+    assert.ok(themed.includes('data-theme="dark"'));
+  });
+
+  test("serve the stylesheet and fonts with immutable caching", async () => {
+    const bot = new BotImpl<void>({
+      kv: new MemoryKvStore(),
+      username: "mybot",
+    });
+    const html = await (await bot.fetch(
+      new Request("https://example.com/"),
+      undefined,
+    )).text();
+    const match = html.match(/href="(\/\.botkit\/[^"]+)\/botkit\.css"/);
+    assert.ok(match != null);
+    const base = match[1];
+
+    const cssResponse = await bot.fetch(
+      new Request(`https://example.com${base}/botkit.css`),
+      undefined,
+    );
+    assert.deepStrictEqual(cssResponse.status, 200);
+    assert.ok(
+      cssResponse.headers.get("Content-Type")?.startsWith("text/css"),
+    );
+    assert.ok(
+      cssResponse.headers.get("Cache-Control")?.includes("immutable"),
+    );
+    const cssText = await cssResponse.text();
+    assert.ok(cssText.includes("--botkit-accent"));
+    // Minification must keep the descendant space before a pseudo-class, so
+    // that `.bk-prose :is(...)` stays a descendant selector rather than being
+    // collapsed into the compound `.bk-prose:is(...)`.
+    assert.ok(cssText.includes(".bk-prose :is("));
+    assert.ok(!cssText.includes(".bk-prose:is("));
+
+    const fontResponse = await bot.fetch(
+      new Request(`https://example.com${base}/fonts/inter.woff2`),
+      undefined,
+    );
+    assert.deepStrictEqual(fontResponse.status, 200);
+    assert.deepStrictEqual(
+      fontResponse.headers.get("Content-Type"),
+      "font/woff2",
+    );
+
+    // A stale or mistyped fingerprint must not be served the current bytes
+    // under an immutable cache; it is rejected instead.
+    const stale = await bot.fetch(
+      new Request("https://example.com/.botkit/deadbeef/botkit.css"),
+      undefined,
+    );
+    assert.deepStrictEqual(stale.status, 404);
+
+    const missing = await bot.fetch(
+      new Request(`https://example.com${base}/fonts/nope.woff2`),
+      undefined,
+    );
+    assert.deepStrictEqual(missing.status, 404);
+  });
+});
+
+describe("message rendering", () => {
+  test("sanitizes post content against XSS", async () => {
+    const repository = new MemoryRepository();
+    const bot = new BotImpl<void>({
+      kv: new MemoryKvStore(),
+      repository,
+      username: "mybot",
+    });
+    const id: Uuid = "01941f29-7c00-7fe8-ab0a-7b593990a3c1";
+    await repository.addMessage(
+      "bot",
+      id,
+      new Create({
+        id: new URL(`https://example.com/ap/actor/bot/create/${id}`),
+        actor: new URL("https://example.com/ap/actor/bot"),
+        to: PUBLIC_COLLECTION,
+        object: new Note({
+          id: new URL(`https://example.com/ap/actor/bot/note/${id}`),
+          attribution: new URL("https://example.com/ap/actor/bot"),
+          to: PUBLIC_COLLECTION,
+          content: `<p>hello</p><script>alert('xss')</script>` +
+            `<a href="javascript:alert(1)">tap</a>`,
+          published: Temporal.Instant.from("2025-01-01T00:00:00Z"),
+        }),
+        published: Temporal.Instant.from("2025-01-01T00:00:00Z"),
+      }),
+    );
+    const html = await (await bot.fetch(
+      new Request("https://example.com/"),
+      undefined,
+    )).text();
+    // The safe markup survives, but the script and the javascript: URL do not.
+    assert.ok(html.includes("<p>hello</p>"));
+    assert.ok(!html.includes("<script>alert"));
+    assert.ok(!html.includes("javascript:alert"));
+  });
+});

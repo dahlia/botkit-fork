@@ -28,19 +28,19 @@ test("renderCustomEmojis()", () => {
   // Test basic replacement
   assert.equal(
     renderCustomEmojis("Hello :smile: world!", emojis),
-    'Hello <img src="https://example.com/smile.png" alt=":smile:" style="height: 1em"> world!',
+    'Hello <img src="https://example.com/smile.png" alt=":smile:" class="emoji"> world!',
   );
 
   // Test multiple emojis
   assert.equal(
     renderCustomEmojis("Good morning :smile: :laughing:", emojis),
-    'Good morning <img src="https://example.com/smile.png" alt=":smile:" style="height: 1em"> <img src="https://example.com/laughing.gif" alt=":laughing:" style="height: 1em">',
+    'Good morning <img src="https://example.com/smile.png" alt=":smile:" class="emoji"> <img src="https://example.com/laughing.gif" alt=":laughing:" class="emoji">',
   );
 
   // Test emojis adjacent to text
   assert.equal(
     renderCustomEmojis("Hi:smile:! How are you:laughing:?", emojis),
-    'Hi<img src="https://example.com/smile.png" alt=":smile:" style="height: 1em">! How are you<img src="https://example.com/laughing.gif" alt=":laughing:" style="height: 1em">?',
+    'Hi<img src="https://example.com/smile.png" alt=":smile:" class="emoji">! How are you<img src="https://example.com/laughing.gif" alt=":laughing:" class="emoji">?',
   );
 
   // Test unknown emojis (should not be replaced)
@@ -52,14 +52,14 @@ test("renderCustomEmojis()", () => {
   // Test emojis mixed with HTML tags
   assert.equal(
     renderCustomEmojis("<p>Hello <b>:smile:</b> world!</p>", emojis),
-    '<p>Hello <b><img src="https://example.com/smile.png" alt=":smile:" style="height: 1em"></b> world!</p>',
+    '<p>Hello <b><img src="https://example.com/smile.png" alt=":smile:" class="emoji"></b> world!</p>',
   );
   assert.equal(
     renderCustomEmojis(
       'Check <a href="#">this :thumbs_up:</a> link.',
       emojis,
     ),
-    'Check <a href="#">this <img src="https://example.com/thumb.webp" alt=":thumbs_up:" style="height: 1em"></a> link.',
+    'Check <a href="#">this <img src="https://example.com/thumb.webp" alt=":thumbs_up:" class="emoji"></a> link.',
   );
 
   // Test emojis inside HTML attributes (should not be replaced)
@@ -71,13 +71,13 @@ test("renderCustomEmojis()", () => {
   // Test case sensitivity
   assert.equal(
     renderCustomEmojis("Case :SmIlE: test", emojis),
-    'Case <img src="https://example.com/smile2.png" alt=":SmIlE:" style="height: 1em"> test',
+    'Case <img src="https://example.com/smile2.png" alt=":SmIlE:" class="emoji"> test',
   );
 
   // Test emojis with underscores
   assert.equal(
     renderCustomEmojis("Great job :thumbs_up:", emojis),
-    'Great job <img src="https://example.com/thumb.webp" alt=":thumbs_up:" style="height: 1em">',
+    'Great job <img src="https://example.com/thumb.webp" alt=":thumbs_up:" class="emoji">',
   );
 
   // Test empty input
@@ -92,6 +92,6 @@ test("renderCustomEmojis()", () => {
   // Test input with only emojis
   assert.equal(
     renderCustomEmojis(":smile::laughing:", emojis),
-    '<img src="https://example.com/smile.png" alt=":smile:" style="height: 1em"><img src="https://example.com/laughing.gif" alt=":laughing:" style="height: 1em">',
+    '<img src="https://example.com/smile.png" alt=":smile:" class="emoji"><img src="https://example.com/laughing.gif" alt=":laughing:" class="emoji">',
   );
 });
