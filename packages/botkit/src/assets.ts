@@ -25,42 +25,16 @@
 
 import { fonts } from "./static/fonts.ts";
 import { css } from "./static/style.ts";
-
-/** Folds a string or a byte sequence into a running djb2 hash. */
-function fold(hash: number, input: string | Uint8Array): number {
-  if (typeof input === "string") {
-    for (let i = 0; i < input.length; i++) {
-      hash = ((hash << 5) + hash) ^ input.charCodeAt(i);
-    }
-  } else {
-    for (let i = 0; i < input.length; i++) {
-      hash = ((hash << 5) + hash) ^ input[i];
-    }
-  }
-  return hash;
-}
+import { version } from "./static/version.ts";
 
 /**
- * Computes a small, stable content fingerprint (djb2) rendered in base36 over
- * the full stylesheet and font contents.  It namespaces the asset paths so the
- * assets can be cached forever yet bust automatically whenever the stylesheet
- * or a font changes — including when a font's byte length stays the same, which
- * is why the actual bytes are folded in rather than just their length.
- */
-function computeAssetVersion(): string {
-  let hash = fold(5381, css);
-  for (const [name, font] of Object.entries(fonts)) {
-    hash = fold(hash, name);
-    hash = fold(hash, font.bytes);
-  }
-  return (hash >>> 0).toString(36);
-}
-
-/**
- * The content fingerprint that namespaces the asset paths.
+ * The content fingerprint that namespaces the asset paths.  It is a djb2 hash
+ * of the stylesheet and font contents, computed at build time by
+ * scripts/build-assets.ts (so no hashing runs at startup) yet still changing
+ * automatically whenever the stylesheet or a font changes.
  * @since 0.5.0
  */
-export const ASSET_VERSION = computeAssetVersion();
+export const ASSET_VERSION: string = version;
 
 /**
  * The content-addressed base path under which all assets are served.

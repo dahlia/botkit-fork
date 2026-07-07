@@ -85,25 +85,48 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-async function buildStyle(): Promise<void> {
-  const css = await Deno.readTextFile(cssUrl);
-  const minified = minifyCss(css);
-  const module = `${HEADER}
-/** The BotKit design-system stylesheet, served under a content-hashed path. */
-export const css: string = ${JSON.stringify(minified)};
-`;
-  await Deno.writeTextFile(new URL("style.ts", staticUrl), module);
-  console.info(`Wrote src/static/style.ts (${minified.length} bytes of CSS).`);
+/** Folds a string or a byte sequence into a running djb2 hash. */
+function fold(hash: number, input: string | Uint8Array): number {
+  if (typeof input === "string") {
+    for (let i = 0; i < input.length; i++) {
+      hash = ((hash << 5) + hash) ^ input.charCodeAt(i);
+    }
+  } else {
+    for (let i = 0; i < input.length; i++) {
+      hash = ((hash << 5) + hash) ^ input[i];
+    }
+  }
+  return hash;
 }
 
-async function buildFonts(): Promise<void> {
-  const entries: string[] = [];
-  for (const name of FONTS) {
-    const bytes = await Deno.readFile(new URL(name, fontsUrl));
-    entries.push(
-      `  ${JSON.stringify(name)}: ${JSON.stringify(toBase64(bytes))},`,
-    );
+/**
+ * Computes the content fingerprint (djb2, base36) over the stylesheet and font
+ * contents.  It is emitted as a constant so the served assets are
+ * content-addressed without hashing anything at runtime.
+ */
+function computeVersion(css: string, fonts: [string, Uint8Array][]): string {
+  let hash = fold(5381, css);
+  for (const [name, bytes] of fonts) {
+    hash = fold(hash, name);
+    hash = fold(hash, bytes);
   }
+  return (hash >>> 0).toString(36);
+}
+
+async function buildStyle(css: string): Promise<void> {
+  const module = `${HEADER}
+/** The BotKit design-system stylesheet, served under a content-hashed path. */
+export const css: string = ${JSON.stringify(css)};
+`;
+  await Deno.writeTextFile(new URL("style.ts", staticUrl), module);
+  console.info(`Wrote src/static/style.ts (${css.length} bytes of CSS).`);
+}
+
+async function buildFonts(fonts: [string, Uint8Array][]): Promise<void> {
+  const entries = fonts.map(
+    ([name, bytes]) =>
+      `  ${JSON.stringify(name)}: ${JSON.stringify(toBase64(bytes))},`,
+  );
   const module = `${HEADER}
 /** A bundled font file, base64-encoded so it ships as source on JSR. */
 export interface FontAsset {
@@ -130,12 +153,32 @@ export const fonts: Record<string, FontAsset> = Object.fromEntries(
 );
 `;
   await Deno.writeTextFile(new URL("fonts.ts", staticUrl), module);
-  console.info(`Wrote src/static/fonts.ts (${FONTS.length} fonts).`);
+  console.info(`Wrote src/static/fonts.ts (${fonts.length} fonts).`);
+}
+
+async function buildVersion(
+  css: string,
+  fonts: [string, Uint8Array][],
+): Promise<void> {
+  const version = computeVersion(css, fonts);
+  const module = `${HEADER}
+/** The build-time content fingerprint of the stylesheet and fonts. */
+export const version: string = ${JSON.stringify(version)};
+`;
+  await Deno.writeTextFile(new URL("version.ts", staticUrl), module);
+  console.info(`Wrote src/static/version.ts (${version}).`);
 }
 
 if (import.meta.main) {
   await Deno.mkdir(staticUrl, { recursive: true });
-  await buildStyle();
-  await buildFonts();
+  const rawCss = await Deno.readTextFile(cssUrl);
+  const minified = minifyCss(rawCss);
+  const fonts: [string, Uint8Array][] = [];
+  for (const name of FONTS) {
+    fonts.push([name, await Deno.readFile(new URL(name, fontsUrl))]);
+  }
+  await buildStyle(minified);
+  await buildFonts(fonts);
+  await buildVersion(minified, fonts);
   console.info("Assets generated.");
 }
