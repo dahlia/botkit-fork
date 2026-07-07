@@ -28,9 +28,14 @@ import { css } from "./static/style.ts";
 
 /** Folds a string or a byte sequence into a running djb2 hash. */
 function fold(hash: number, input: string | Uint8Array): number {
-  for (let i = 0; i < input.length; i++) {
-    const code = typeof input === "string" ? input.charCodeAt(i) : input[i];
-    hash = ((hash << 5) + hash) ^ code;
+  if (typeof input === "string") {
+    for (let i = 0; i < input.length; i++) {
+      hash = ((hash << 5) + hash) ^ input.charCodeAt(i);
+    }
+  } else {
+    for (let i = 0; i < input.length; i++) {
+      hash = ((hash << 5) + hash) ^ input[i];
+    }
   }
   return hash;
 }
