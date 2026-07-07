@@ -54,14 +54,25 @@ const HEADER =
  * properties stay intact, and around `:` so a descendant space before a
  * pseudo-class (e.g. `.bk-prose :is(...)`) is not collapsed into a compound
  * selector.
+ *
+ * String literals (e.g. `content: "a, b"` or `url("…")`) are stashed before the
+ * punctuation pass and restored afterwards, so structural characters inside
+ * quotes are never rewritten.  The placeholder is made only of letters, digits,
+ * and underscores, so none of the passes below can alter it.
  */
 function minifyCss(css: string): string {
+  const literals: string[] = [];
   return css
     .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/"[^"]*"|'[^']*'/g, (literal) => {
+      literals.push(literal);
+      return `__BKSTR${literals.length - 1}__`;
+    })
     .replace(/\s+/g, " ")
     .replace(/\s*([{};,])\s*/g, "$1")
     .replace(/;}/g, "}")
-    .trim();
+    .trim()
+    .replace(/__BKSTR(\d+)__/g, (_, index) => literals[Number(index)]);
 }
 
 /** Encodes bytes as base64 without overflowing the call stack. */
