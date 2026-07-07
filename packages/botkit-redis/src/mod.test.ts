@@ -482,7 +482,7 @@ if (redisUrl == null) {
         );
         const mgets = commands.filter(([command]) => command === "MGET");
         assert.deepStrictEqual(mgets.length, 2);
-        assert.ok(mgets.every((command) => command.length <= 101));
+        assert.ok(mgets.every((mget) => mget.length <= 101));
         assert.ok(
           !commands.some(([command, key]) =>
             command === "GET" && key?.includes(":messages:")
