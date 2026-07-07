@@ -124,6 +124,21 @@ outputs = [
 ]
 run = "pnpm --filter @fedify/botkit-postgres run build"
 
+[tasks."build:botkit-redis"]
+description = "Build @fedify/botkit-redis"
+depends = ["build:botkit"]
+sources = [
+  "packages/botkit-redis/deno.json",
+  "packages/botkit-redis/package.json",
+  "packages/botkit-redis/tsdown.config.ts",
+  "packages/botkit-redis/src/**/*",
+]
+outputs = [
+  "packages/botkit-redis/dist/mod.js",
+  "packages/botkit-redis/dist/mod.d.ts",
+]
+run = "pnpm --filter @fedify/botkit-redis run build"
+
 [tasks."test:node"]
 description = "Build packages and run Node.js tests"
 depends = ["build:*"]

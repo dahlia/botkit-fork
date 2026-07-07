@@ -164,6 +164,78 @@ properties:
 [`node:sqlite`]: https://nodejs.org/api/sqlite.html
 
 
+`RedisRepository`
+-----------------
+
+*This API is available since BotKit 0.5.0.*
+
+The `RedisRepository` is a repository that stores data in [Redis] using
+the [node-redis] client.  It is suited for deployments where multiple bot
+processes need to share the same repository state, or where you already
+operate Redis for other BotKit infrastructure.
+
+Unlike [`KvRepository`](#kvrepository), `RedisRepository` stores BotKit data
+directly in Redis data structures such as strings, sets, and sorted sets.
+It supports either an internally owned Redis client created from a connection
+URL or an injected client whose lifecycle stays under your control.
+
+In order to use `RedisRepository`, you need to install the
+*@fedify/botkit-redis* package:
+
+::: code-group
+
+~~~~ sh [Deno]
+deno add jsr:@fedify/botkit-redis
+~~~~
+
+~~~~ sh [npm]
+npm add @fedify/botkit-redis
+~~~~
+
+~~~~ sh [pnpm]
+pnpm add @fedify/botkit-redis
+~~~~
+
+~~~~ sh [Yarn]
+yarn add @fedify/botkit-redis
+~~~~
+
+:::
+
+The `RedisRepository` constructor accepts the following properties:
+
+`url`
+:   A Redis connection string used to create an internal client.  Exactly one
+    of `url` and `client` must be provided.
+
+`client`
+:   An existing node-redis compatible client.  When this is provided, the
+    repository does not own the client and calling `close()` will not shut it
+    down.
+
+`prefix` (optional)
+:   The Redis key prefix used for BotKit data.  Defaults to `"botkit"`.
+
+`clientOptions` (optional)
+:   Additional node-redis client options.  This option is only valid when
+    `url` is used.
+
+`lockTimeoutMs` (optional)
+:   How long a Redis lock can live without renewal, in milliseconds.
+    Defaults to `30000`.
+
+`lockPollIntervalMs` (optional)
+:   How long to wait before retrying a held Redis lock, in milliseconds.
+    Defaults to `20`.
+
+`lockRenewIntervalMs` (optional)
+:   How often to renew a held Redis lock, in milliseconds.  Defaults to
+    `10000`.
+
+[Redis]: https://redis.io/
+[node-redis]: https://github.com/redis/node-redis
+
+
 `PostgresRepository`
 --------------------
 

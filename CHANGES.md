@@ -204,6 +204,18 @@ To be released.
  -  Upgraded Fedify to 2.3.1, LogTape to 2.2.3, and Postgres.js to
     3.4.9.
 
+### @fedify/botkit-redis
+
+ -  Added the new *@fedify/botkit-redis* package, which provides
+    `RedisRepository`, a Redis-backed implementation of BotKit's
+    `Repository` interface for bots running on Deno or Node.js.  It supports
+    URL-managed and caller-managed Redis clients, configurable key prefixes,
+    bot-scoped storage, quote authorization storage, reverse lookups, and
+    poll votes.  [[#12], [#35]]
+
+[#12]: https://github.com/fedify-dev/botkit/issues/12
+[#35]: https://github.com/fedify-dev/botkit/pull/35
+
 
 Version 0.4.4
 -------------
