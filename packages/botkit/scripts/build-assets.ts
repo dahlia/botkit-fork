@@ -64,7 +64,7 @@ function minifyCss(css: string): string {
   const literals: string[] = [];
   return css
     .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/"[^"]*"|'[^']*'/g, (literal) => {
+    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, (literal) => {
       literals.push(literal);
       return `__BKSTR${literals.length - 1}__`;
     })
