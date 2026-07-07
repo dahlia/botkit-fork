@@ -159,10 +159,9 @@ export class InstanceImpl<TContextData>
     this.software = options.software;
     this.behindProxy = options.behindProxy ?? false;
     this.pages = {
-      color: "green",
-      theme: "auto",
-      css: "",
-      ...(options.pages ?? {}),
+      color: options.pages?.color ?? "green",
+      theme: options.pages?.theme ?? "auto",
+      css: options.pages?.css ?? "",
     };
     this.collectionWindow = options.collectionWindow ?? 50;
     this.legacyObjectUrisIdentifier = options.legacyObjectUris?.identifier;
