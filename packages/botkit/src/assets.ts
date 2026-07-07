@@ -56,13 +56,22 @@ function computeAssetVersion(): string {
   return (hash >>> 0).toString(36);
 }
 
-/** The content fingerprint that namespaces the asset paths. */
+/**
+ * The content fingerprint that namespaces the asset paths.
+ * @since 0.5.0
+ */
 export const ASSET_VERSION = computeAssetVersion();
 
-/** The content-addressed base path under which all assets are served. */
+/**
+ * The content-addressed base path under which all assets are served.
+ * @since 0.5.0
+ */
 export const ASSET_PATH_PREFIX = `/.botkit/${ASSET_VERSION}`;
 
-/** The absolute path of the design-system stylesheet. */
+/**
+ * The absolute path of the design-system stylesheet.
+ * @since 0.5.0
+ */
 export const STYLESHEET_PATH = `${ASSET_PATH_PREFIX}/botkit.css`;
 
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
@@ -83,6 +92,7 @@ const CSS_BYTES = new TextEncoder().encode(css);
  *          under the asset prefix but carries the wrong fingerprint or names no
  *          known asset, or `null` if the path is not an asset path at all (so
  *          the caller can keep routing).
+ * @since 0.5.0
  */
 export function serveAsset(pathname: string): Response | null {
   const match = /^\/\.botkit\/([^/]+)\/(.+)$/.exec(pathname);
