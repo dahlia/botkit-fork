@@ -241,9 +241,9 @@ async function profilePage(
         {messages.length > 0
           ? (
             <div class="bk-feed">
-              {messages.map((message) => (
+              {messages.map((message, index) => (
                 <Message
-                  key={message.id?.href}
+                  key={message.id?.href ?? index}
                   message={message}
                   session={session}
                 />
@@ -368,9 +368,9 @@ async function hashtagPage(
         {posts.length > 0
           ? (
             <div class="bk-feed">
-              {posts.map((message) => (
+              {posts.map((message, index) => (
                 <Message
-                  key={message.id?.href}
+                  key={message.id?.href ?? index}
                   message={message}
                   session={session}
                 />
