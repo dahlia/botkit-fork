@@ -344,15 +344,18 @@ export class RedisRepository implements Repository, AsyncDisposable {
     const renew = setInterval(() => {
       void (async () => {
         try {
-          await this.command([
-            "EVAL",
-            "if redis.call('GET', KEYS[1]) == ARGV[1] then " +
-            "return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end",
-            "1",
-            lockKey,
-            token,
-            this.lockTimeoutMs.toString(),
-          ]);
+          const renewed = toNumber(
+            await this.command([
+              "EVAL",
+              "if redis.call('GET', KEYS[1]) == ARGV[1] then " +
+              "return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end",
+              "1",
+              lockKey,
+              token,
+              this.lockTimeoutMs.toString(),
+            ]),
+          );
+          if (renewed === 0) clearInterval(renew);
         } catch (error) {
           logger.warn("Failed to renew Redis lock: {error}", { error });
         }
@@ -886,17 +889,22 @@ export class RedisRepository implements Repository, AsyncDisposable {
     messageId: Uuid,
     attribution?: URL,
   ): Promise<void> {
-    const value: QuoteAuthorizationReferenceData = attribution == null
-      ? { messageId }
-      : { messageId, attribution: attribution.href };
-    await this.set(
-      this.botKey(identifier, "quoteAuthorizationRefs", authorization.href),
-      JSON.stringify(value),
-    );
-    await this.zAdd(
-      this.key("index", "quoteAuthorizationRefs", authorization.href),
-      0,
-      identifier,
+    await this.withRedisLock(
+      this.quoteAuthorizationReferenceLockKey(identifier, authorization),
+      async () => {
+        const value: QuoteAuthorizationReferenceData = attribution == null
+          ? { messageId }
+          : { messageId, attribution: attribution.href };
+        await this.set(
+          this.botKey(identifier, "quoteAuthorizationRefs", authorization.href),
+          JSON.stringify(value),
+        );
+        await this.zAdd(
+          this.key("index", "quoteAuthorizationRefs", authorization.href),
+          0,
+          identifier,
+        );
+      },
     );
   }
 
@@ -950,12 +958,17 @@ export class RedisRepository implements Repository, AsyncDisposable {
     identifier: string,
     authorization: URL,
   ): Promise<void> {
-    await this.del(
-      this.botKey(identifier, "quoteAuthorizationRefs", authorization.href),
-    );
-    await this.zRem(
-      this.key("index", "quoteAuthorizationRefs", authorization.href),
-      identifier,
+    await this.withRedisLock(
+      this.quoteAuthorizationReferenceLockKey(identifier, authorization),
+      async () => {
+        await this.del(
+          this.botKey(identifier, "quoteAuthorizationRefs", authorization.href),
+        );
+        await this.zRem(
+          this.key("index", "quoteAuthorizationRefs", authorization.href),
+          identifier,
+        );
+      },
     );
   }
 
@@ -1006,6 +1019,18 @@ export class RedisRepository implements Repository, AsyncDisposable {
 
   private quoteAuthorizationLockKey(indexKey: string): string {
     return `${indexKey}:lock`;
+  }
+
+  private quoteAuthorizationReferenceLockKey(
+    identifier: string,
+    authorization: URL,
+  ): string {
+    return this.botKey(
+      identifier,
+      "quoteAuthorizationRefs",
+      authorization.href,
+      "lock",
+    );
   }
 }
 

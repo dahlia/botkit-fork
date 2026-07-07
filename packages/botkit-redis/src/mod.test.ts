@@ -925,6 +925,66 @@ if (redisUrl == null) {
       }
     });
 
+    test("serializes quote authorization reference indexes with removals", async () => {
+      const prefix = `botkit_test_${crypto.randomUUID()}`;
+      const addRepository = new RedisRepository({ url: redisUrl, prefix });
+      const removeClient = createClient({ url: redisUrl });
+      await removeClient.connect();
+      const stamp = new URL("https://remote.example/stamps/serialized");
+      const indexKey = `${prefix}:index:quoteAuthorizationRefs:${
+        encodeURIComponent(stamp.href)
+      }`;
+      const removeObserved = createDeferred();
+      const releaseRemove = createDeferred();
+      const removeRepository = new RedisRepository({
+        client: createDelayedCommandClient(
+          removeClient,
+          (args) =>
+            args[0] === "ZREM" && args[1] === indexKey && args[2] === "bot",
+          removeObserved,
+          releaseRemove,
+        ),
+        prefix,
+      });
+      try {
+        const oldId = "01942976-3400-7f34-872e-2cbf0f9eeac4";
+        const newId = "01942976-3400-7f34-872e-2cbf0f9eeac5";
+        await addRepository.addQuoteAuthorizationReference("bot", stamp, oldId);
+        const removePromise = removeRepository
+          .removeQuoteAuthorizationReference(
+            "bot",
+            stamp,
+          );
+        await removeObserved.promise;
+        let addFinished = false;
+        const addPromise = addRepository
+          .addQuoteAuthorizationReference("bot", stamp, newId)
+          .then(() => {
+            addFinished = true;
+          });
+        await delay(50);
+        assert.ok(!addFinished);
+        releaseRemove.resolve();
+        await Promise.all([removePromise, addPromise]);
+        assert.deepStrictEqual(
+          await addRepository.findQuoteAuthorizationReference("bot", stamp),
+          newId,
+        );
+        assert.deepStrictEqual(
+          await Array.fromAsync(
+            addRepository.findQuoteAuthorizationReferenceIdentifiers(stamp),
+          ),
+          ["bot"],
+        );
+      } finally {
+        releaseRemove.resolve();
+        await addRepository.close();
+        await removeRepository.close();
+        await removeClient.quit();
+        await cleanupPrefix(redisUrl, prefix);
+      }
+    });
+
     test("serializes concurrent quote authorization inserts", async () => {
       const prefix = `botkit_test_${crypto.randomUUID()}`;
       const firstClient = createClient({ url: redisUrl });
