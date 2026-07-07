@@ -1,3 +1,8 @@
+min_version = "2026.6.1"
+
+[settings]
+experimental = true
+
 [tools]
 bun = "latest"
 deno = "2"
@@ -5,11 +10,11 @@ node = "22"
 pnpm = "latest"
 "aqua:dahlia/hongdown" = "0.5.1"
 
-[settings]
-experimental = true
-
 [hooks]
-postinstall = "mise generate git-pre-commit --write --task=check"
+postinstall = [
+  "mise deps",
+  "mise generate git-pre-commit --write --task=check",
+]
 
 [deps]
 disable = ["pnpm"]
