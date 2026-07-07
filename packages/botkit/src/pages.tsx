@@ -172,7 +172,7 @@ async function profilePage(
                   class="bk-avatar bk-avatar--placeholder"
                   aria-hidden="true"
                 >
-                  {[...(bot.name ?? bot.username)][0].toUpperCase()}
+                  {[...(bot.name || bot.username)][0]?.toUpperCase() ?? ""}
                 </span>
               )}
             <h1 class="bk-name">
@@ -242,7 +242,11 @@ async function profilePage(
           ? (
             <div class="bk-feed">
               {messages.map((message) => (
-                <Message message={message} session={session} />
+                <Message
+                  key={message.id?.href}
+                  message={message}
+                  session={session}
+                />
               ))}
             </div>
           )
@@ -365,7 +369,11 @@ async function hashtagPage(
           ? (
             <div class="bk-feed">
               {posts.map((message) => (
-                <Message message={message} session={session} />
+                <Message
+                  key={message.id?.href}
+                  message={message}
+                  session={session}
+                />
               ))}
             </div>
           )
@@ -429,7 +437,7 @@ async function messagePage(
       <main>
         <PageHeading back={home} title={bot.name ?? bot.username} />
         <div class="bk-feed">
-          <Message message={message} session={session} />
+          <Message key={message.id?.href} message={message} session={session} />
         </div>
       </main>
     </Layout>,
@@ -683,11 +691,13 @@ multiApp.get("/", (c) => {
                 <div class="bk-roster">
                   {bots.map((bot) => (
                     <a
+                      key={bot.identifier}
                       class="bk-actor"
                       href={`/@${encodeURIComponent(bot.username)}`}
                     >
                       <span class="bk-actor__ph" aria-hidden="true">
-                        {[...(bot.name ?? bot.username)][0].toUpperCase()}
+                        {[...(bot.name || bot.username)][0]?.toUpperCase() ??
+                          ""}
                       </span>
                       <span class="bk-actor__info">
                         <span class="bk-actor__name">
