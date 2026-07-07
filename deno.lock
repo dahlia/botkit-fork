@@ -1106,7 +1106,9 @@
       },
       "packages/botkit-redis": {
         "dependencies": [
+          "jsr:@fedify/fedify@^2.3.1",
           "jsr:@fedify/vocab@^2.3.1",
+          "jsr:@logtape/logtape@^2.2.3",
           "npm:redis@^6.1.0"
         ],
         "packageJson": {
