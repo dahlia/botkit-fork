@@ -63,6 +63,10 @@ const references = {
       link: "https://jsr.io/@fedify/botkit-postgres/doc",
     },
     {
+      text: "@fedify/botkit-redis",
+      link: "https://jsr.io/@fedify/botkit-redis/doc",
+    },
+    {
       text: "@fedify/botkit-sqlite",
       link: "https://jsr.io/@fedify/botkit-sqlite/doc",
     },
