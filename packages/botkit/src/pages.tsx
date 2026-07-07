@@ -260,7 +260,7 @@ async function profilePage(
       <script
         dangerouslySetInnerHTML={{
           __html:
-            `globalThis.botkitCopy=function(b){var t=b.getAttribute('data-copy');if(navigator.clipboard){navigator.clipboard.writeText(t)}b.classList.add('is-copied');setTimeout(function(){b.classList.remove('is-copied')},1200)}`,
+            `globalThis.botkitCopy=function(b){var t=b.getAttribute('data-copy');function ok(){b.classList.add('is-copied');setTimeout(function(){b.classList.remove('is-copied')},1200)}function fallback(){var a=document.createElement('textarea');a.value=t;a.style.position='fixed';a.style.opacity='0';document.body.appendChild(a);a.select();try{if(document.execCommand('copy'))ok()}catch(e){}document.body.removeChild(a)}if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(ok,fallback)}else{fallback()}}`,
         }}
       />
     </Layout>,
