@@ -9,6 +9,7 @@ linkWorkspacePackages: true
 
 minimumReleaseAgeExclude:
   - "@fedify/*"
+  - markdown-it-jsr-ref@0.5.0
 
 catalog:
   "@fedify/denokv": ~2.3.1
