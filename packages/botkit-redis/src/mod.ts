@@ -46,6 +46,7 @@ interface RedisClientLike {
   connect?(): Promise<unknown>;
   quit?(): Promise<unknown>;
   close?(): Promise<unknown> | unknown;
+  on?(event: "error", listener: (error: unknown) => void): unknown;
   sendCommand(args: readonly string[]): Promise<unknown>;
 }
 
@@ -190,6 +191,9 @@ export class RedisRepository implements Repository, AsyncDisposable {
       }) as unknown as RedisClientLike;
       this.client = client;
       this.ownsClient = true;
+      client.on?.("error", (error) => {
+        logger.warn("Owned Redis client emitted an error: {error}", { error });
+      });
       const ready = client.connect?.() ?? Promise.resolve();
       ready.catch(() => {});
       this.ready = ready;
@@ -206,14 +210,23 @@ export class RedisRepository implements Repository, AsyncDisposable {
   async close(): Promise<void> {
     try {
       await this.ready;
-    } catch {
-      return;
+    } catch (error) {
+      logger.warn(
+        "Owned Redis client did not become ready before close: {error}",
+        {
+          error,
+        },
+      );
     }
     if (!this.ownsClient) return;
-    if (this.client.quit != null) {
-      await this.client.quit();
-    } else {
-      await this.client.close?.();
+    try {
+      if (this.client.quit != null) {
+        await this.client.quit();
+      } else {
+        await this.client.close?.();
+      }
+    } catch (error) {
+      logger.warn("Failed to close owned Redis client: {error}", { error });
     }
   }
 

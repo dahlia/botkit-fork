@@ -310,6 +310,19 @@ if (redisUrl == null) {
       }
     });
 
+    test("closes owned clients after failed initial connection", async () => {
+      const repository = new RedisRepository({
+        url: new URL("redis://127.0.0.1:1"),
+        clientOptions: {
+          socket: {
+            connectTimeout: 50,
+            reconnectStrategy: false,
+          },
+        },
+      });
+      await assert.doesNotReject(repository.close());
+    });
+
     test("messages basic operations and ordering", async () => {
       const { repository, cleanup } = createHarness();
       try {
