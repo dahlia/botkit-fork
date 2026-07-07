@@ -396,6 +396,10 @@ export class RedisRepository implements Repository, AsyncDisposable {
     const renew = setInterval(() => {
       void (async () => {
         try {
+          if (this.closed) {
+            clearInterval(renew);
+            return;
+          }
           const renewed = toNumber(
             await this.command([
               "EVAL",
@@ -409,7 +413,11 @@ export class RedisRepository implements Repository, AsyncDisposable {
           );
           if (renewed === 0) clearInterval(renew);
         } catch (error) {
-          logger.warn("Failed to renew Redis lock: {error}", { error });
+          if (this.closed) {
+            clearInterval(renew);
+          } else {
+            logger.warn("Failed to renew Redis lock: {error}", { error });
+          }
         }
       })();
     }, this.lockRenewIntervalMs);

@@ -15,6 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import { RedisRepository } from "@fedify/botkit-redis";
 import { exportJwk } from "@fedify/fedify/sig";
+import { configureSync, type LogRecord, resetSync } from "@logtape/logtape";
 import {
   Create,
   Follow,
@@ -653,6 +654,75 @@ if (redisUrl == null) {
         await secondRepository.close();
         await firstClient.quit();
         await secondClient.quit();
+        await cleanupPrefix(redisUrl, prefix);
+      }
+    });
+
+    test("stops renewing Redis locks after close", async () => {
+      const prefix = `botkit_test_${crypto.randomUUID()}`;
+      const client = createClient({ url: redisUrl });
+      await client.connect();
+      const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+      const repository = new RedisRepository({
+        client,
+        prefix,
+        lockTimeoutMs: 500,
+        lockRenewIntervalMs: 50,
+      });
+      const records: LogRecord[] = [];
+      const release = createDeferred();
+      let update: Promise<boolean> | undefined;
+      try {
+        await repository.addMessage(
+          "bot",
+          messageId,
+          createMessage(messageId, "base", "2025-01-01T00:00:00Z"),
+        );
+        configureSync({
+          sinks: {
+            capture: (record) => records.push(record),
+          },
+          loggers: [
+            {
+              category: ["botkit", "redis"],
+              sinks: ["capture"],
+              lowestLevel: "warning",
+            },
+            {
+              category: ["logtape", "meta"],
+              lowestLevel: null,
+            },
+          ],
+          reset: true,
+        });
+
+        let updaterStarted = false;
+        update = repository.updateMessage(
+          "bot",
+          messageId,
+          async (existing) => {
+            assert.ok(existing instanceof Create);
+            updaterStarted = true;
+            await release.promise;
+            return existing;
+          },
+        );
+        while (!updaterStarted) await delay(1);
+
+        await repository.close();
+        await delay(150);
+
+        assert.deepStrictEqual(records, []);
+        release.resolve();
+        await assert.rejects(
+          update,
+          new TypeError("RedisRepository is closed."),
+        );
+      } finally {
+        release.resolve();
+        await update?.catch(() => undefined);
+        resetSync();
+        await client.quit();
         await cleanupPrefix(redisUrl, prefix);
       }
     });
