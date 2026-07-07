@@ -82,6 +82,13 @@ test("validateQuoteAuthorization() rejects mismatched authorizations", () => {
       createAuthorization(),
       new URL("https://example.com/stamps/2"),
     ],
+    [
+      "origin",
+      createAuthorization({
+        id: new URL("https://malicious.example/stamps/1"),
+      }),
+      new URL("https://malicious.example/stamps/1"),
+    ],
   ];
 
   for (const [name, authorization, expectedAuthorizationId] of cases) {

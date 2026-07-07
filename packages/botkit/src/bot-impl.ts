@@ -1096,14 +1096,31 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       actorRecipientIds.add(actor.id.href);
       actorRecipients.push(actor);
     };
-    for (const id of recipientIds.values()) {
-      const knownActor = knownActors.get(id.href);
-      if (knownActor != null) {
-        addActorRecipient(knownActor);
-        continue;
+    const resolvedRecipients = await Promise.all(
+      Array.from(recipientIds.values(), async (id) => {
+        const knownActor = knownActors.get(id.href);
+        if (knownActor != null) return knownActor;
+        const recipient = await lookupObjectSafely(this, ctx, id);
+        return isActor(recipient) ? recipient : undefined;
+      }),
+    );
+    for (const recipient of resolvedRecipients) {
+      if (recipient != null) addActorRecipient(recipient);
+    }
+    if (object.replyTargetId != null) {
+      const replyTarget = await lookupObjectSafely(
+        this,
+        ctx,
+        object.replyTargetId,
+      );
+      if (isMessageObject(replyTarget)) {
+        const replyActor = await replyTarget.getAttribution({
+          contextLoader: ctx.contextLoader,
+          documentLoader: ctx.documentLoader,
+          suppressError: true,
+        });
+        if (isActor(replyActor)) addActorRecipient(replyActor);
       }
-      const recipient = await lookupObjectSafely(this, ctx, id);
-      if (isActor(recipient)) addActorRecipient(recipient);
     }
     addActorRecipient(quoteActor);
     if (actorRecipients.length < 1) return;

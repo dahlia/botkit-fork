@@ -4850,6 +4850,95 @@ test("BotImpl.onDeleted() forwards quote revocations to mentions", async () => {
   assert.deepStrictEqual(ctx.forwardedActivities.length, 2);
 });
 
+test("BotImpl.onDeleted() forwards quote revocations to reply targets", async () => {
+  const repository = new MemoryRepository();
+  const bot = new BotImpl<void>({
+    kv: new MemoryKvStore(),
+    repository,
+    username: "bot",
+  });
+  const ctx = createMockInboxContext(bot, "https://example.com", "bot");
+  const session = new SessionImpl(bot, ctx);
+  const author = new Person({
+    id: new URL("https://remote.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const replyAuthor = new Person({
+    id: new URL("https://reply.example/users/bob"),
+    preferredUsername: "bob",
+  });
+  const target = new Note({
+    id: new URL("https://remote.example/notes/original"),
+    attribution: author,
+    content: "Original.",
+    to: PUBLIC_COLLECTION,
+  });
+  const replyTarget = new Note({
+    id: new URL("https://reply.example/notes/thread"),
+    attribution: replyAuthor,
+    content: "Thread starter.",
+    to: PUBLIC_COLLECTION,
+  });
+  Object.defineProperty(ctx, "lookupObject", {
+    value: (id: URL) =>
+      Promise.resolve(
+        id.href === target.id?.href
+          ? target
+          : id.href === replyTarget.id?.href
+          ? replyTarget
+          : null,
+      ),
+  });
+  const targetMessage = await createMessage(target, session, {});
+  const replyMessage = await createMessage(replyTarget, session, {});
+  const quote = await session.publish(text`Please approve this.`, {
+    quoteTarget: targetMessage,
+    replyTarget: replyMessage,
+  });
+  const parsed = ctx.parseUri(quote.id);
+  assert.ok(parsed?.type === "object");
+  const messageId = parsed.values.id as Uuid;
+  const authorization = new QuoteAuthorization({
+    id: new URL("https://remote.example/stamps/1"),
+    attribution: author.id,
+    interactingObject: quote.id,
+    interactionTarget: target.id,
+  });
+  await bot.onFollowAccepted(
+    ctx,
+    new Accept({
+      actor: author,
+      object: ctx.getObjectUri(QuoteRequest, {
+        identifier: bot.identifier,
+        id: messageId,
+      }),
+      result: authorization,
+    }),
+  );
+  ctx.sentActivities = [];
+  ctx.forwardedRecipients = [];
+  ctx.forwardedActivities = [];
+
+  await bot.onDeleted(
+    ctx,
+    new Delete({
+      actor: author,
+      object: authorization.id,
+    }),
+  );
+
+  assert.deepStrictEqual(ctx.forwardedRecipients, [
+    "followers",
+    replyAuthor,
+    author,
+  ]);
+  assert.deepStrictEqual(ctx.forwardedActivities.length, 2);
+  assert.deepStrictEqual(ctx.sentActivities.length, 3);
+  assert.deepStrictEqual(ctx.sentActivities[0].recipients, "followers");
+  assert.deepStrictEqual(ctx.sentActivities[1].recipients, [replyAuthor]);
+  assert.deepStrictEqual(ctx.sentActivities[2].recipients, [author]);
+});
+
 test("BotImpl.onDeleted() forwards private quote revocations only to the quote audience", async () => {
   const repository = new MemoryRepository();
   const bot = new BotImpl<void>({
