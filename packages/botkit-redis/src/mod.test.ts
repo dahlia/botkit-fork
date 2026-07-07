@@ -210,29 +210,6 @@ function createDelayedDeleteClient(
   };
 }
 
-function createShortLockTtlClient(
-  client: TestRedisClient,
-  lockKey: string,
-  ttlMs: number,
-) {
-  return {
-    get isOpen(): boolean {
-      return client.isOpen;
-    },
-
-    sendCommand(args: readonly string[]): Promise<unknown> {
-      const command = [...args];
-      if (
-        command[0] === "SET" && command[1] === lockKey &&
-        command[4] === "PX"
-      ) {
-        command[5] = ttlMs.toString();
-      }
-      return client.sendCommand(command);
-    },
-  };
-}
-
 if (redisUrl == null) {
   test("RedisRepository integration tests", { skip: true }, () => {});
 } else {
@@ -252,6 +229,25 @@ if (redisUrl == null) {
           }]),
         new TypeError(
           "RedisRepositoryOptions must provide exactly one of client or url.",
+        ),
+      );
+      assert.throws(
+        () =>
+          new RedisRepository({
+            client: { sendCommand: () => Promise.resolve(undefined) },
+            lockTimeoutMs: 0,
+          }),
+        new RangeError("lockTimeoutMs must be a positive number."),
+      );
+      assert.throws(
+        () =>
+          new RedisRepository({
+            client: { sendCommand: () => Promise.resolve(undefined) },
+            lockTimeoutMs: 1_000,
+            lockRenewIntervalMs: 1_000,
+          }),
+        new RangeError(
+          "lockRenewIntervalMs must be less than lockTimeoutMs.",
         ),
       );
     });
@@ -387,21 +383,17 @@ if (redisUrl == null) {
       await firstClient.connect();
       await secondClient.connect();
       const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
-      const lockKey = [
-        prefix,
-        "bots",
-        "bot",
-        "messages",
-        messageId,
-        "lock",
-      ].join(":");
       const firstRepository = new RedisRepository({
-        client: createShortLockTtlClient(firstClient, lockKey, 1_500),
+        client: firstClient,
         prefix,
+        lockTimeoutMs: 1_500,
+        lockRenewIntervalMs: 500,
       });
       const secondRepository = new RedisRepository({
         client: secondClient,
         prefix,
+        lockTimeoutMs: 1_500,
+        lockRenewIntervalMs: 500,
       });
       try {
         const message = createMessage(
@@ -451,6 +443,56 @@ if (redisUrl == null) {
         await firstClient.quit();
         await secondClient.quit();
         await cleanupPrefix(redisUrl, prefix);
+      }
+    });
+
+    test("serializes message removal with concurrent updates", async () => {
+      const { repository, cleanup } = createHarness();
+      try {
+        const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+        const message = createMessage(
+          messageId,
+          "base",
+          "2025-01-01T00:00:00Z",
+        );
+        await repository.addMessage("bot", messageId, message);
+
+        let updaterStarted = false;
+        const update = repository.updateMessage(
+          "bot",
+          messageId,
+          async (existing) => {
+            assert.ok(existing instanceof Create);
+            updaterStarted = true;
+            await delay(50);
+            const content = await getMessageContent(existing);
+            return existing.clone({
+              object: new Note({
+                content: `${content}A`,
+              }),
+            });
+          },
+        );
+        while (!updaterStarted) await delay(1);
+        const removal = repository.removeMessage("bot", messageId);
+        const [updated, removed] = await Promise.all([update, removal]);
+
+        assert.ok(updated);
+        assert.deepStrictEqual(
+          await removed?.toJsonLd(),
+          await message.clone({
+            object: new Note({
+              content: "baseA",
+            }),
+          }).toJsonLd(),
+        );
+        assert.deepStrictEqual(
+          await repository.getMessage("bot", messageId),
+          undefined,
+        );
+        assert.deepStrictEqual(await repository.countMessages("bot"), 0);
+      } finally {
+        await cleanup();
       }
     });
 
@@ -508,6 +550,27 @@ if (redisUrl == null) {
           await follower.toJsonLd(),
         );
         assert.deepStrictEqual(await repository.countFollowers("bot"), 0);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test("returns no followers for zero limits", async () => {
+      const { repository, cleanup } = createHarness();
+      try {
+        const follower = new Person({
+          id: new URL("https://example.com/ap/actor/alice"),
+          preferredUsername: "alice",
+        });
+        const follow = new URL(
+          "https://example.com/ap/follow/f2fb7255-d3ad-4fef-8f9a-1d0f2c2ec0b4",
+        );
+
+        await repository.addFollower("bot", follow, follower);
+        assert.deepStrictEqual(
+          await Array.fromAsync(repository.getFollowers("bot", { limit: 0 })),
+          [],
+        );
       } finally {
         await cleanup();
       }

@@ -220,6 +220,18 @@ The `RedisRepository` constructor accepts the following properties:
 :   Additional node-redis client options.  This option is only valid when
     `url` is used.
 
+`lockTimeoutMs` (optional)
+:   How long a Redis lock can live without renewal, in milliseconds.
+    Defaults to `30000`.
+
+`lockPollIntervalMs` (optional)
+:   How long to wait before retrying a held Redis lock, in milliseconds.
+    Defaults to `20`.
+
+`lockRenewIntervalMs` (optional)
+:   How often to renew a held Redis lock, in milliseconds.  Defaults to
+    `10000`.
+
 [Redis]: https://redis.io/
 [node-redis]: https://github.com/redis/node-redis
 

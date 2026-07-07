@@ -84,6 +84,15 @@ The `RedisRepository` constructor accepts the following options:
  -  **`clientOptions`** (optional): Additional node-redis client options.
     This option is only valid together with `url`.
 
+ -  **`lockTimeoutMs`** (optional): How long a Redis lock can live without
+    renewal, in milliseconds.  Defaults to `30000`.
+
+ -  **`lockPollIntervalMs`** (optional): How long to wait before retrying a
+    held Redis lock, in milliseconds.  Defaults to `20`.
+
+ -  **`lockRenewIntervalMs`** (optional): How often to renew a held Redis lock,
+    in milliseconds.  Defaults to `10000`.
+
 The options are mutually exclusive: use either `client` or `url`.
 
 

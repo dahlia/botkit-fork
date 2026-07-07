@@ -35,9 +35,9 @@ import { getLogger } from "@logtape/logtape";
 import { createClient, type RedisClientOptions } from "redis";
 
 const logger = getLogger(["botkit", "redis"]);
-const redisLockTimeoutMs = 30_000;
-const redisLockPollIntervalMs = 20;
-const redisLockRenewIntervalMs = 1_000;
+const defaultRedisLockTimeoutMs = 30_000;
+const defaultRedisLockPollIntervalMs = 20;
+const defaultRedisLockRenewIntervalMs = 10_000;
 const uuidV7Pattern =
   /^([0-9a-f]{8})-([0-9a-f]{4})-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -65,6 +65,24 @@ interface RedisRepositoryOptionsBase {
    * @default `"botkit"`
    */
   readonly prefix?: string;
+
+  /**
+   * How long a Redis lock can live without renewal, in milliseconds.
+   * @default `30000`
+   */
+  readonly lockTimeoutMs?: number;
+
+  /**
+   * How long to wait before retrying a held Redis lock, in milliseconds.
+   * @default `20`
+   */
+  readonly lockPollIntervalMs?: number;
+
+  /**
+   * How often to renew a held Redis lock, in milliseconds.
+   * @default `10000`
+   */
+  readonly lockRenewIntervalMs?: number;
 }
 
 interface RedisRepositoryOptionsWithClient extends RedisRepositoryOptionsBase {
@@ -117,6 +135,9 @@ export class RedisRepository implements Repository, AsyncDisposable {
   private readonly client: RedisClientLike;
   private readonly ownsClient: boolean;
   private readonly ready: Promise<unknown>;
+  private readonly lockTimeoutMs: number;
+  private readonly lockPollIntervalMs: number;
+  private readonly lockRenewIntervalMs: number;
 
   /**
    * The Redis key prefix under which all BotKit data is stored.
@@ -126,6 +147,9 @@ export class RedisRepository implements Repository, AsyncDisposable {
   /**
    * Creates a new Redis repository.
    * @param options The options for creating the repository.
+   * @throws {TypeError} If exactly one of `client` and `url` is not provided.
+   * @throws {RangeError} If a lock timing option is not a positive number, or
+   *   if `lockRenewIntervalMs` is not less than `lockTimeoutMs`.
    */
   constructor(options: RedisRepositoryOptions) {
     const hasClient = "client" in options && options.client != null;
@@ -136,6 +160,25 @@ export class RedisRepository implements Repository, AsyncDisposable {
       );
     }
     this.prefix = options.prefix ?? "botkit";
+    this.lockTimeoutMs = options.lockTimeoutMs ?? defaultRedisLockTimeoutMs;
+    this.lockPollIntervalMs = options.lockPollIntervalMs ??
+      defaultRedisLockPollIntervalMs;
+    this.lockRenewIntervalMs = options.lockRenewIntervalMs ??
+      defaultRedisLockRenewIntervalMs;
+    validatePositiveMilliseconds("lockTimeoutMs", this.lockTimeoutMs);
+    validatePositiveMilliseconds(
+      "lockPollIntervalMs",
+      this.lockPollIntervalMs,
+    );
+    validatePositiveMilliseconds(
+      "lockRenewIntervalMs",
+      this.lockRenewIntervalMs,
+    );
+    if (this.lockRenewIntervalMs >= this.lockTimeoutMs) {
+      throw new RangeError(
+        "lockRenewIntervalMs must be less than lockTimeoutMs.",
+      );
+    }
     if (hasClient) {
       this.client = options.client;
       this.ownsClient = false;
@@ -147,7 +190,9 @@ export class RedisRepository implements Repository, AsyncDisposable {
       }) as unknown as RedisClientLike;
       this.client = client;
       this.ownsClient = true;
-      this.ready = client.connect?.() ?? Promise.resolve();
+      const ready = client.connect?.() ?? Promise.resolve();
+      ready.catch(() => {});
+      this.ready = ready;
     }
   }
 
@@ -159,7 +204,11 @@ export class RedisRepository implements Repository, AsyncDisposable {
    * Closes the owned Redis connection.
    */
   async close(): Promise<void> {
-    await this.ready;
+    try {
+      await this.ready;
+    } catch {
+      return;
+    }
     if (!this.ownsClient) return;
     if (this.client.quit != null) {
       await this.client.quit();
@@ -274,10 +323,10 @@ export class RedisRepository implements Repository, AsyncDisposable {
         token,
         "NX",
         "PX",
-        redisLockTimeoutMs.toString(),
+        this.lockTimeoutMs.toString(),
       ]) !== "OK"
     ) {
-      await delay(redisLockPollIntervalMs);
+      await delay(this.lockPollIntervalMs);
     }
     const renew = setInterval(() => {
       void (async () => {
@@ -289,13 +338,13 @@ export class RedisRepository implements Repository, AsyncDisposable {
             "1",
             lockKey,
             token,
-            redisLockTimeoutMs.toString(),
+            this.lockTimeoutMs.toString(),
           ]);
         } catch (error) {
           logger.warn("Failed to renew Redis lock: {error}", { error });
         }
       })();
-    }, redisLockRenewIntervalMs);
+    }, this.lockRenewIntervalMs);
     try {
       return await operation();
     } finally {
@@ -319,13 +368,12 @@ export class RedisRepository implements Repository, AsyncDisposable {
     identifier: string,
     keyPairs: CryptoKeyPair[],
   ): Promise<void> {
-    const pairs: KeyPair[] = [];
-    for (const keyPair of keyPairs) {
-      pairs.push({
+    const pairs: KeyPair[] = await Promise.all(
+      keyPairs.map(async (keyPair) => ({
         private: await exportJwk(keyPair.privateKey),
         public: await exportJwk(keyPair.publicKey),
-      });
-    }
+      })),
+    );
     await this.set(this.botKey(identifier, "keyPairs"), JSON.stringify(pairs));
   }
 
@@ -393,15 +441,20 @@ export class RedisRepository implements Repository, AsyncDisposable {
     id: Uuid,
   ): Promise<Create | Announce | undefined> {
     const key = this.botKey(identifier, "messages", id);
-    const json = await this.get(key);
-    await this.del(key);
-    await this.zRem(this.botKey(identifier, "messages"), id);
-    if (json == null) return undefined;
-    const activity = await Activity.fromJsonLd(JSON.parse(json));
-    if (activity instanceof Create || activity instanceof Announce) {
-      return activity;
-    }
-    return undefined;
+    return await this.withRedisLock(
+      this.botKey(identifier, "messages", id, "lock"),
+      async () => {
+        const json = await this.get(key);
+        await this.del(key);
+        await this.zRem(this.botKey(identifier, "messages"), id);
+        if (json == null) return undefined;
+        const activity = await Activity.fromJsonLd(JSON.parse(json));
+        if (activity instanceof Create || activity instanceof Announce) {
+          return activity;
+        }
+        return undefined;
+      },
+    );
   }
 
   async *getMessages(
@@ -456,6 +509,11 @@ export class RedisRepository implements Repository, AsyncDisposable {
     return this.zCard(this.botKey(identifier, "messages"));
   }
 
+  /**
+   * Adds a follower for a follow request.
+   *
+   * @throws {TypeError} If the follower actor has no ID.
+   */
   async addFollower(
     identifier: string,
     followId: URL,
@@ -566,6 +624,7 @@ export class RedisRepository implements Repository, AsyncDisposable {
     identifier: string,
     options: RepositoryGetFollowersOptions = {},
   ): AsyncIterable<Actor> {
+    if (options.limit === 0) return;
     const start = options.offset ?? 0;
     const stop = options.limit == null ? -1 : start + options.limit - 1;
     const ids = toStringArray(
@@ -674,6 +733,11 @@ export class RedisRepository implements Repository, AsyncDisposable {
     yield* await this.zRange(this.key("index", "followees", followeeId.href));
   }
 
+  /**
+   * Stores a quote authorization.
+   *
+   * @throws {TypeError} If the quote authorization has no interacting object.
+   */
   async addQuoteAuthorization(
     identifier: string,
     id: Uuid,
@@ -900,11 +964,11 @@ export class RedisRepository implements Repository, AsyncDisposable {
     const options = await this.zRange(
       this.botKey(identifier, "polls", messageId, "options"),
     );
-    for (const option of options) {
+    await Promise.all(options.map(async (option) => {
       result[option] = await this.sCard(
         this.botKey(identifier, "polls", messageId, "options", option),
       );
-    }
+    }));
     return result;
   }
 
@@ -922,6 +986,12 @@ function toNumber(value: unknown): number {
   if (typeof value === "bigint") return Number(value);
   if (typeof value === "string") return Number.parseInt(value, 10);
   return 0;
+}
+
+function validatePositiveMilliseconds(name: string, value: number): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new RangeError(`${name} must be a positive number.`);
+  }
 }
 
 function toStringArray(value: unknown): string[] {
