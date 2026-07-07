@@ -300,6 +300,9 @@ if (redisUrl == null) {
       const client = createClient({ url: redisUrl });
       await client.connect();
       const repository = new RedisRepository({ client, prefix });
+      const rejectedReady = Promise.reject(new TypeError("Unexpected await."));
+      rejectedReady.catch(() => {});
+      Reflect.set(repository, "ready", rejectedReady);
       try {
         assert.ok(client.isOpen);
         await repository.close();
@@ -443,6 +446,29 @@ if (redisUrl == null) {
         );
         assert.deepStrictEqual(await client.sendCommand(["GET", key]), null);
         assert.deepStrictEqual(await repository.countMessages("bot"), 0);
+      } finally {
+        await client.quit();
+        await cleanup();
+      }
+    });
+
+    test("ignores corrupted messages during updates", async () => {
+      const { repository, cleanup, prefix } = createHarness();
+      const client = createClient({ url: redisUrl });
+      await client.connect();
+      try {
+        const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+        await client.sendCommand([
+          "SET",
+          `${prefix}:bots:bot:messages:${messageId}`,
+          "{",
+        ]);
+        assert.deepStrictEqual(
+          await repository.updateMessage("bot", messageId, () => {
+            throw new TypeError("Unexpected updater call.");
+          }),
+          false,
+        );
       } finally {
         await client.quit();
         await cleanup();
@@ -705,7 +731,9 @@ if (redisUrl == null) {
     });
 
     test("followers with multiple follow requests", async () => {
-      const { repository, cleanup } = createHarness();
+      const { repository, cleanup, prefix } = createHarness();
+      const client = createClient({ url: redisUrl });
+      await client.connect();
       try {
         const follower = new Person({
           id: new URL("https://example.com/ap/actor/alice"),
@@ -733,7 +761,22 @@ if (redisUrl == null) {
           await follower.toJsonLd(),
         );
         assert.deepStrictEqual(await repository.countFollowers("bot"), 0);
+
+        await repository.addFollower("bot", followB, follower);
+        await client.sendCommand([
+          "DEL",
+          `${prefix}:bots:bot:followRequests:${
+            encodeURIComponent(followB.href)
+          }`,
+        ]);
+        assert.deepStrictEqual(
+          await (await repository.removeFollower("bot", followB, follower.id!))
+            ?.toJsonLd(),
+          await follower.toJsonLd(),
+        );
+        assert.deepStrictEqual(await repository.countFollowers("bot"), 0);
       } finally {
+        await client.quit();
         await cleanup();
       }
     });
@@ -929,7 +972,9 @@ if (redisUrl == null) {
     });
 
     test("quote authorizations and references", async () => {
-      const { repository, cleanup } = createHarness();
+      const { repository, cleanup, prefix } = createHarness();
+      const client = createClient({ url: redisUrl });
+      await client.connect();
       try {
         const firstId = "01942976-3400-7f34-872e-2cbf0f9eeac4";
         const secondId = "01942976-3400-7f34-872e-2cbf0f9eeac5";
@@ -987,6 +1032,20 @@ if (redisUrl == null) {
           ),
           attribution,
         );
+        await client.sendCommand([
+          "SET",
+          `${prefix}:bots:bot:quoteAuthorizationRefs:${
+            encodeURIComponent(stamp.href)
+          }`,
+          "null",
+        ]);
+        assert.deepStrictEqual(
+          await repository.findQuoteAuthorizationReferenceAttribution(
+            "bot",
+            stamp,
+          ),
+          undefined,
+        );
         assert.deepStrictEqual(
           await Array.fromAsync(
             repository.findQuoteAuthorizationReferenceIdentifiers(stamp),
@@ -1001,6 +1060,7 @@ if (redisUrl == null) {
           ["other"],
         );
       } finally {
+        await client.quit();
         await cleanup();
       }
     });

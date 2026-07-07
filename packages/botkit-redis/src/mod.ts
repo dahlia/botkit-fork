@@ -208,6 +208,7 @@ export class RedisRepository implements Repository, AsyncDisposable {
    * Closes the owned Redis connection.
    */
   async close(): Promise<void> {
+    if (!this.ownsClient) return;
     const ready = this.ready;
     try {
       await ready;
@@ -220,7 +221,6 @@ export class RedisRepository implements Repository, AsyncDisposable {
       );
       if (this.ready === ready) this.ready = undefined;
     }
-    if (!this.ownsClient) return;
     try {
       if (this.client.quit != null) {
         await this.client.quit();
@@ -467,7 +467,12 @@ export class RedisRepository implements Repository, AsyncDisposable {
       async () => {
         const json = await this.get(key);
         if (json == null) return false;
-        const activity = await Activity.fromJsonLd(JSON.parse(json));
+        let activity: Activity;
+        try {
+          activity = await Activity.fromJsonLd(JSON.parse(json));
+        } catch {
+          return false;
+        }
         if (!(activity instanceof Create || activity instanceof Announce)) {
           return false;
         }
@@ -629,14 +634,18 @@ export class RedisRepository implements Repository, AsyncDisposable {
       this.botKey(identifier, "followers", "lock"),
       async () => {
         const currentFollowerId = await this.get(requestKey);
-        if (currentFollowerId !== followerId.href) return undefined;
+        if (
+          currentFollowerId != null && currentFollowerId !== followerId.href
+        ) {
+          return undefined;
+        }
         const followerKey = this.botKey(
           identifier,
           "followers",
           followerId.href,
         );
         const json = await this.get(followerKey);
-        await this.del(requestKey);
+        if (currentFollowerId === followerId.href) await this.del(requestKey);
         await this.sRem(
           this.botKey(identifier, "followerRequests", followerId.href),
           followIdString,
@@ -1025,6 +1034,7 @@ export class RedisRepository implements Repository, AsyncDisposable {
     } catch {
       return undefined;
     }
+    if (typeof value !== "object" || value == null) return undefined;
     if (value.attribution == null) return undefined;
     try {
       return new URL(value.attribution);
