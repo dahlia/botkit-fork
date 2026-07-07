@@ -4867,6 +4867,10 @@ test("BotImpl.onDeleted() forwards quote revocations to reply targets", async ()
     id: new URL("https://reply.example/users/bob"),
     preferredUsername: "bob",
   });
+  const mentioned = new Person({
+    id: new URL("https://mentioned.example/users/carol"),
+    preferredUsername: "carol",
+  });
   const target = new Note({
     id: new URL("https://remote.example/notes/original"),
     attribution: author,
@@ -4879,22 +4883,31 @@ test("BotImpl.onDeleted() forwards quote revocations to reply targets", async ()
     content: "Thread starter.",
     to: PUBLIC_COLLECTION,
   });
+  let replyTargetLookups = 0;
+  let mentionedLookups = 0;
   Object.defineProperty(ctx, "lookupObject", {
-    value: (id: URL) =>
-      Promise.resolve(
-        id.href === target.id?.href
-          ? target
-          : id.href === replyTarget.id?.href
-          ? replyTarget
-          : null,
-      ),
+    value: (id: URL) => {
+      if (id.href === target.id?.href) return Promise.resolve(target);
+      if (id.href === replyTarget.id?.href) {
+        replyTargetLookups++;
+        return Promise.resolve(replyTarget);
+      }
+      if (id.href === mentioned.id?.href) {
+        mentionedLookups++;
+        return Promise.resolve(mentioned);
+      }
+      return Promise.resolve(null);
+    },
   });
   const targetMessage = await createMessage(target, session, {});
   const replyMessage = await createMessage(replyTarget, session, {});
-  const quote = await session.publish(text`Please approve this.`, {
-    quoteTarget: targetMessage,
-    replyTarget: replyMessage,
-  });
+  const quote = await session.publish(
+    text`Please approve this, ${mentioned}.`,
+    {
+      quoteTarget: targetMessage,
+      replyTarget: replyMessage,
+    },
+  );
   const parsed = ctx.parseUri(quote.id);
   assert.ok(parsed?.type === "object");
   const messageId = parsed.values.id as Uuid;
@@ -4918,6 +4931,8 @@ test("BotImpl.onDeleted() forwards quote revocations to reply targets", async ()
   ctx.sentActivities = [];
   ctx.forwardedRecipients = [];
   ctx.forwardedActivities = [];
+  replyTargetLookups = 0;
+  mentionedLookups = 0;
 
   await bot.onDeleted(
     ctx,
@@ -4929,14 +4944,18 @@ test("BotImpl.onDeleted() forwards quote revocations to reply targets", async ()
 
   assert.deepStrictEqual(ctx.forwardedRecipients, [
     "followers",
+    mentioned,
     replyAuthor,
     author,
   ]);
   assert.deepStrictEqual(ctx.forwardedActivities.length, 2);
-  assert.deepStrictEqual(ctx.sentActivities.length, 3);
+  assert.deepStrictEqual(ctx.sentActivities.length, 4);
   assert.deepStrictEqual(ctx.sentActivities[0].recipients, "followers");
-  assert.deepStrictEqual(ctx.sentActivities[1].recipients, [replyAuthor]);
-  assert.deepStrictEqual(ctx.sentActivities[2].recipients, [author]);
+  assert.deepStrictEqual(ctx.sentActivities[1].recipients, [mentioned]);
+  assert.deepStrictEqual(ctx.sentActivities[2].recipients, [replyAuthor]);
+  assert.deepStrictEqual(ctx.sentActivities[3].recipients, [author]);
+  assert.deepStrictEqual(replyTargetLookups, 2);
+  assert.deepStrictEqual(mentionedLookups, 2);
 });
 
 test("BotImpl.onDeleted() forwards private quote revocations only to the quote audience", async () => {

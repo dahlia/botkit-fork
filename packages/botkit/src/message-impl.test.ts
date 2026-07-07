@@ -400,6 +400,22 @@ test("createMessage() verifies quote approvals", async (t) => {
     );
   });
 
+  await t.test("preserves custom errors after abort", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const error = new TypeError("Lookup cancelled.");
+    await assert.rejects(
+      () =>
+        materialize({
+          quote: targetId,
+          quoteAuthorization: authorizationId,
+          authorizationError: error,
+          signal: controller.signal,
+        }),
+      (actual) => actual === error,
+    );
+  });
+
   await t.test("legacy quote", async () => {
     const message = await materialize({
       quoteUrl: targetId,

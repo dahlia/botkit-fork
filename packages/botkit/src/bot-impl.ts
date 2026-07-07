@@ -841,7 +841,13 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     }
     const rejecter = await this.#validateQuoteRejection(ctx, reject, object);
     if (rejecter == null) return;
-    const stripped = await this.#stripRejectedQuote(ctx, id, object, rejecter);
+    const stripped = await this.#stripRejectedQuote(
+      ctx,
+      id,
+      object,
+      rejecter,
+      this.onQuoteRejected != null,
+    );
     if (stripped != null && this.onQuoteRejected != null) {
       await this.onQuoteRejected(
         stripped.session,
@@ -880,7 +886,13 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     );
     if (actor == null) return;
     await this.#forwardQuoteAuthorizationDeletion(ctx, object, actor);
-    const stripped = await this.#stripRejectedQuote(ctx, id, object, actor);
+    const stripped = await this.#stripRejectedQuote(
+      ctx,
+      id,
+      object,
+      actor,
+      this.onQuoteRevoked != null,
+    );
     if (stripped != null && this.onQuoteRevoked != null) {
       await this.onQuoteRevoked(stripped.session, stripped.message, actor);
     }
@@ -891,6 +903,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     id: Uuid,
     object: MessageClass,
     actor: Actor,
+    materializeMessage: boolean,
   ): Promise<
     | {
       readonly session: SessionImpl<TContextData>;
@@ -928,6 +941,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     }
     if (!wasUpdated || strippedObject == null) return;
     await this.#sendQuoteUpdate(ctx, strippedObject, actor);
+    if (!materializeMessage) return;
     const session = this.getSession(ctx);
     const message = await createMessage(
       strippedObject,
