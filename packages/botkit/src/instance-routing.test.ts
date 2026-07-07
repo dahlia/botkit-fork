@@ -28,7 +28,7 @@ import {
   Undo,
   Update,
 } from "@fedify/vocab";
-import assert from "node:assert";
+import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { Bot } from "./bot.ts";
 import { BotImpl } from "./bot-impl.ts";

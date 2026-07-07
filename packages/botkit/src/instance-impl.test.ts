@@ -15,7 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import { MemoryKvStore } from "@fedify/fedify/federation";
 import { Create, Note } from "@fedify/vocab";
-import assert from "node:assert";
+import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { createInstance } from "./instance.ts";
 import { MemoryRepository } from "./repository.ts";

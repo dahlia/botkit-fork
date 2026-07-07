@@ -15,7 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import { MemoryKvStore } from "@fedify/fedify/federation";
 import type { Actor } from "@fedify/vocab";
-import assert from "node:assert";
+import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BotImpl } from "./bot-impl.ts";
 import { MemoryRepository } from "./repository.ts";

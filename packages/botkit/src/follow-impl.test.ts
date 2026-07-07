@@ -16,7 +16,7 @@
 import { Person } from "@fedify/vocab";
 import { MemoryKvStore } from "@fedify/fedify/federation";
 import { Accept, Follow, Reject } from "@fedify/vocab";
-import assert from "node:assert";
+import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BotImpl } from "./bot-impl.ts";
 import { FollowRequestImpl } from "./follow-impl.ts";

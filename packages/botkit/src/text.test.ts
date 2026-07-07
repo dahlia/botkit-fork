@@ -21,7 +21,7 @@ import {
 import { getDocumentLoader } from "@fedify/vocab-runtime";
 import { importJwk } from "@fedify/fedify/sig";
 import { Emoji, Hashtag, Image, Mention, Person, Service } from "@fedify/vocab";
-import assert from "node:assert";
+import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { BotImpl } from "./bot-impl.ts";
 import { InstanceImpl } from "./instance-impl.ts";

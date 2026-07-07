@@ -35,7 +35,7 @@ import {
   Undo,
   Update,
 } from "@fedify/vocab";
-import assert from "node:assert";
+import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BotImpl } from "./bot-impl.ts";
 import { type DeferredCustomEmoji, emoji } from "./emoji.ts";

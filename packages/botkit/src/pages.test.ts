@@ -15,7 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import { MemoryKvStore } from "@fedify/fedify/federation";
 import { Create, Note, PUBLIC_COLLECTION } from "@fedify/vocab";
-import assert from "node:assert";
+import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { BotImpl } from "./bot-impl.ts";
 import { InstanceImpl } from "./instance-impl.ts";

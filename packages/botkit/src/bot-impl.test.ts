@@ -46,7 +46,7 @@ import {
   Update,
 } from "@fedify/vocab";
 import { configureSync, type LogRecord, resetSync } from "@logtape/logtape";
-import assert from "node:assert";
+import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { BotImpl, MigrationGatedRepository } from "./bot-impl.ts";
 import type { CustomEmoji } from "./emoji.ts";

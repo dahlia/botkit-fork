@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import { QuoteAuthorization } from "@fedify/vocab";
-import assert from "node:assert";
+import assert from "node:assert/strict";
 import { test } from "node:test";
 import { validateQuoteAuthorization } from "./quote-authorization.ts";
 
