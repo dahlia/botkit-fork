@@ -392,14 +392,19 @@ export class RedisRepository implements Repository, AsyncDisposable {
     id: Uuid,
     activity: Create | Announce,
   ): Promise<void> {
-    await this.set(
-      this.botKey(identifier, "messages", id),
-      JSON.stringify(await activity.toJsonLd({ format: "compact" })),
-    );
-    await this.zAdd(
-      this.botKey(identifier, "messages"),
-      getMessageScore(id, activity),
-      id,
+    await this.withRedisLock(
+      this.botKey(identifier, "messages", id, "lock"),
+      async () => {
+        await this.set(
+          this.botKey(identifier, "messages", id),
+          JSON.stringify(await activity.toJsonLd({ format: "compact" })),
+        );
+        await this.zAdd(
+          this.botKey(identifier, "messages"),
+          getMessageScore(id, activity),
+          id,
+        );
+      },
     );
   }
 
@@ -690,14 +695,19 @@ export class RedisRepository implements Repository, AsyncDisposable {
     followeeId: URL,
     follow: Follow,
   ): Promise<void> {
-    await this.set(
-      this.botKey(identifier, "followees", followeeId.href),
-      JSON.stringify(await follow.toJsonLd({ format: "compact" })),
-    );
-    await this.zAdd(
-      this.key("index", "followees", followeeId.href),
-      0,
-      identifier,
+    await this.withRedisLock(
+      this.botKey(identifier, "followees", followeeId.href, "lock"),
+      async () => {
+        await this.set(
+          this.botKey(identifier, "followees", followeeId.href),
+          JSON.stringify(await follow.toJsonLd({ format: "compact" })),
+        );
+        await this.zAdd(
+          this.key("index", "followees", followeeId.href),
+          0,
+          identifier,
+        );
+      },
     );
   }
 
@@ -705,13 +715,18 @@ export class RedisRepository implements Repository, AsyncDisposable {
     identifier: string,
     followeeId: URL,
   ): Promise<Follow | undefined> {
-    const follow = await this.getFollowee(identifier, followeeId);
-    await this.del(this.botKey(identifier, "followees", followeeId.href));
-    await this.zRem(
-      this.key("index", "followees", followeeId.href),
-      identifier,
+    return await this.withRedisLock(
+      this.botKey(identifier, "followees", followeeId.href, "lock"),
+      async () => {
+        const follow = await this.getFollowee(identifier, followeeId);
+        await this.del(this.botKey(identifier, "followees", followeeId.href));
+        await this.zRem(
+          this.key("index", "followees", followeeId.href),
+          identifier,
+        );
+        return follow;
+      },
     );
-    return follow;
   }
 
   async getFollowee(

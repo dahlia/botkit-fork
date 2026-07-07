@@ -210,6 +210,29 @@ function createDelayedDeleteClient(
   };
 }
 
+function createDelayedCommandClient(
+  client: TestRedisClient,
+  matches: (args: readonly string[]) => boolean,
+  observed: Deferred,
+  release: Deferred,
+) {
+  return {
+    get isOpen(): boolean {
+      return client.isOpen;
+    },
+
+    sendCommand(args: readonly string[]): Promise<unknown> {
+      return (async () => {
+        if (matches(args)) {
+          observed.resolve();
+          await release.promise;
+        }
+        return await client.sendCommand([...args]);
+      })();
+    },
+  };
+}
+
 if (redisUrl == null) {
   test("RedisRepository integration tests", { skip: true }, () => {});
 } else {
@@ -496,6 +519,73 @@ if (redisUrl == null) {
       }
     });
 
+    test("serializes message indexing with removal", async () => {
+      const prefix = `botkit_test_${crypto.randomUUID()}`;
+      const addClient = createClient({ url: redisUrl });
+      const removeClient = createClient({ url: redisUrl });
+      await addClient.connect();
+      await removeClient.connect();
+      const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+      const indexKey = [
+        prefix,
+        "bots",
+        "bot",
+        "messages",
+      ].join(":");
+      const observed = createDeferred();
+      const release = createDeferred();
+      const addRepository = new RedisRepository({
+        client: createDelayedCommandClient(
+          addClient,
+          (args) =>
+            args[0] === "ZADD" && args[1] === indexKey &&
+            args.at(-1) === messageId,
+          observed,
+          release,
+        ),
+        prefix,
+      });
+      const removeRepository = new RedisRepository({
+        client: removeClient,
+        prefix,
+      });
+      try {
+        const message = createMessage(
+          messageId,
+          "base",
+          "2025-01-01T00:00:00Z",
+        );
+
+        const add = addRepository.addMessage("bot", messageId, message);
+        await observed.promise;
+        const removal = removeRepository.removeMessage("bot", messageId);
+        await delay(50);
+        release.resolve();
+
+        await add;
+        assert.deepStrictEqual(
+          await (await removal)?.toJsonLd(),
+          await message.toJsonLd(),
+        );
+        assert.deepStrictEqual(
+          await addRepository.getMessage("bot", messageId),
+          undefined,
+        );
+        assert.deepStrictEqual(await addRepository.countMessages("bot"), 0);
+        assert.deepStrictEqual(
+          await Array.fromAsync(addRepository.getMessages("bot")),
+          [],
+        );
+      } finally {
+        release.resolve();
+        await addRepository.close();
+        await removeRepository.close();
+        await addClient.quit();
+        await removeClient.quit();
+        await cleanupPrefix(redisUrl, prefix);
+      }
+    });
+
     test("persists data across repository instances", async () => {
       if (redisUrl == null) throw new Error("REDIS_URL is not set.");
       const prefix = `botkit_test_${crypto.randomUUID()}`;
@@ -651,6 +741,74 @@ if (redisUrl == null) {
         );
       } finally {
         await cleanup();
+      }
+    });
+
+    test("serializes followee indexes with removals", async () => {
+      const prefix = `botkit_test_${crypto.randomUUID()}`;
+      const addClient = createClient({ url: redisUrl });
+      const removeClient = createClient({ url: redisUrl });
+      await addClient.connect();
+      await removeClient.connect();
+      const followeeId = new URL("https://example.com/ap/actor/john");
+      const indexKey = [
+        prefix,
+        "index",
+        "followees",
+        encodeURIComponent(followeeId.href),
+      ].join(":");
+      const observed = createDeferred();
+      const release = createDeferred();
+      const addRepository = new RedisRepository({
+        client: createDelayedCommandClient(
+          addClient,
+          (args) =>
+            args[0] === "ZADD" && args[1] === indexKey &&
+            args.at(-1) === "bot",
+          observed,
+          release,
+        ),
+        prefix,
+      });
+      const removeRepository = new RedisRepository({
+        client: removeClient,
+        prefix,
+      });
+      try {
+        const follow = new Follow({
+          id: new URL(
+            "https://example.com/ap/actor/bot/follow/03a395a2-353a-4894-afdb-2cab31a7b004",
+          ),
+          actor: new URL("https://example.com/ap/actor/bot"),
+          object: followeeId,
+        });
+
+        const add = addRepository.addFollowee("bot", followeeId, follow);
+        await observed.promise;
+        const removal = removeRepository.removeFollowee("bot", followeeId);
+        await delay(50);
+        release.resolve();
+
+        await add;
+        assert.deepStrictEqual(
+          await (await removal)?.toJsonLd(),
+          await follow.toJsonLd(),
+        );
+        assert.deepStrictEqual(
+          await addRepository.getFollowee("bot", followeeId),
+          undefined,
+        );
+        assert.deepStrictEqual(
+          await Array.fromAsync(addRepository.findFollowedBots(followeeId)),
+          [],
+        );
+      } finally {
+        release.resolve();
+        await addRepository.close();
+        await removeRepository.close();
+        await addClient.quit();
+        await removeClient.quit();
+        await cleanupPrefix(redisUrl, prefix);
       }
     });
 
