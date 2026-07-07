@@ -1,0 +1,6 @@
+{
+  "tasks": {
+    "dev": "deno serve --allow-net --allow-env --unstable-kv --watch static-and-dynamic-bots.ts",
+    "prod": "deno serve --allow-net --allow-env --unstable-kv static-and-dynamic-bots.ts"
+  }
+}

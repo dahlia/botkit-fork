@@ -86,6 +86,73 @@ interactions with traditional web applications.
 <!-- hongdown-enable -->
 
 
+Multiple bots on one server
+---------------------------
+
+The following example shows how to host two independent bots on a single
+server using `createInstance()`.  The two bots have distinct handles and
+event handlers, but share the same infrastructure (key–value store and message
+queue):
+
+ -  *@greetbot* sends a welcome direct message to every new follower and
+    replies with a greeting when mentioned.
+ -  *@echobot* echoes back the plain text of every mention.
+
+<!-- hongdown-disable -->
+
+::: code-group
+
+<<< @/../examples/multiple-bots/multiple-bots.ts [multiple-bots.ts]
+
+:::
+
+<!-- hongdown-enable -->
+
+
+On-demand bots
+--------------
+
+The following example shows how to create a group of bots that are resolved
+on demand from a dispatcher function.  Each bot has the handle
+`@lang_<code>@your-domain`, where `<code>` is one of the supported BCP 47
+language codes (`en`, `ko`, `ja`, `es`, `fr`).  The dispatcher returns the
+bot profile when the code is recognized and `null` otherwise, so only a
+handful of handles resolve while the rest return 404.
+
+<!-- hongdown-disable -->
+
+::: code-group
+
+<<< @/../examples/dynamic-bots/on-demand-bots.ts [on-demand-bots.ts]
+
+:::
+
+<!-- hongdown-enable -->
+
+
+Static and dynamic bots
+-----------------------
+
+The following example combines a static bot and a group of dynamic bots on
+the same instance.  Static bots take precedence over dynamic ones, and
+multiple bot groups are probed in the order they were created.
+
+ -  *@announce* is a static bot that rebroadcasts every mention as a public
+    post, effectively acting as an announcement channel.
+ -  *@lang\_en*, *@lang\_ko*, and *@lang\_ja* are dynamic bots that greet
+    followers and mentions in the respective language.
+
+<!-- hongdown-disable -->
+
+::: code-group
+
+<<< @/../examples/static-and-dynamic-bots/static-and-dynamic-bots.ts [static-and-dynamic-bots.ts]
+
+:::
+
+<!-- hongdown-enable -->
+
+
 FediChatBot
 -----------
 
