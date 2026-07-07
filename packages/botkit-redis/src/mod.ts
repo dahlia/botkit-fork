@@ -184,10 +184,10 @@ export class RedisRepository implements Repository, AsyncDisposable {
       this.client = options.client;
       this.ownsClient = false;
     } else {
-      const client = createClient({
+      const client: RedisClientLike = createClient({
         ...options.clientOptions,
         url: options.url.toString(),
-      }) as unknown as RedisClientLike;
+      });
       this.client = client;
       this.ownsClient = true;
       client.on?.("error", (error) => {
@@ -839,8 +839,8 @@ export class RedisRepository implements Repository, AsyncDisposable {
           ) {
             return;
           }
-          await this.del(indexKey);
           await this.del(
+            indexKey,
             this.botKey(
               identifier,
               "quoteAuthorizationInteractingObjects",
@@ -895,8 +895,8 @@ export class RedisRepository implements Repository, AsyncDisposable {
           id as Uuid,
         );
         if (authorization == null && await this.get(indexKey) === id) {
-          await this.del(indexKey);
           await this.del(
+            indexKey,
             this.botKey(identifier, "quoteAuthorizationInteractingObjects", id),
           );
         }
