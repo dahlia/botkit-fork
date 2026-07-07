@@ -176,11 +176,22 @@ export default defineConfig({
     ],
     [
       "meta",
+      { property: "og:image", content: "https://botkit.fedify.dev/og.png" },
+    ],
+    ["meta", { property: "og:image:width", content: "1200" }],
+    ["meta", { property: "og:image:height", content: "630" }],
+    ["meta", { property: "og:image:type", content: "image/png" }],
+    [
+      "meta",
       {
-        property: "og:image",
-        content:
-          "https://repository-images.githubusercontent.com/913141583/852a1091-14d5-46a0-b3bf-8d2f45ef6e7f",
+        property: "og:image:alt",
+        content: "BotKit: fediverse bots, as standalone servers.",
       },
+    ],
+    ["meta", { name: "twitter:card", content: "summary_large_image" }],
+    [
+      "meta",
+      { name: "twitter:image", content: "https://botkit.fedify.dev/og.png" },
     ],
     [
       "meta",
