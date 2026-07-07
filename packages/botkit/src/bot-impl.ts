@@ -81,6 +81,7 @@ import type {
   QuoteEventHandler,
   QuoteRejectedEventHandler,
   QuoteRequestEventHandler,
+  QuoteRevokedEventHandler,
   ReactionEventHandler,
   RejectEventHandler,
   ReplyEventHandler,
@@ -108,6 +109,7 @@ import type {
   SharedMessage,
 } from "./message.ts";
 import type { Vote } from "./poll.ts";
+import { validateQuoteAuthorization } from "./quote-authorization.ts";
 import { QuoteRequestImpl } from "./quote-impl.ts";
 import { normalizeQuotePolicy, type QuotePolicyOption } from "./quote.ts";
 import type { Like, Reaction } from "./reaction.ts";
@@ -165,6 +167,7 @@ export const botEventHandlerNames = [
   "onQuoteRequest",
   "onQuoteAccepted",
   "onQuoteRejected",
+  "onQuoteRevoked",
   "onMessage",
   "onSharedMessage",
   "onLike",
@@ -240,6 +243,7 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
   onQuoteRequest?: QuoteRequestEventHandler<TContextData>;
   onQuoteAccepted?: QuoteAcceptedEventHandler<TContextData>;
   onQuoteRejected?: QuoteRejectedEventHandler<TContextData>;
+  onQuoteRevoked?: QuoteRevokedEventHandler<TContextData>;
   onMessage?: MessageEventHandler<TContextData>;
   onSharedMessage?: SharedMessageEventHandler<TContextData>;
   onLike?: LikeEventHandler<TContextData>;
@@ -837,7 +841,20 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     }
     const rejecter = await this.#validateQuoteRejection(ctx, reject, object);
     if (rejecter == null) return;
-    await this.#stripRejectedQuote(ctx, id, object, rejecter);
+    const stripped = await this.#stripRejectedQuote(
+      ctx,
+      id,
+      object,
+      rejecter,
+      this.onQuoteRejected != null,
+    );
+    if (stripped != null && this.onQuoteRejected != null) {
+      await this.onQuoteRejected(
+        stripped.session,
+        stripped.message,
+        rejecter,
+      );
+    }
   }
 
   async onDeleted(
@@ -868,7 +885,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       object,
     );
     if (actor == null) return;
-    await this.#stripRejectedQuote(ctx, id, object, actor);
+    await this.#forwardQuoteAuthorizationDeletion(ctx, object, actor);
+    const stripped = await this.#stripRejectedQuote(
+      ctx,
+      id,
+      object,
+      actor,
+      this.onQuoteRevoked != null,
+    );
+    if (stripped != null && this.onQuoteRevoked != null) {
+      await this.onQuoteRevoked(stripped.session, stripped.message, actor);
+    }
   }
 
   async #stripRejectedQuote(
@@ -876,8 +903,16 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     id: Uuid,
     object: MessageClass,
     actor: Actor,
-  ): Promise<void> {
+    materializeMessage: boolean,
+  ): Promise<
+    | {
+      readonly session: SessionImpl<TContextData>;
+      readonly message: AuthorizedMessage<MessageClass, TContextData>;
+    }
+    | undefined
+  > {
     const quoteId = object.quoteId;
+    const quoteAuthorizationId = object.quoteAuthorizationId;
     let strippedObject: MessageClass | undefined;
     const wasUpdated = await this.repository.updateMessage(
       id,
@@ -886,7 +921,10 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
         const existingObject = await existing.getObject(ctx);
         if (
           !isMessageObject(existingObject) || existingObject.id == null ||
-          (quoteId != null && existingObject.quoteId?.href !== quoteId.href)
+          (quoteId != null && existingObject.quoteId?.href !== quoteId.href) ||
+          (quoteAuthorizationId != null &&
+            existingObject.quoteAuthorizationId?.href !==
+              quoteAuthorizationId.href)
         ) {
           return;
         }
@@ -903,18 +941,17 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     }
     if (!wasUpdated || strippedObject == null) return;
     await this.#sendQuoteUpdate(ctx, strippedObject, actor);
-    if (this.onQuoteRejected != null) {
-      const session = this.getSession(ctx);
-      const message = await createMessage(
-        strippedObject,
-        session,
-        { [actor.id!.href]: actor },
-        undefined,
-        undefined,
-        true,
-      ) as AuthorizedMessage<MessageClass, TContextData>;
-      await this.onQuoteRejected(session, message, actor);
-    }
+    if (!materializeMessage) return;
+    const session = this.getSession(ctx);
+    const message = await createMessage(
+      strippedObject,
+      session,
+      actor.id == null ? {} : { [actor.id.href]: actor },
+      undefined,
+      undefined,
+      true,
+    ) as AuthorizedMessage<MessageClass, TContextData>;
+    return { session, message };
   }
 
   async #validateQuoteApproval(
@@ -952,13 +989,12 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       authorization = await lookupObjectSafely(this, ctx, accept.resultId);
     }
     if (
-      !(authorization instanceof QuoteAuthorization) ||
-      authorization.id == null ||
-      authorization.id.href !== accept.resultId.href ||
-      authorization.id.origin !== actor.id.origin ||
-      authorization.attributionId?.href !== actor.id.href ||
-      authorization.interactingObjectId?.href !== object.id!.href ||
-      authorization.interactionTargetId?.href !== object.quoteId!.href
+      !validateQuoteAuthorization(authorization, {
+        authorizationId: accept.resultId,
+        quoteId: object.id!,
+        targetId: object.quoteId!,
+        targetActorId: actor.id,
+      })
     ) return undefined;
     return { actor, authorization };
   }
@@ -1005,12 +1041,108 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     ) {
       return undefined;
     }
+    if (actor.id.origin !== object.quoteAuthorizationId.origin) {
+      return undefined;
+    }
     const attribution = await this.repository
       .findQuoteAuthorizationReferenceAttribution(
         object.quoteAuthorizationId,
       );
     if (attribution?.href !== actor.id.href) return undefined;
     return actor;
+  }
+
+  async #forwardQuoteAuthorizationDeletion(
+    ctx: InboxContext<TContextData>,
+    object: MessageClass,
+    quoteActor: Actor,
+  ): Promise<void> {
+    const visibility = await this.#getMessageVisibility(ctx, object);
+    const preferSharedInbox = visibility === "public" ||
+      visibility === "unlisted" || visibility === "followers";
+    const excludeBaseUris = [new URL(ctx.origin)];
+    const followersUri = ctx.getFollowersUri(this.identifier);
+    const botActorUri = ctx.getActorUri(this.identifier);
+    const recipientIds = new Map<string, URL>();
+    let forwardsToFollowers = false;
+    const addRecipientId = (id: URL | null | undefined) => {
+      if (id == null) return;
+      if (id.href === followersUri.href) {
+        forwardsToFollowers = true;
+        return;
+      }
+      if (
+        id.href === PUBLIC_COLLECTION.href ||
+        id.href === botActorUri.href
+      ) {
+        return;
+      }
+      recipientIds.set(id.href, id);
+    };
+    for (const id of object.toIds) addRecipientId(id);
+    for (const id of object.ccIds) addRecipientId(id);
+    for await (
+      const tag of object.getTags({
+        contextLoader: ctx.contextLoader,
+        documentLoader: ctx.documentLoader,
+        suppressError: true,
+      })
+    ) {
+      if (tag instanceof Mention) addRecipientId(tag.href);
+    }
+    if (forwardsToFollowers) {
+      await ctx.forwardActivity(this, "followers", {
+        skipIfUnsigned: true,
+        preferSharedInbox: true,
+        excludeBaseUris,
+      });
+    }
+    const actorRecipients: Actor[] = [];
+    const actorRecipientIds = new Set<string>();
+    const knownActors = new Map<string, Actor>();
+    if (quoteActor.id != null) knownActors.set(quoteActor.id.href, quoteActor);
+    const addActorRecipient = (actor: Actor) => {
+      if (
+        actor.id == null ||
+        actor.id.href === botActorUri.href ||
+        actorRecipientIds.has(actor.id.href)
+      ) return;
+      actorRecipientIds.add(actor.id.href);
+      actorRecipients.push(actor);
+    };
+    const resolvedRecipients = await Promise.all(
+      Array.from(recipientIds.values(), async (id) => {
+        const knownActor = knownActors.get(id.href);
+        if (knownActor != null) return knownActor;
+        const recipient = await lookupObjectSafely(this, ctx, id);
+        return isActor(recipient) ? recipient : undefined;
+      }),
+    );
+    for (const recipient of resolvedRecipients) {
+      if (recipient != null) addActorRecipient(recipient);
+    }
+    if (object.replyTargetId != null) {
+      const replyTarget = await lookupObjectSafely(
+        this,
+        ctx,
+        object.replyTargetId,
+      );
+      if (isMessageObject(replyTarget)) {
+        const replyActor = await replyTarget.getAttribution({
+          contextLoader: ctx.contextLoader,
+          documentLoader: ctx.documentLoader,
+          suppressError: true,
+        });
+        if (isActor(replyActor)) addActorRecipient(replyActor);
+      }
+    }
+    addActorRecipient(quoteActor);
+    if (actorRecipients.length < 1) return;
+    await ctx.forwardActivity(this, actorRecipients, {
+      skipIfUnsigned: true,
+      preferSharedInbox,
+      excludeBaseUris,
+    });
   }
 
   async #sendQuoteUpdate(
@@ -1403,10 +1535,12 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       parsed.values.id as Uuid,
     );
     if (
-      authorization?.attributionId?.href !==
-        ctx.getActorUri(this.identifier).href ||
-      authorization.interactingObjectId?.href !== object.id.href ||
-      authorization.interactionTargetId?.href !== targetId.href
+      !validateQuoteAuthorization(authorization, {
+        authorizationId: object.quoteAuthorizationId,
+        quoteId: object.id,
+        targetId,
+        targetActorId: ctx.getActorUri(this.identifier),
+      })
     ) {
       return false;
     }
@@ -1661,16 +1795,15 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
       // @ts-ignore: quoteTarget.class satisfies (typeof messageClasses)[number]
       messageClasses.includes(quoteTarget.class) &&
       quoteTarget.values.identifier === this.identifier;
-    const hasValidQuoteAuthorization = !requiresQuoteAuthorization ||
-      (fepQuoteUrl != null && isLocalQuoteTarget &&
-        await this.#hasValidQuoteAuthorization(ctx, object, fepQuoteUrl));
-    if (requiresQuoteAuthorization && isLocalQuoteTarget) {
-      if (!hasValidQuoteAuthorization) return;
+    if (
+      requiresQuoteAuthorization && isLocalQuoteTarget &&
+      !await this.#hasValidQuoteAuthorization(ctx, object, fepQuoteUrl)
+    ) {
+      return;
     }
     if (
       this.onQuote != null &&
-      isLocalQuoteTarget &&
-      hasValidQuoteAuthorization
+      isLocalQuoteTarget
     ) {
       const message = await getMessage();
       if (
@@ -2121,6 +2254,12 @@ export function wrapBotImpl<TContextData>(
     set onQuoteRejected(value) {
       bot.onQuoteRejected = value;
     },
+    get onQuoteRevoked() {
+      return bot.onQuoteRevoked;
+    },
+    set onQuoteRevoked(value) {
+      bot.onQuoteRevoked = value;
+    },
     get onMessage() {
       return bot.onMessage;
     },
@@ -2177,6 +2316,7 @@ export function wrapBotImpl<TContextData>(
 export class MigrationGatedRepository implements Repository {
   readonly #repository: Repository;
   readonly #migration: Promise<void>;
+  readonly #missingQuoteAuthorizationReferenceMethods = new Set<string>();
 
   constructor(repository: Repository, identifier: string) {
     this.#repository = repository;
@@ -2184,6 +2324,15 @@ export class MigrationGatedRepository implements Repository {
     // The rejection is re-thrown by the first awaiting operation; this
     // no-op handler only prevents an unhandled rejection warning:
     this.#migration.catch(() => {});
+  }
+
+  #warnMissingQuoteAuthorizationReferenceMethod(method: string): void {
+    if (this.#missingQuoteAuthorizationReferenceMethods.has(method)) return;
+    this.#missingQuoteAuthorizationReferenceMethods.add(method);
+    logger.warn(
+      "Repository does not implement {method}; quote-authorization revocation and cleanup are disabled for this repository.",
+      { method },
+    );
   }
 
   async setKeyPairs(
@@ -2409,11 +2558,38 @@ export class MigrationGatedRepository implements Repository {
     );
   }
 
+  async *findQuoteAuthorizationReferenceIdentifiers(
+    authorization: URL,
+  ): AsyncIterable<string> {
+    await this.#migration;
+    if (
+      typeof this.#repository.findQuoteAuthorizationReferenceIdentifiers !==
+        "function"
+    ) {
+      this.#warnMissingQuoteAuthorizationReferenceMethod(
+        "findQuoteAuthorizationReferenceIdentifiers",
+      );
+      return;
+    }
+    yield* this.#repository.findQuoteAuthorizationReferenceIdentifiers(
+      authorization,
+    );
+  }
+
   async findQuoteAuthorizationReferenceAttribution(
     identifier: string,
     authorization: URL,
   ): Promise<URL | undefined> {
     await this.#migration;
+    if (
+      typeof this.#repository.findQuoteAuthorizationReferenceAttribution !==
+        "function"
+    ) {
+      this.#warnMissingQuoteAuthorizationReferenceMethod(
+        "findQuoteAuthorizationReferenceAttribution",
+      );
+      return undefined;
+    }
     return await this.#repository.findQuoteAuthorizationReferenceAttribution(
       identifier,
       authorization,
@@ -2487,6 +2663,7 @@ export class BotGroupImpl<TContextData> implements BotGroup<TContextData> {
   onQuoteRequest?: QuoteRequestEventHandler<TContextData>;
   onQuoteAccepted?: QuoteAcceptedEventHandler<TContextData>;
   onQuoteRejected?: QuoteRejectedEventHandler<TContextData>;
+  onQuoteRevoked?: QuoteRevokedEventHandler<TContextData>;
   onMessage?: MessageEventHandler<TContextData>;
   onSharedMessage?: SharedMessageEventHandler<TContextData>;
   onLike?: LikeEventHandler<TContextData>;

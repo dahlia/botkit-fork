@@ -54,6 +54,7 @@ import type {
 } from "./message.ts";
 import type { AuthorizedLike, AuthorizedReaction } from "./reaction.ts";
 import type { Uuid } from "./repository.ts";
+import { validateQuoteAuthorization } from "./quote-authorization.ts";
 import {
   parseQuotePolicy,
   type QuotePolicy,
@@ -99,6 +100,7 @@ export class MessageImpl<T extends MessageClass, TContextData>
   readonly replyTarget?: Message<MessageClass, TContextData> | undefined;
   readonly quoteTarget?: Message<MessageClass, TContextData> | undefined;
   quotePolicy?: QuotePolicy | undefined;
+  readonly quoteApproved?: boolean | undefined;
   mentions: readonly Actor[];
   hashtags: readonly Hashtag[];
   readonly attachments: readonly Document[];
@@ -127,6 +129,7 @@ export class MessageImpl<T extends MessageClass, TContextData>
     this.replyTarget = message.replyTarget;
     this.quoteTarget = message.quoteTarget;
     this.quotePolicy = message.quotePolicy;
+    this.quoteApproved = message.quoteApproved;
     this.mentions = message.mentions;
     this.hashtags = message.hashtags;
     this.attachments = message.attachments;
@@ -766,6 +769,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
   replyTarget: Message<MessageClass, TContextData> | undefined,
   quote: Message<MessageClass, TContextData> | undefined,
   authorized: true,
+  signal?: AbortSignal,
 ): Promise<AuthorizedMessage<T, TContextData>>;
 export async function createMessage<T extends MessageClass, TContextData>(
   raw: T,
@@ -774,6 +778,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
   replyTarget?: Message<MessageClass, TContextData>,
   quote?: Message<MessageClass, TContextData>,
   authorized?: boolean,
+  signal?: AbortSignal,
 ): Promise<Message<T, TContextData>>;
 export async function createMessage<T extends MessageClass, TContextData>(
   raw: T,
@@ -782,6 +787,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
   replyTarget?: Message<MessageClass, TContextData>,
   quoteTarget?: Message<MessageClass, TContextData>,
   authorized: boolean = false,
+  signal?: AbortSignal,
 ): Promise<Message<T, TContextData>> {
   if (raw.id == null) throw new TypeError("The raw.id is required.");
   else if (raw.content == null) {
@@ -792,6 +798,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
     contextLoader: session.context.contextLoader,
     documentLoader,
     suppressError: true,
+    signal,
   };
   const rawActor = raw.attributionId?.href === session.actorId?.href
     ? await session.getActor()
@@ -857,7 +864,15 @@ export async function createMessage<T extends MessageClass, TContextData>(
       rt instanceof Article || rt instanceof ChatMessage ||
       rt instanceof Note || rt instanceof Question
     ) {
-      replyTarget = await createMessage(rt, session, cachedObjects);
+      replyTarget = await createMessage(
+        rt,
+        session,
+        cachedObjects,
+        undefined,
+        undefined,
+        undefined,
+        signal,
+      );
     }
   }
   if (quoteTarget == null) {
@@ -896,7 +911,15 @@ export async function createMessage<T extends MessageClass, TContextData>(
       qt instanceof Article || qt instanceof ChatMessage ||
       qt instanceof Note || qt instanceof Question
     ) {
-      quoteTarget = await createMessage(qt, session, cachedObjects);
+      quoteTarget = await createMessage(
+        qt,
+        session,
+        cachedObjects,
+        undefined,
+        undefined,
+        undefined,
+        signal,
+      );
     }
   }
   const quotePolicy = actor.id == null && raw.attributionId == null
@@ -905,6 +928,16 @@ export async function createMessage<T extends MessageClass, TContextData>(
       raw.interactionPolicy?.canQuote,
       actor.id ?? raw.attributionId!,
       actor.followersId,
+    );
+  const quoteApproved = quoteTarget == null ? undefined : actor.id != null &&
+      quoteTarget.actor.id != null &&
+      actor.id.href === quoteTarget.actor.id.href
+    ? true
+    : await verifyQuoteApproval(
+      raw,
+      quoteTarget,
+      session,
+      signal,
     );
   const quoteApprovalState = !authorized || quoteTarget == null
     ? undefined
@@ -935,6 +968,7 @@ export async function createMessage<T extends MessageClass, TContextData>(
     replyTarget,
     quoteTarget,
     quotePolicy,
+    quoteApproved,
     quoteApprovalState,
     mentions,
     hashtags,
@@ -942,6 +976,53 @@ export async function createMessage<T extends MessageClass, TContextData>(
     published: raw.published ?? undefined,
     updated: raw.updated ?? undefined,
   });
+}
+
+async function verifyQuoteApproval<TContextData>(
+  raw: MessageClass,
+  quoteTarget: Message<MessageClass, TContextData>,
+  session: SessionImpl<TContextData>,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (
+    raw.id == null ||
+    raw.quoteAuthorizationId == null ||
+    quoteTarget.actor.id == null
+  ) {
+    return false;
+  }
+  try {
+    const parsed = parseLocalUri(
+      session.context,
+      raw.quoteAuthorizationId,
+      session.bot.legacyObjectUrisIdentifier,
+    );
+    const authorization = parsed?.type === "object" &&
+        parsed.class === QuoteAuthorization &&
+        parsed.values.identifier === session.bot.identifier
+      ? await session.bot.repository.getQuoteAuthorization(
+        parsed.values.id as Uuid,
+      )
+      : await session.context.lookupObject(
+        raw.quoteAuthorizationId,
+        {
+          contextLoader: session.context.contextLoader,
+          documentLoader: await session.context.getDocumentLoader(
+            session.bot,
+          ),
+          signal,
+        },
+      );
+    return validateQuoteAuthorization(authorization, {
+      authorizationId: raw.quoteAuthorizationId,
+      quoteId: raw.id,
+      targetId: quoteTarget.id,
+      targetActorId: quoteTarget.actor.id,
+    });
+  } catch (error) {
+    if (signal?.aborted === true) throw error;
+    return false;
+  }
 }
 
 export function getMessageVisibility(

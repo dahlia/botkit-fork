@@ -48,7 +48,7 @@ To be released.
     at the root.
 
  -  Added support for consent-respecting quote posts using [FEP-044f].
-    [[#27], [#28], [#29], [#31], [#32]]
+    [[#27], [#28], [#29], [#30], [#31], [#32], [#33]]
 
     BotKit now serializes quote policies on outgoing messages, handles
     incoming `QuoteRequest` activities, automatically accepts or rejects them
@@ -62,6 +62,9 @@ To be released.
     sends a `QuoteRequest` to the quoted message's author, applies accepted
     `QuoteAuthorization` stamps to the stored message, and strips rejected
     quote targets from the stored message before delivering an `Update`.
+    BotKit also verifies `QuoteAuthorization` stamps on received third-party
+    quote posts and handles deleted stamps by forwarding the `Delete` activity
+    before stripping the quote from the bot's own post.
 
      -  Added `QuotePolicy`, `QuotePolicyOption`, `QuoteRequest`, and
         `QuoteRequestEventHandler` types.  [[#27], [#28], [#31]]
@@ -70,6 +73,8 @@ To be released.
         types.  [[#27], [#29], [#32]]
      -  Added `Bot.onQuoteAccepted` and `Bot.onQuoteRejected` event handlers.
         [[#27], [#29], [#32]]
+     -  Added `QuoteRevokedEventHandler` type and `Bot.onQuoteRevoked` event
+        handler.  [[#27], [#30], [#33]]
      -  Added `ReadonlyBot.quotePolicy`, `CreateBotOptions.quotePolicy`, and
         `BotProfile.quotePolicy` properties.  [[#27], [#28], [#31]]
      -  Added `SessionPublishOptions.quotePolicy` and
@@ -77,6 +82,9 @@ To be released.
         [[#27], [#28], [#31]]
      -  Added `Message.quotePolicy` and `AuthorizedMessage.quoteApprovalState`
         properties.  [[#27], [#29], [#32]]
+     -  Added `Message.quoteApproved` property for inspecting whether a
+        received quote post has valid FEP-044f approval.
+        [[#27], [#30], [#33]]
      -  Added `AuthorizedMessage.unauthorizeQuote()` method for revoking an
         existing quote authorization stamp by the quoted message or its URI.
         [[#27], [#28], [#31]]
@@ -98,9 +106,11 @@ To be released.
         `Repository.removeQuoteAuthorization()`.
      -  Added quote authorization reference methods:
         `Repository.addQuoteAuthorizationReference()`,
-        `Repository.findQuoteAuthorizationReference()`, and
+        `Repository.findQuoteAuthorizationReference()`,
+        `Repository.findQuoteAuthorizationReferenceIdentifiers()`,
+        `Repository.findQuoteAuthorizationReferenceAttribution()`, and
         `Repository.removeQuoteAuthorizationReference()`.
-        [[#27], [#29], [#32]]
+        [[#27], [#29], [#30], [#32], [#33]]
      -  Added optional `Repository.migrate()` method for adopting data
         stored by BotKit 0.4 or earlier.
      -  Added `Repository.forIdentifier()` method and `ActorScopedRepository`
@@ -136,8 +146,10 @@ To be released.
 [#27]: https://github.com/fedify-dev/botkit/issues/27
 [#28]: https://github.com/fedify-dev/botkit/issues/28
 [#29]: https://github.com/fedify-dev/botkit/issues/29
+[#30]: https://github.com/fedify-dev/botkit/issues/30
 [#31]: https://github.com/fedify-dev/botkit/pull/31
 [#32]: https://github.com/fedify-dev/botkit/pull/32
+[#33]: https://github.com/fedify-dev/botkit/pull/33
 
 ### @fedify/botkit-sqlite
 

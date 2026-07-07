@@ -28,6 +28,7 @@
     "npm:@fedify/markdown-it-mention@0.3": "0.3.0",
     "npm:@fedify/vocab@^2.3.1": "2.3.1",
     "npm:@js-temporal/polyfill@~0.5.1": "0.5.1",
+    "npm:@logtape/logtape@*": "2.2.3",
     "npm:@logtape/logtape@^2.2.3": "2.2.3",
     "npm:@multiformats/base-x@^4.0.1": "4.0.1",
     "npm:@opentelemetry/api@^1.9.1": "1.9.1",

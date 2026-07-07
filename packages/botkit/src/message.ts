@@ -158,6 +158,13 @@ export interface Message<T extends MessageClass, TContextData> {
   readonly quotePolicy?: QuotePolicy;
 
   /**
+   * Whether this message's quote target has been approved according to
+   * FEP-044f.  It is `undefined` when this message is not a quote.
+   * @since 0.5.0
+   */
+  readonly quoteApproved?: boolean;
+
+  /**
    * The published time of the message.
    */
   readonly published?: Temporal.Instant;

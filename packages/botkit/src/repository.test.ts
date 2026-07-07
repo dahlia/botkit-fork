@@ -38,6 +38,7 @@ import {
   type Repository,
   type Uuid,
 } from "./repository.ts";
+import { hideRepositoryMethods } from "./helpers.ts";
 
 function createKvRepository(): Repository {
   return new KvRepository(new MemoryKvStore());
@@ -150,8 +151,25 @@ for (const [name, factory] of Object.entries(factories)) {
       undefined,
     );
     assert.deepStrictEqual(
+      await Array.fromAsync(
+        repository.findQuoteAuthorizationReferenceIdentifiers(authorization),
+      ),
+      ["bot"],
+    );
+    assert.deepStrictEqual(
       await repository.findQuoteAuthorizationReference("bot", authorization),
       firstMessageId,
+    );
+    await repository.addQuoteAuthorizationReference(
+      "other",
+      authorization,
+      firstMessageId,
+    );
+    assert.deepStrictEqual(
+      await Array.fromAsync(
+        repository.findQuoteAuthorizationReferenceIdentifiers(authorization),
+      ),
+      ["bot", "other"],
     );
 
     await repository.addQuoteAuthorizationReference(
@@ -170,6 +188,12 @@ for (const [name, factory] of Object.entries(factories)) {
     assert.deepStrictEqual(
       await repository.findQuoteAuthorizationReference("bot", authorization),
       undefined,
+    );
+    assert.deepStrictEqual(
+      await Array.fromAsync(
+        repository.findQuoteAuthorizationReferenceIdentifiers(authorization),
+      ),
+      ["other"],
     );
   });
 }
@@ -276,6 +300,42 @@ test("MemoryCachedRepository keeps quote authorization reference cache on remove
   assert.deepStrictEqual(
     await repository.findQuoteAuthorizationReference("bot", authorization),
     messageId,
+  );
+});
+
+test("MemoryCachedRepository tolerates missing quote reference index methods", async () => {
+  const underlying = new MemoryRepository();
+  const authorization = new URL("https://remote.example/stamps/1");
+  const messageId = "01942976-3400-7f34-872e-2cbf0f9eeac4" as Uuid;
+  await underlying.addQuoteAuthorizationReference(
+    "bot",
+    authorization,
+    messageId,
+    new URL("https://remote.example/actors/alice"),
+  );
+  const repository = new MemoryCachedRepository(
+    hideRepositoryMethods(underlying, [
+      "findQuoteAuthorizationReferenceAttribution",
+      "findQuoteAuthorizationReferenceIdentifiers",
+    ]),
+  );
+
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReference("bot", authorization),
+    messageId,
+  );
+  assert.deepStrictEqual(
+    await repository.findQuoteAuthorizationReferenceAttribution(
+      "bot",
+      authorization,
+    ),
+    undefined,
+  );
+  assert.deepStrictEqual(
+    await Array.fromAsync(
+      repository.findQuoteAuthorizationReferenceIdentifiers(authorization),
+    ),
+    [],
   );
 });
 
@@ -1990,6 +2050,7 @@ describe("KvRepository.migrate()", () => {
     followRequestId: URL;
     followeeId: URL;
     followeeFollowJson: unknown;
+    quoteAuthorizationRefId: URL;
     sentFollowId: Uuid;
     sentFollowJson: unknown;
   }> {
@@ -2040,6 +2101,12 @@ describe("KvRepository.migrate()", () => {
     });
     await kv.set(["_botkit", "followees", followeeId.href], followeeFollowJson);
 
+    const quoteAuthorizationRefId = new URL("https://example.com/stamps/1");
+    await kv.set(
+      ["_botkit", "quoteAuthorizationRefs", quoteAuthorizationRefId.href],
+      messageId,
+    );
+
     const sentFollowId: Uuid = "e35ff5d8-ede9-4f5e-9b83-4bfcd4c9a69c";
     const sentFollow = new Follow({
       id: new URL(`https://example.com/ap/follow/${sentFollowId}`),
@@ -2066,6 +2133,7 @@ describe("KvRepository.migrate()", () => {
       followRequestId,
       followeeId,
       followeeFollowJson,
+      quoteAuthorizationRefId,
       sentFollowId,
       sentFollowJson,
     };
@@ -2185,6 +2253,29 @@ describe("KvRepository.migrate()", () => {
     assert.deepStrictEqual(
       await follow?.toJsonLd({ format: "compact" }),
       seed.followeeFollowJson,
+    );
+  });
+
+  test("migrates quote authorization references with their reverse index", async () => {
+    const kv = new MemoryKvStore();
+    const seed = await seedLegacyData(kv);
+    const repo = new KvRepository(kv);
+    await repo.migrate("bot");
+
+    assert.deepStrictEqual(
+      await repo.findQuoteAuthorizationReference(
+        "bot",
+        seed.quoteAuthorizationRefId,
+      ),
+      seed.messageId,
+    );
+    assert.deepStrictEqual(
+      await Array.fromAsync(
+        repo.findQuoteAuthorizationReferenceIdentifiers(
+          seed.quoteAuthorizationRefId,
+        ),
+      ),
+      ["bot"],
     );
   });
 

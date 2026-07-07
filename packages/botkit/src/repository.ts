@@ -396,6 +396,17 @@ export interface Repository {
   ): Promise<Uuid | undefined>;
 
   /**
+   * Finds bot identifiers whose quote messages depend on a received quote
+   * authorization stamp.
+   * @param authorization The URI of the received quote authorization stamp.
+   * @returns The identifiers of bot actors that reference the stamp.
+   * @since 0.5.0
+   */
+  findQuoteAuthorizationReferenceIdentifiers(
+    authorization: URL,
+  ): AsyncIterable<string>;
+
+  /**
    * Finds the actor that issued a received quote authorization stamp.
    * @param identifier The identifier of the bot actor that owns the message.
    * @param authorization The URI of the received quote authorization stamp.
@@ -839,6 +850,10 @@ export class ActorScopedRepository {
   findQuoteAuthorizationReferenceAttribution(
     authorization: URL,
   ): Promise<URL | undefined> {
+    if (
+      typeof this.repository.findQuoteAuthorizationReferenceAttribution !==
+        "function"
+    ) return Promise.resolve(undefined);
     return this.repository.findQuoteAuthorizationReferenceAttribution(
       this.identifier,
       authorization,
@@ -991,6 +1006,15 @@ export class KvRepository implements Repository {
     );
   }
 
+  #quoteAuthorizationReferenceIndexKey(authorization: URL): KvKey {
+    return [
+      ...this.prefix,
+      "index",
+      "quoteAuthorizationRefs",
+      authorization.href,
+    ];
+  }
+
   /**
    * Migrates data stored by BotKit 0.4 or earlier, which was not scoped by
    * bot actor identifiers, so that it belongs to the given identifier.
@@ -1001,9 +1025,9 @@ export class KvRepository implements Repository {
    * reusing the repository for another bot, even concurrently, does not
    * adopt the same rows again.  Legacy keys are copied, not moved, and
    * the completion is recorded last, so a partially failed run is simply
-   * retried by the adopter on the next call without data loss.  Followees
-   * are also entered into the reverse lookup index used by
-   * {@link KvRepository.findFollowedBots}.
+   * retried by the adopter on the next call without data loss.  Followees and
+   * quote authorization references are also entered into their reverse lookup
+   * indexes.
    *
    * Calling this method again after a successful migration is a no-op.
    * @param identifier The identifier of the bot actor that adopts the legacy
@@ -1076,6 +1100,25 @@ export class KvRepository implements Repository {
             continue;
           }
           await this.#addToFolloweeIndex(identifier, followeeId);
+        }
+        if (category === "quoteAuthorizationRefs" && rest.length === 1) {
+          let authorization: URL;
+          try {
+            authorization = new URL(rest[0]);
+          } catch (error) {
+            // A malformed legacy key cannot be indexed; storage errors from
+            // the indexing itself must propagate so the done marker is not
+            // written and the adopter retries:
+            logger.warn(
+              "Skipping the malformed legacy quote authorization reference key {authorization}.",
+              { authorization: rest[0], error },
+            );
+            continue;
+          }
+          await this.#addToQuoteAuthorizationReferenceIndex(
+            identifier,
+            authorization,
+          );
         }
       }
     }
@@ -1831,6 +1874,10 @@ export class KvRepository implements Repository {
         ? messageId
         : { messageId, attribution: attribution.href },
     );
+    await this.#addToQuoteAuthorizationReferenceIndex(
+      identifier,
+      authorization,
+    );
   }
 
   async findQuoteAuthorizationReference(
@@ -1842,6 +1889,15 @@ export class KvRepository implements Repository {
     );
     if (typeof value === "string") return value as Uuid;
     return value?.messageId;
+  }
+
+  async *findQuoteAuthorizationReferenceIdentifiers(
+    authorization: URL,
+  ): AsyncIterable<string> {
+    const identifiers = await this.kv.get<string[]>(
+      this.#quoteAuthorizationReferenceIndexKey(authorization),
+    ) ?? [];
+    for (const identifier of identifiers) yield identifier;
   }
 
   async findQuoteAuthorizationReferenceAttribution(
@@ -1866,6 +1922,10 @@ export class KvRepository implements Repository {
   ): Promise<void> {
     await this.kv.delete(
       this.#quoteAuthorizationReferenceKey(identifier, authorization),
+    );
+    await this.#removeFromQuoteAuthorizationReferenceIndex(
+      identifier,
+      authorization,
     );
   }
 
@@ -1907,6 +1967,48 @@ export class KvRepository implements Repository {
       logger.trace(
         "CAS operation failed, retrying to unindex followee {followeeId} for bot {identifier}.",
         { followeeId: followeeId.href, identifier },
+      );
+    }
+  }
+
+  async #addToQuoteAuthorizationReferenceIndex(
+    identifier: string,
+    authorization: URL,
+  ): Promise<void> {
+    const key = this.#quoteAuthorizationReferenceIndexKey(authorization);
+    while (true) {
+      const prev = await this.kv.get<string[]>(key);
+      if (prev != null && prev.includes(identifier)) return;
+      const next = prev == null ? [identifier] : [...prev, identifier];
+      if (this.kv.cas == null) {
+        await this.kv.set(key, next);
+        return;
+      }
+      if (await this.kv.cas(key, prev, next)) return;
+      logger.trace(
+        "CAS operation failed, retrying to index quote authorization reference {authorization} for bot {identifier}.",
+        { authorization: authorization.href, identifier },
+      );
+    }
+  }
+
+  async #removeFromQuoteAuthorizationReferenceIndex(
+    identifier: string,
+    authorization: URL,
+  ): Promise<void> {
+    const key = this.#quoteAuthorizationReferenceIndexKey(authorization);
+    while (true) {
+      const prev = await this.kv.get<string[]>(key);
+      if (prev == null || !prev.includes(identifier)) return;
+      const next = prev.filter((id) => id !== identifier);
+      if (this.kv.cas == null) {
+        await this.kv.set(key, next);
+        return;
+      }
+      if (await this.kv.cas(key, prev, next)) return;
+      logger.trace(
+        "CAS operation failed, retrying to unindex quote authorization reference {authorization} for bot {identifier}.",
+        { authorization: authorization.href, identifier },
       );
     }
   }
@@ -2380,6 +2482,16 @@ export class MemoryRepository implements Repository {
     );
   }
 
+  async *findQuoteAuthorizationReferenceIdentifiers(
+    authorization: URL,
+  ): AsyncIterable<string> {
+    for (const [identifier, data] of this.#data) {
+      if (data.quoteAuthorizationRefs.has(authorization.href)) {
+        yield identifier;
+      }
+    }
+  }
+
   findQuoteAuthorizationReferenceAttribution(
     identifier: string,
     authorization: URL,
@@ -2774,11 +2886,14 @@ export class MemoryCachedRepository implements Repository {
       authorization,
     );
     if (found != null) {
-      const attribution = await this.underlying
-        .findQuoteAuthorizationReferenceAttribution(
-          identifier,
-          authorization,
-        );
+      const attribution =
+        typeof this.underlying.findQuoteAuthorizationReferenceAttribution ===
+            "function"
+          ? await this.underlying.findQuoteAuthorizationReferenceAttribution(
+            identifier,
+            authorization,
+          )
+          : undefined;
       await this.cache.addQuoteAuthorizationReference(
         identifier,
         authorization,
@@ -2787,6 +2902,41 @@ export class MemoryCachedRepository implements Repository {
       );
     }
     return found;
+  }
+
+  async *findQuoteAuthorizationReferenceIdentifiers(
+    authorization: URL,
+  ): AsyncIterable<string> {
+    if (
+      typeof this.underlying.findQuoteAuthorizationReferenceIdentifiers !==
+        "function"
+    ) return;
+    for await (
+      const identifier of this.underlying
+        .findQuoteAuthorizationReferenceIdentifiers(authorization)
+    ) {
+      const found = await this.underlying.findQuoteAuthorizationReference(
+        identifier,
+        authorization,
+      );
+      if (found != null) {
+        const attribution =
+          typeof this.underlying.findQuoteAuthorizationReferenceAttribution ===
+              "function"
+            ? await this.underlying.findQuoteAuthorizationReferenceAttribution(
+              identifier,
+              authorization,
+            )
+            : undefined;
+        await this.cache.addQuoteAuthorizationReference(
+          identifier,
+          authorization,
+          found,
+          attribution,
+        );
+      }
+      yield identifier;
+    }
   }
 
   async findQuoteAuthorizationReferenceAttribution(
@@ -2798,16 +2948,17 @@ export class MemoryCachedRepository implements Repository {
       authorization,
     );
     if (cached != null) return cached;
+    if (
+      typeof this.underlying.findQuoteAuthorizationReferenceAttribution !==
+        "function"
+    ) return undefined;
     const found = await this.underlying.findQuoteAuthorizationReference(
       identifier,
       authorization,
     );
     if (found == null) return undefined;
     const attribution = await this.underlying
-      .findQuoteAuthorizationReferenceAttribution(
-        identifier,
-        authorization,
-      );
+      .findQuoteAuthorizationReferenceAttribution(identifier, authorization);
     if (attribution != null) {
       await this.cache.addQuoteAuthorizationReference(
         identifier,

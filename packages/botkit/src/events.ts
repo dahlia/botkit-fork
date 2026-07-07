@@ -145,6 +145,21 @@ export type QuoteRejectedEventHandler<TContextData> = (
 ) => void | Promise<void>;
 
 /**
+ * An event handler invoked when an authorization stamp for the bot's quote
+ * post is revoked.
+ * @typeParam TContextData The type of the context data.
+ * @param session The session of the bot.
+ * @param message The bot's quote message after the quote target was removed.
+ * @param revoker The actor who revoked the quote authorization stamp.
+ * @since 0.5.0
+ */
+export type QuoteRevokedEventHandler<TContextData> = (
+  session: Session<TContextData>,
+  message: AuthorizedMessage<MessageClass, TContextData>,
+  revoker: Actor,
+) => void | Promise<void>;
+
+/**
  * An event handler for a message shown to the bot's timeline.  To listen to
  * this event, your bot needs to follow others first.
  * @typeParam TContextData The type of the context data.

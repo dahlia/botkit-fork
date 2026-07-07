@@ -30,6 +30,7 @@ import {
   Person,
   PUBLIC_COLLECTION,
   Question,
+  QuoteAuthorization,
   Tombstone,
   Undo,
   Update,
@@ -185,6 +186,242 @@ test("createMessage()", async () => {
   });
   const unknownMessage = await createMessage<Note, void>(unknown, session, {});
   assert.deepStrictEqual(unknownMessage.visibility, "unknown");
+});
+
+test("createMessage() verifies quote approvals", async (t) => {
+  const bot = new BotImpl<void>({ kv: new MemoryKvStore(), username: "bot" });
+  const ctx = createMockContext(bot, "https://example.com");
+  const session = new SessionImpl(bot, ctx);
+  const author = new Person({
+    id: new URL("https://author.example/users/alice"),
+    preferredUsername: "alice",
+  });
+  const quoter = new Person({
+    id: new URL("https://quote.example/users/bob"),
+    preferredUsername: "bob",
+  });
+  const targetId = new URL("https://author.example/notes/original");
+  const quoteId = new URL("https://quote.example/notes/quote");
+  const authorizationId = new URL("https://author.example/stamps/1");
+  const target = new Note({
+    id: targetId,
+    attribution: author,
+    content: "Original.",
+    to: PUBLIC_COLLECTION,
+  });
+
+  const materialize = async (
+    options: {
+      readonly attribution?: Person;
+      readonly quote?: URL;
+      readonly quoteUrl?: URL;
+      readonly quoteAuthorization?: URL;
+      readonly authorization?: QuoteAuthorization | null;
+      readonly authorizationError?: unknown;
+      readonly throwOnAuthorization?: boolean;
+      readonly signal?: AbortSignal;
+      readonly onAuthorizationLookup?: (
+        options: Parameters<typeof ctx.lookupObject>[1],
+      ) => void;
+    } = {},
+  ) => {
+    Object.defineProperty(ctx, "lookupObject", {
+      value: (
+        id: URL,
+        lookupOptions?: Parameters<typeof ctx.lookupObject>[1],
+      ) => {
+        if (id.href === targetId.href) return Promise.resolve(target);
+        if (id.href === authorizationId.href) {
+          options.onAuthorizationLookup?.(lookupOptions);
+          if (options.authorizationError != null) {
+            return Promise.reject(options.authorizationError);
+          }
+          if (options.throwOnAuthorization === true) {
+            return Promise.reject(new TypeError("Fetch failed."));
+          }
+          return Promise.resolve(options.authorization ?? null);
+        }
+        return Promise.resolve(null);
+      },
+      configurable: true,
+    });
+    return await createMessage<Note, void>(
+      new Note({
+        id: quoteId,
+        attribution: options.attribution ?? quoter,
+        content: "Quote.",
+        to: PUBLIC_COLLECTION,
+        quote: options.quote,
+        quoteUrl: options.quoteUrl,
+        quoteAuthorization: options.quoteAuthorization,
+      }),
+      session,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      options.signal,
+    );
+  };
+
+  const noQuote = await createMessage<Note, void>(
+    new Note({
+      id: new URL("https://quote.example/notes/plain"),
+      attribution: quoter,
+      content: "Plain.",
+      to: PUBLIC_COLLECTION,
+    }),
+    session,
+    {},
+  );
+  assert.deepStrictEqual(noQuote.quoteApproved, undefined);
+
+  await t.test("self-quote", async () => {
+    const message = await materialize({
+      attribution: author,
+      quote: targetId,
+    });
+    assert.deepStrictEqual(message.quoteApproved, true);
+  });
+
+  await t.test("valid stamp", async () => {
+    const message = await materialize({
+      quote: targetId,
+      quoteAuthorization: authorizationId,
+      authorization: new QuoteAuthorization({
+        id: authorizationId,
+        attribution: author.id,
+        interactingObject: quoteId,
+        interactionTarget: targetId,
+      }),
+    });
+    assert.deepStrictEqual(message.quoteApproved, true);
+  });
+
+  await t.test("wrong attributedTo", async () => {
+    const message = await materialize({
+      quote: targetId,
+      quoteAuthorization: authorizationId,
+      authorization: new QuoteAuthorization({
+        id: authorizationId,
+        attribution: quoter.id,
+        interactingObject: quoteId,
+        interactionTarget: targetId,
+      }),
+    });
+    assert.deepStrictEqual(message.quoteApproved, false);
+  });
+
+  await t.test("wrong interactingObject", async () => {
+    const message = await materialize({
+      quote: targetId,
+      quoteAuthorization: authorizationId,
+      authorization: new QuoteAuthorization({
+        id: authorizationId,
+        attribution: author.id,
+        interactingObject: new URL("https://quote.example/notes/other"),
+        interactionTarget: targetId,
+      }),
+    });
+    assert.deepStrictEqual(message.quoteApproved, false);
+  });
+
+  await t.test("wrong interactionTarget", async () => {
+    const message = await materialize({
+      quote: targetId,
+      quoteAuthorization: authorizationId,
+      authorization: new QuoteAuthorization({
+        id: authorizationId,
+        attribution: author.id,
+        interactingObject: quoteId,
+        interactionTarget: new URL("https://author.example/notes/other"),
+      }),
+    });
+    assert.deepStrictEqual(message.quoteApproved, false);
+  });
+
+  await t.test("cross-origin stamp", async () => {
+    const message = await materialize({
+      quote: targetId,
+      quoteAuthorization: authorizationId,
+      authorization: new QuoteAuthorization({
+        id: new URL("https://other.example/stamps/1"),
+        attribution: author.id,
+        interactingObject: quoteId,
+        interactionTarget: targetId,
+      }),
+    });
+    assert.deepStrictEqual(message.quoteApproved, false);
+  });
+
+  await t.test("fetch failure", async () => {
+    const message = await materialize({
+      quote: targetId,
+      quoteAuthorization: authorizationId,
+      throwOnAuthorization: true,
+    });
+    assert.deepStrictEqual(message.quoteApproved, false);
+  });
+
+  await t.test("passes abort signal to remote stamp lookup", async () => {
+    const controller = new AbortController();
+    let lookupSignal: AbortSignal | undefined;
+    const message = await materialize({
+      quote: targetId,
+      quoteAuthorization: authorizationId,
+      authorization: new QuoteAuthorization({
+        id: authorizationId,
+        attribution: author.id,
+        interactingObject: quoteId,
+        interactionTarget: targetId,
+      }),
+      signal: controller.signal,
+      onAuthorizationLookup: (options) => {
+        lookupSignal = options?.signal;
+      },
+    });
+    assert.deepStrictEqual(message.quoteApproved, true);
+    assert.deepStrictEqual(lookupSignal, controller.signal);
+  });
+
+  await t.test("preserves abort errors from remote stamp lookup", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("Aborted.", "AbortError");
+    controller.abort(reason);
+    await assert.rejects(
+      () =>
+        materialize({
+          quote: targetId,
+          quoteAuthorization: authorizationId,
+          authorizationError: reason,
+          signal: controller.signal,
+        }),
+      (error) => error === reason,
+    );
+  });
+
+  await t.test("preserves custom errors after abort", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const error = new TypeError("Lookup cancelled.");
+    await assert.rejects(
+      () =>
+        materialize({
+          quote: targetId,
+          quoteAuthorization: authorizationId,
+          authorizationError: error,
+          signal: controller.signal,
+        }),
+      (actual) => actual === error,
+    );
+  });
+
+  await t.test("legacy quote", async () => {
+    const message = await materialize({
+      quoteUrl: targetId,
+    });
+    assert.deepStrictEqual(message.quoteApproved, false);
+  });
 });
 
 test("AuthorizedMessageImpl.delete()", async () => {
