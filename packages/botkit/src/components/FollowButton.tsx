@@ -23,24 +23,25 @@ export interface FollowButtonProps {
 
 export function FollowButton({ bot, action }: FollowButtonProps) {
   const name = bot.name ?? bot.username;
+  // The trigger and dialog use relative DOM traversal instead of shared ids or
+  // a global, so several FollowButtons can coexist on one page without colliding.
   return (
     <>
       <button
-        id="follow-btn"
         type="button"
         class="bk-btn bk-btn--primary"
-        onclick="botkitFollow.open()"
+        onclick="this.nextElementSibling.showModal()"
       >
         <span class="bk-btn__key" aria-hidden="true">+</span> Follow
       </button>
-      <dialog id="follow-modal" class="bk-dialog">
+      <dialog class="bk-dialog">
         <div class="bk-dialog__head">
           <h2 class="bk-dialog__title">Follow {name}</h2>
           <button
             type="button"
             class="bk-dialog__close"
             aria-label="Close"
-            onclick="botkitFollow.close()"
+            onclick="this.closest('dialog').close()"
           >
             &times;
           </button>
@@ -55,7 +56,6 @@ export function FollowButton({ bot, action }: FollowButtonProps) {
               <span class="bk-field__label">Your handle</span>
               <input
                 type="text"
-                id="fediverse-handle"
                 name="handle"
                 class="bk-input"
                 placeholder="@you@mastodon.example"
@@ -71,14 +71,6 @@ export function FollowButton({ bot, action }: FollowButtonProps) {
           </form>
         </div>
       </dialog>
-      <script
-        dangerouslySetInnerHTML={{
-          __html: `globalThis.botkitFollow = {
-  open() { document.getElementById('follow-modal').showModal(); },
-  close() { document.getElementById('follow-modal').close(); },
-};`,
-        }}
-      />
     </>
   );
 }
