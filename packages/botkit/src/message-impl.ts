@@ -750,7 +750,7 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
 // @ts-ignore: The `xss` module has `getDefaultWhiteList` function.
 const allowList = xss.getDefaultWhiteList();
 // @ts-ignore: The `xss` module has `FilterXSS` class.
-const htmlXss = new xss.FilterXSS({
+export const htmlXss = new xss.FilterXSS({
   allowList: {
     ...allowList,
     a: [...allowList.a ?? [], "class", "translate"],

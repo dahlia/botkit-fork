@@ -352,3 +352,41 @@ describe("web assets", () => {
     assert.deepStrictEqual(missing.status, 404);
   });
 });
+
+describe("message rendering", () => {
+  test("sanitizes post content against XSS", async () => {
+    const repository = new MemoryRepository();
+    const bot = new BotImpl<void>({
+      kv: new MemoryKvStore(),
+      repository,
+      username: "mybot",
+    });
+    const id: Uuid = "01941f29-7c00-7fe8-ab0a-7b593990a3c1";
+    await repository.addMessage(
+      "bot",
+      id,
+      new Create({
+        id: new URL(`https://example.com/ap/actor/bot/create/${id}`),
+        actor: new URL("https://example.com/ap/actor/bot"),
+        to: PUBLIC_COLLECTION,
+        object: new Note({
+          id: new URL(`https://example.com/ap/actor/bot/note/${id}`),
+          attribution: new URL("https://example.com/ap/actor/bot"),
+          to: PUBLIC_COLLECTION,
+          content: `<p>hello</p><script>alert('xss')</script>` +
+            `<a href="javascript:alert(1)">tap</a>`,
+          published: Temporal.Instant.from("2025-01-01T00:00:00Z"),
+        }),
+        published: Temporal.Instant.from("2025-01-01T00:00:00Z"),
+      }),
+    );
+    const html = await (await bot.fetch(
+      new Request("https://example.com/"),
+      undefined,
+    )).text();
+    // The safe markup survives, but the script and the javascript: URL do not.
+    assert.ok(html.includes("<p>hello</p>"));
+    assert.ok(!html.includes("<script>alert"));
+    assert.ok(!html.includes("javascript:alert"));
+  });
+});

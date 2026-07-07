@@ -16,6 +16,7 @@
 /** @jsxImportSource hono/jsx */
 import { LanguageString } from "@fedify/vocab-runtime";
 import { Document, Emoji, getActorHandle, Image, Link } from "@fedify/vocab";
+import { htmlXss } from "../message-impl.ts";
 import type { MessageClass } from "../message.ts";
 import type { Session } from "../session.ts";
 
@@ -98,7 +99,10 @@ export async function Message({ session, message }: MessageProps) {
       <div
         class="bk-prose"
         dangerouslySetInnerHTML={{
-          __html: renderCustomEmojis(`${message.content}`, customEmojis),
+          __html: renderCustomEmojis(
+            htmlXss.process(`${message.content}`),
+            customEmojis,
+          ),
         }}
         lang={message.content instanceof LanguageString
           ? message.content.locale.toString()
