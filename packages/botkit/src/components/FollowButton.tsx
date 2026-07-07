@@ -23,18 +23,19 @@ export interface FollowButtonProps {
 
 export function FollowButton({ bot, action }: FollowButtonProps) {
   const name = bot.name ?? bot.username;
-  // The trigger and dialog use relative DOM traversal instead of shared ids or
-  // a global, so several FollowButtons can coexist on one page without colliding.
+  // A per-instance dialog id keeps several FollowButtons from colliding on one
+  // page, without depending on the button and dialog staying adjacent siblings.
+  const dialogId = `bk-follow-${Math.random().toString(36).slice(2, 10)}`;
   return (
     <>
       <button
         type="button"
         class="bk-btn bk-btn--primary"
-        onclick="this.nextElementSibling.showModal()"
+        onclick={`document.getElementById('${dialogId}').showModal()`}
       >
         <span class="bk-btn__key" aria-hidden="true">+</span> Follow
       </button>
-      <dialog class="bk-dialog">
+      <dialog id={dialogId} class="bk-dialog">
         <div class="bk-dialog__head">
           <h2 class="bk-dialog__title">Follow {name}</h2>
           <button
