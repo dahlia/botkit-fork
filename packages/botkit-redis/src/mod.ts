@@ -251,6 +251,7 @@ export class RedisRepository implements Repository, AsyncDisposable {
 
   private async ensureReady(): Promise<void> {
     if (!this.ownsClient) return;
+    if (this.client.isOpen) return;
     const ready = this.ready ?? this.connect();
     try {
       await ready;
@@ -488,9 +489,13 @@ export class RedisRepository implements Repository, AsyncDisposable {
         await this.del(key);
         await this.zRem(this.botKey(identifier, "messages"), id);
         if (json == null) return undefined;
-        const activity = await Activity.fromJsonLd(JSON.parse(json));
-        if (activity instanceof Create || activity instanceof Announce) {
-          return activity;
+        try {
+          const activity = await Activity.fromJsonLd(JSON.parse(json));
+          if (activity instanceof Create || activity instanceof Announce) {
+            return activity;
+          }
+        } catch {
+          return undefined;
         }
         return undefined;
       },

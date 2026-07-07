@@ -323,6 +323,17 @@ if (redisUrl == null) {
       await assert.doesNotReject(repository.close());
     });
 
+    test("uses already open owned clients without reconnecting", async () => {
+      const { repository, cleanup } = createHarness();
+      try {
+        assert.deepStrictEqual(await repository.countMessages("bot"), 0);
+        Reflect.set(repository, "ready", undefined);
+        await assert.doesNotReject(repository.countMessages("bot"));
+      } finally {
+        await cleanup();
+      }
+    });
+
     test("messages basic operations and ordering", async () => {
       const { repository, cleanup } = createHarness();
       try {
@@ -365,6 +376,32 @@ if (redisUrl == null) {
         );
         assert.deepStrictEqual(await repository.countMessages("bot"), 1);
       } finally {
+        await cleanup();
+      }
+    });
+
+    test("removes corrupted messages without throwing", async () => {
+      const { repository, cleanup, prefix } = createHarness();
+      const client = createClient({ url: redisUrl });
+      await client.connect();
+      try {
+        const messageId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
+        const key = `${prefix}:bots:bot:messages:${messageId}`;
+        await client.sendCommand(["SET", key, "{"]);
+        await client.sendCommand([
+          "ZADD",
+          `${prefix}:bots:bot:messages`,
+          "0",
+          messageId,
+        ]);
+        assert.deepStrictEqual(
+          await repository.removeMessage("bot", messageId),
+          undefined,
+        );
+        assert.deepStrictEqual(await client.sendCommand(["GET", key]), null);
+        assert.deepStrictEqual(await repository.countMessages("bot"), 0);
+      } finally {
+        await client.quit();
         await cleanup();
       }
     });
