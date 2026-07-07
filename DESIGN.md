@@ -368,8 +368,9 @@ consistent.
  -  *Restraint still applies.* Even in Expression mode, one bold element per
     screen carries the personality while everything around it stays disciplined.
 
-The boundary is firm: nothing in Expression mode may be introduced into the
-pages the library serves for a user's bot.
+The boundary is firm: full Expression-mode surfaces may not be introduced into
+the pages the library serves for a user's bot.  The quiet footer credit is the
+one deliberate exception.
 
 
 Asset and packaging architecture
