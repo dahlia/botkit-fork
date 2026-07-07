@@ -100,7 +100,7 @@ export async function Message({ session, message }: MessageProps) {
         class="bk-prose"
         dangerouslySetInnerHTML={{
           __html: renderCustomEmojis(
-            htmlXss.process(`${message.content}`),
+            htmlXss.process(message.content?.toString() ?? ""),
             customEmojis,
           ),
         }}
