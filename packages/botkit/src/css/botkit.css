@@ -646,7 +646,7 @@ a {
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.01em;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .bk-page-count {
