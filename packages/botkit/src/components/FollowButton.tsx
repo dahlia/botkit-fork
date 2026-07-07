@@ -25,7 +25,7 @@ export function FollowButton({ bot, action }: FollowButtonProps) {
   const name = bot.name ?? bot.username;
   // A per-instance dialog id keeps several FollowButtons from colliding on one
   // page, without depending on the button and dialog staying adjacent siblings.
-  const dialogId = `bk-follow-${Math.random().toString(36).slice(2, 10)}`;
+  const dialogId = `bk-follow-${globalThis.crypto.randomUUID()}`;
   return (
     <>
       <button
