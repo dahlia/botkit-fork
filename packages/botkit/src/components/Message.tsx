@@ -110,8 +110,9 @@ export async function Message({ session, message }: MessageProps) {
       />
       {images.length > 0 && (
         <div class="bk-attachments">
-          {images.map((a) => (
+          {images.map((a, index) => (
             <img
+              key={a.id?.href ?? index}
               src={a.url instanceof Link ? a.url.href?.href : a.url!.href}
               width={a.width ?? undefined}
               height={a.height ?? undefined}
