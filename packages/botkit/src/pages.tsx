@@ -172,7 +172,7 @@ async function profilePage(
                   class="bk-avatar bk-avatar--placeholder"
                   aria-hidden="true"
                 >
-                  {[...(bot.name || bot.username)][0]?.toUpperCase() ?? ""}
+                  {[...(bot.name ?? bot.username)][0]?.toUpperCase() ?? ""}
                 </span>
               )}
             <h1 class="bk-name">
