@@ -153,8 +153,7 @@ To be released.
 
      -  Added `ReadonlyBot` interface.
 
- -  Upgraded Fedify to 2.3.1, Hono to 4.12.27, LogTape to 2.2.3,
-    and Markdown It to 14.3.0.
+ -  Upgraded Fedify to 2.3.1, Hono to 4.12.27, and LogTape to 2.2.3.
 
 [FEP-044f]: https://w3id.org/fep/044f
 [#16]: https://github.com/fedify-dev/botkit/issues/16
@@ -183,8 +182,6 @@ To be released.
     actor identifier; `createBot()` calls it automatically on startup.
     [[#16], [#24]]
 
- -  Upgraded Fedify to 2.3.1 and LogTape to 2.2.3.
-
 ### @fedify/botkit-postgres
 
  -  Added a `quote_authorizations` table for [FEP-044f] quote authorization
@@ -201,8 +198,7 @@ To be released.
     actor identifier; `createBot()` calls it automatically on startup.
     [[#16], [#24]]
 
- -  Upgraded Fedify to 2.3.1, LogTape to 2.2.3, and Postgres.js to
-    3.4.9.
+ -  Upgraded Postgres.js to 3.4.9.
 
 ### @fedify/botkit-redis
 
