@@ -110,16 +110,21 @@ export async function Message({ session, message }: MessageProps) {
       />
       {images.length > 0 && (
         <div class="bk-attachments">
-          {images.map((a, index) => (
-            <img
-              key={a.id?.href ?? index}
-              src={a.url instanceof Link ? a.url.href?.href : a.url!.href}
-              width={a.width ?? undefined}
-              height={a.height ?? undefined}
-              alt={a.name?.toString() ?? undefined}
-              loading="lazy"
-            />
-          ))}
+          {images.map((a, index) => {
+            const name = a.name?.toString();
+            return (
+              <figure class="bk-attachment" key={a.id?.href ?? index}>
+                <img
+                  src={a.url instanceof Link ? a.url.href?.href : a.url!.href}
+                  width={a.width ?? undefined}
+                  height={a.height ?? undefined}
+                  alt={name ?? undefined}
+                  loading="lazy"
+                />
+                {name && <figcaption>{name}</figcaption>}
+              </figure>
+            );
+          })}
         </div>
       )}
       {message.published && (
