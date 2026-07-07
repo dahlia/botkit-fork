@@ -135,7 +135,7 @@ export type RedisRepositoryOptions =
 export class RedisRepository implements Repository, AsyncDisposable {
   private readonly client: RedisClientLike;
   private readonly ownsClient: boolean;
-  private readonly ready: Promise<unknown>;
+  private ready: Promise<unknown> | undefined;
   private readonly lockTimeoutMs: number;
   private readonly lockPollIntervalMs: number;
   private readonly lockRenewIntervalMs: number;
@@ -183,7 +183,6 @@ export class RedisRepository implements Repository, AsyncDisposable {
     if (hasClient) {
       this.client = options.client;
       this.ownsClient = false;
-      this.ready = Promise.resolve();
     } else {
       const client = createClient({
         ...options.clientOptions,
@@ -194,9 +193,10 @@ export class RedisRepository implements Repository, AsyncDisposable {
       client.on?.("error", (error) => {
         logger.warn("Owned Redis client emitted an error: {error}", { error });
       });
-      const ready = client.connect?.() ?? Promise.resolve();
-      ready.catch(() => {});
-      this.ready = ready;
+      const ready = this.connect();
+      ready.catch(() => {
+        if (this.ready === ready) this.ready = undefined;
+      });
     }
   }
 
@@ -208,8 +208,9 @@ export class RedisRepository implements Repository, AsyncDisposable {
    * Closes the owned Redis connection.
    */
   async close(): Promise<void> {
+    const ready = this.ready;
     try {
-      await this.ready;
+      await ready;
     } catch (error) {
       logger.warn(
         "Owned Redis client did not become ready before close: {error}",
@@ -217,6 +218,7 @@ export class RedisRepository implements Repository, AsyncDisposable {
           error,
         },
       );
+      if (this.ready === ready) this.ready = undefined;
     }
     if (!this.ownsClient) return;
     try {
@@ -241,8 +243,25 @@ export class RedisRepository implements Repository, AsyncDisposable {
     return this.key("bots", identifier, ...segments);
   }
 
+  private connect(): Promise<unknown> {
+    const ready = this.client.connect?.() ?? Promise.resolve();
+    this.ready = ready;
+    return ready;
+  }
+
+  private async ensureReady(): Promise<void> {
+    if (!this.ownsClient) return;
+    const ready = this.ready ?? this.connect();
+    try {
+      await ready;
+    } catch (error) {
+      if (this.ready === ready) this.ready = undefined;
+      throw error;
+    }
+  }
+
   private async command(args: readonly string[]): Promise<unknown> {
-    await this.ready;
+    await this.ensureReady();
     try {
       return await this.client.sendCommand(args);
     } catch (error) {
@@ -797,10 +816,21 @@ export class RedisRepository implements Repository, AsyncDisposable {
             return;
           }
           await this.del(indexKey);
+          await this.del(
+            this.botKey(
+              identifier,
+              "quoteAuthorizationInteractingObjects",
+              existing,
+            ),
+          );
         }
         await this.set(
           this.botKey(identifier, "quoteAuthorizations", id),
           JSON.stringify(await authorization.toJsonLd({ format: "compact" })),
+        );
+        await this.set(
+          this.botKey(identifier, "quoteAuthorizationInteractingObjects", id),
+          interactingObject.href,
         );
         await this.set(indexKey, id);
       },
@@ -842,6 +872,9 @@ export class RedisRepository implements Repository, AsyncDisposable {
         );
         if (authorization == null && await this.get(indexKey) === id) {
           await this.del(indexKey);
+          await this.del(
+            this.botKey(identifier, "quoteAuthorizationInteractingObjects", id),
+          );
         }
         return authorization;
       },
@@ -853,31 +886,62 @@ export class RedisRepository implements Repository, AsyncDisposable {
     id: Uuid,
   ): Promise<QuoteAuthorization | undefined> {
     const key = this.botKey(identifier, "quoteAuthorizations", id);
-    const json = await this.get(key);
-    await this.del(key);
-    if (json == null) return undefined;
-    let parsed: unknown;
+    const interactingObjectKey = this.botKey(
+      identifier,
+      "quoteAuthorizationInteractingObjects",
+      id,
+    );
+    const storedInteractingObject = await this.get(interactingObjectKey) ??
+      await this.findStoredQuoteAuthorizationInteractingObject(key);
+    if (storedInteractingObject == null) return undefined;
+    const indexKey = this.botKey(
+      identifier,
+      "quoteAuthorizationsByInteractingObject",
+      storedInteractingObject,
+    );
+    const parsed = await this.withRedisLock(
+      this.quoteAuthorizationLockKey(indexKey),
+      async () => {
+        const json = await this.get(key);
+        if (json == null) {
+          await this.del(interactingObjectKey);
+          return undefined;
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(json);
+        } catch {
+          return undefined;
+        }
+        const interactingObject = getRawQuoteAuthorizationInteractingObject(
+          parsed,
+        );
+        if (interactingObject?.href !== storedInteractingObject) {
+          return undefined;
+        }
+        await this.del(key, interactingObjectKey);
+        if (await this.get(indexKey) === id) await this.del(indexKey);
+        return parsed;
+      },
+    );
+    if (parsed == null) return undefined;
     try {
-      parsed = JSON.parse(json);
+      return await QuoteAuthorization.fromJsonLd(parsed);
     } catch {
       return undefined;
     }
-    const interactingObject = getRawQuoteAuthorizationInteractingObject(parsed);
-    if (interactingObject != null) {
-      const indexKey = this.botKey(
-        identifier,
-        "quoteAuthorizationsByInteractingObject",
-        interactingObject.href,
-      );
-      await this.withRedisLock(
-        this.quoteAuthorizationLockKey(indexKey),
-        async () => {
-          if (await this.get(indexKey) === id) await this.del(indexKey);
-        },
-      );
-    }
+  }
+
+  private async findStoredQuoteAuthorizationInteractingObject(
+    key: string,
+  ): Promise<string | undefined> {
+    const json = await this.get(key);
+    if (json == null) return undefined;
     try {
-      return await QuoteAuthorization.fromJsonLd(parsed);
+      const interactingObject = getRawQuoteAuthorizationInteractingObject(
+        JSON.parse(json),
+      );
+      return interactingObject?.href;
     } catch {
       return undefined;
     }

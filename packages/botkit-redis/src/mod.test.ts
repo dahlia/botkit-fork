@@ -1053,6 +1053,80 @@ if (redisUrl == null) {
       }
     });
 
+    test("serializes quote authorization removal with inserts", async () => {
+      const prefix = `botkit_test_${crypto.randomUUID()}`;
+      const addRepository = new RedisRepository({ url: redisUrl, prefix });
+      const removeClient = createClient({ url: redisUrl });
+      await removeClient.connect();
+      const quote = new URL("https://remote.example/notes/remove-race");
+      const target = new URL("https://example.com/ap/note/remove-race");
+      const oldId = "01942976-3400-7f34-872e-2cbf0f9eeac6";
+      const newId = "01942976-3400-7f34-872e-2cbf0f9eeac7";
+      const oldAuthorization = new QuoteAuthorization({
+        id: new URL(
+          `https://example.com/ap/actor/bot/quote-authorization/${oldId}`,
+        ),
+        attribution: new URL("https://example.com/ap/actor/bot"),
+        interactingObject: quote,
+        interactionTarget: target,
+      });
+      const newAuthorization = new QuoteAuthorization({
+        id: new URL(
+          `https://example.com/ap/actor/bot/quote-authorization/${newId}`,
+        ),
+        attribution: new URL("https://example.com/ap/actor/bot"),
+        interactingObject: quote,
+        interactionTarget: target,
+      });
+      const authorizationKey =
+        `${prefix}:bots:bot:quoteAuthorizations:${oldId}`;
+      const removeObserved = createDeferred();
+      const releaseRemove = createDeferred();
+      const removeRepository = new RedisRepository({
+        client: createDelayedCommandClient(
+          removeClient,
+          (args) =>
+            args[0] === "DEL" &&
+            args.includes(authorizationKey),
+          removeObserved,
+          releaseRemove,
+        ),
+        prefix,
+      });
+      try {
+        await addRepository.addQuoteAuthorization(
+          "bot",
+          oldId,
+          oldAuthorization,
+        );
+        const removePromise = removeRepository.removeQuoteAuthorization(
+          "bot",
+          oldId,
+        );
+        await removeObserved.promise;
+        let addFinished = false;
+        const addPromise = addRepository
+          .addQuoteAuthorization("bot", newId, newAuthorization)
+          .then(() => {
+            addFinished = true;
+          });
+        await delay(50);
+        assert.ok(!addFinished);
+        releaseRemove.resolve();
+        await Promise.all([removePromise, addPromise]);
+        assert.deepStrictEqual(
+          (await addRepository.findQuoteAuthorization("bot", quote))?.id?.href,
+          newAuthorization.id?.href,
+        );
+      } finally {
+        releaseRemove.resolve();
+        await addRepository.close();
+        await removeRepository.close();
+        await removeClient.quit();
+        await cleanupPrefix(redisUrl, prefix);
+      }
+    });
+
     test("preserves quote authorization indexes during stale cleanup", async () => {
       const prefix = `botkit_test_${crypto.randomUUID()}`;
       const setupClient = createClient({ url: redisUrl });
