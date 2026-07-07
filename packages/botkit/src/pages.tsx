@@ -150,8 +150,8 @@ async function profilePage(
                 src={image.href}
                 width={imageWidth ?? undefined}
                 height={imageHeight ?? undefined}
-                alt={image instanceof Image
-                  ? image.name?.toString() ?? undefined
+                alt={bot.image instanceof Image
+                  ? bot.image.name?.toString() ?? undefined
                   : undefined}
               />
             )}
@@ -200,15 +200,16 @@ async function profilePage(
               )}
             {globalThis.Object.keys(properties).length > 0 && (
               <dl class="bk-fields">
-                {globalThis.Object.entries(properties).map(([name, value]) => (
-                  <>
-                    <dt>{name}</dt>
-                    <dd
-                      class="bk-prose"
-                      dangerouslySetInnerHTML={{ __html: value }}
-                    />
-                  </>
-                ))}
+                {globalThis.Object.entries(properties).flatMap((
+                  [name, value],
+                ) => [
+                  <dt key={`${name}-term`}>{name}</dt>,
+                  <dd
+                    key={`${name}-desc`}
+                    class="bk-prose"
+                    dangerouslySetInnerHTML={{ __html: value }}
+                  />,
+                ])}
               </dl>
             )}
             <div class="bk-meta">
