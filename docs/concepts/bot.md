@@ -396,9 +396,11 @@ See the [design language document][DESIGN.md] for the full system.
     docs, so each name looks the same as it does there.
 
 `~PagesOptions.theme`
-:   The color scheme of the web pages: `"auto"` (the default) follows the
+:   *This option is available since BotKit 0.5.0.*
+
+    The color scheme of the web pages: `"auto"` (the default) follows the
     visitor's operating system preference, while `"light"` and `"dark"` force a
-    fixed scheme.  *This option is available since BotKit 0.5.0.*
+    fixed scheme.
 
 `~PagesOptions.css`
 :   Custom CSS injected after BotKit's own stylesheet, so it can override any of

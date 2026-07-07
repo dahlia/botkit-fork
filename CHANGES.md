@@ -21,7 +21,7 @@ To be released.
     locally, so the pages no longer load anything from an external CDN and
     work with no build step on either Deno or Node.js.
 
-     -  Added the `~PagesOptions.theme` option, which selects the color
+     -  Added the `PagesOptions.theme` option, which selects the color
         scheme (`"auto"`, `"light"`, or `"dark"`; default `"auto"`).
 
  -  Added support for hosting multiple bots on a single instance.
