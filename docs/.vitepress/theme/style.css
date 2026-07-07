@@ -44,10 +44,13 @@
  * -------------------------------------------------------------------------- */
 
 :root {
-  --vp-c-green-1: #5f8027;
-  --vp-c-green-2: #688d2a;
-  --vp-c-green-3: #6a922b;
-  --vp-c-green-soft: rgba(82, 53, 33, 0.14);
+  /* BotKit brand greens, taken from the logo (dinosaur model kit).
+     -1 is the accessible link/ink green on light surfaces; -3 is the solid
+     fill that carries white text. */
+  --vp-c-green-1: #33790f;
+  --vp-c-green-2: #398712;
+  --vp-c-green-3: #3f950f;
+  --vp-c-green-soft: rgba(57, 135, 18, 0.14);
 
   --vp-c-default-1: var(--vp-c-gray-1);
   --vp-c-default-2: var(--vp-c-gray-2);
@@ -73,6 +76,33 @@
   --vp-c-danger-2: var(--vp-c-red-2);
   --vp-c-danger-3: var(--vp-c-red-3);
   --vp-c-danger-soft: var(--vp-c-red-soft);
+}
+
+/* On dark surfaces the ink green lifts so links and text stay legible. */
+.dark {
+  --vp-c-green-1: #7ec93b;
+  --vp-c-green-2: #6bbb2a;
+  --vp-c-green-3: #4eb31b;
+  --vp-c-green-soft: rgba(120, 200, 70, 0.16);
+}
+
+/**
+ * Typography
+ *
+ * Body and UI stay on Inter (the bundled Canvas-mode face).  Headlines use
+ * Space Grotesk, BotKit's Expression-mode display face.
+ * -------------------------------------------------------------------------- */
+
+:root {
+  --bk-font-display: "Space Grotesk", "Inter", var(--vp-font-family-base);
+}
+
+.VPHomeHero .name,
+.VPHomeHero .text,
+.vp-doc h1,
+.vp-doc h2 {
+  font-family: var(--bk-font-display);
+  letter-spacing: -0.015em;
 }
 
 /**
