@@ -872,7 +872,10 @@ if (redisUrl == null) {
           (await Array.fromAsync(repository.getFollowers("bot"))).length,
           2,
         );
-        assert.ok(commands.some(([command]) => command === "MGET"));
+        const mget = commands.find(([command]) => command === "MGET");
+        assert.ok(mget != null);
+        assert.deepStrictEqual(mget.length, 3);
+        assert.ok(mget.slice(1).every((key) => key.includes(":followers:")));
         assert.ok(
           !commands.some(([command, key]) =>
             command === "GET" && key?.includes(":followers:")
