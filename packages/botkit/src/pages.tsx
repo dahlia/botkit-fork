@@ -172,7 +172,7 @@ async function profilePage(
                   class="bk-avatar bk-avatar--placeholder"
                   aria-hidden="true"
                 >
-                  {(bot.name ?? bot.username).charAt(0).toUpperCase()}
+                  {[...(bot.name ?? bot.username)][0].toUpperCase()}
                 </span>
               )}
             <h1 class="bk-name">
@@ -687,7 +687,7 @@ multiApp.get("/", (c) => {
                       href={`/@${encodeURIComponent(bot.username)}`}
                     >
                       <span class="bk-actor__ph" aria-hidden="true">
-                        {(bot.name ?? bot.username).charAt(0).toUpperCase()}
+                        {[...(bot.name ?? bot.username)][0].toUpperCase()}
                       </span>
                       <span class="bk-actor__info">
                         <span class="bk-actor__name">
