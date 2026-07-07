@@ -255,6 +255,14 @@ if (redisUrl == null) {
   describe("RedisRepository", () => {
     test("rejects invalid constructor option combinations", () => {
       assert.throws(
+        () => Reflect.construct(RedisRepository, [undefined]),
+        new TypeError("RedisRepositoryOptions must be provided."),
+      );
+      assert.throws(
+        () => Reflect.construct(RedisRepository, [null]),
+        new TypeError("RedisRepositoryOptions must be provided."),
+      );
+      assert.throws(
         () => Reflect.construct(RedisRepository, [{}]),
         new TypeError(
           "RedisRepositoryOptions must provide exactly one of client or url.",
@@ -323,6 +331,10 @@ if (redisUrl == null) {
         assert.ok(client.isOpen);
         await repository.close();
         assert.ok(client.isOpen);
+        await assert.rejects(
+          () => repository.countMessages("bot"),
+          new TypeError("RedisRepository is closed."),
+        );
       } finally {
         await client.quit();
         await cleanupPrefix(redisUrl, prefix);
@@ -442,7 +454,7 @@ if (redisUrl == null) {
       }
     });
 
-    test("fetches listed messages in one Redis command", async () => {
+    test("fetches listed messages in batched Redis commands", async () => {
       const prefix = `botkit_test_${crypto.randomUUID()}`;
       const client = createClient({ url: redisUrl });
       await client.connect();
@@ -452,25 +464,25 @@ if (redisUrl == null) {
         prefix,
       });
       try {
-        const firstId = "01941f29-7c00-7fe8-ab0a-7b593990a3c0";
-        const secondId = "01942976-3400-7f34-872e-2cbf0f9eeac4";
-        await repository.addMessage(
-          "bot",
-          firstId,
-          createMessage(firstId, "first", "2025-01-01T00:00:00Z"),
-        );
-        await repository.addMessage(
-          "bot",
-          secondId,
-          createMessage(secondId, "second", "2025-01-02T00:00:00Z"),
-        );
+        for (let i = 0; i < 101; i++) {
+          const sequence = i.toString(16).padStart(4, "0");
+          const id: `${string}-${string}-${string}-${string}-${string}` =
+            `01941f29-${sequence}-7fe8-ab0a-7b593990a3c0`;
+          await repository.addMessage(
+            "bot",
+            id,
+            createMessage(id, `message ${i}`, "2025-01-01T00:00:00Z"),
+          );
+        }
 
         commands.length = 0;
         assert.deepStrictEqual(
           (await Array.fromAsync(repository.getMessages("bot"))).length,
-          2,
+          101,
         );
-        assert.ok(commands.some(([command]) => command === "MGET"));
+        const mgets = commands.filter(([command]) => command === "MGET");
+        assert.deepStrictEqual(mgets.length, 2);
+        assert.ok(mgets.every((command) => command.length <= 101));
         assert.ok(
           !commands.some(([command, key]) =>
             command === "GET" && key?.includes(":messages:")
@@ -838,7 +850,7 @@ if (redisUrl == null) {
       }
     });
 
-    test("fetches listed followers in one Redis command", async () => {
+    test("fetches listed followers in batched Redis commands", async () => {
       const prefix = `botkit_test_${crypto.randomUUID()}`;
       const client = createClient({ url: redisUrl });
       await client.connect();
@@ -1146,6 +1158,10 @@ if (redisUrl == null) {
           }`,
           "null",
         ]);
+        assert.deepStrictEqual(
+          await repository.findQuoteAuthorizationReference("bot", stamp),
+          undefined,
+        );
         assert.deepStrictEqual(
           await repository.findQuoteAuthorizationReferenceAttribution(
             "bot",

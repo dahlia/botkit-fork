@@ -38,6 +38,7 @@ const logger = getLogger(["botkit", "redis"]);
 const defaultRedisLockTimeoutMs = 30_000;
 const defaultRedisLockPollIntervalMs = 20;
 const defaultRedisLockRenewIntervalMs = 10_000;
+const redisMGetBatchSize = 100;
 const uuidV7Pattern =
   /^([0-9a-f]{8})-([0-9a-f]{4})-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -139,6 +140,7 @@ export class RedisRepository implements Repository, AsyncDisposable {
   private readonly lockTimeoutMs: number;
   private readonly lockPollIntervalMs: number;
   private readonly lockRenewIntervalMs: number;
+  private closed = false;
 
   /**
    * The Redis key prefix under which all BotKit data is stored.
@@ -153,6 +155,9 @@ export class RedisRepository implements Repository, AsyncDisposable {
    *   if `lockRenewIntervalMs` is not less than `lockTimeoutMs`.
    */
   constructor(options: RedisRepositoryOptions) {
+    if (options == null) {
+      throw new TypeError("RedisRepositoryOptions must be provided.");
+    }
     const hasClient = "client" in options && options.client != null;
     const hasUrl = "url" in options && options.url != null;
     if (hasClient === hasUrl) {
@@ -208,6 +213,8 @@ export class RedisRepository implements Repository, AsyncDisposable {
    * Closes the owned Redis connection.
    */
   async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
     if (!this.ownsClient) return;
     const ready = this.ready;
     try {
@@ -250,6 +257,9 @@ export class RedisRepository implements Repository, AsyncDisposable {
   }
 
   private async ensureReady(): Promise<void> {
+    if (this.closed) {
+      throw new TypeError("RedisRepository is closed.");
+    }
     if (!this.ownsClient) return;
     const ready = this.ready;
     if (ready == null) {
@@ -287,6 +297,18 @@ export class RedisRepository implements Repository, AsyncDisposable {
   private async get(key: string): Promise<string | undefined> {
     const value = await this.command(["GET", key]);
     return typeof value === "string" ? value : undefined;
+  }
+
+  private async mGet(keys: readonly string[]): Promise<string[]> {
+    if (keys.length < 1) return [];
+    const chunks: string[][] = [];
+    for (let i = 0; i < keys.length; i += redisMGetBatchSize) {
+      chunks.push(keys.slice(i, i + redisMGetBatchSize));
+    }
+    const replies = await Promise.all(
+      chunks.map((chunk) => this.command(["MGET", ...chunk])),
+    );
+    return replies.flatMap(toStringArray);
   }
 
   private async set(key: string, value: string): Promise<void> {
@@ -536,7 +558,7 @@ export class RedisRepository implements Repository, AsyncDisposable {
     );
     if (ids.length < 1) return;
     const keys = ids.map((id) => this.botKey(identifier, "messages", id));
-    const jsons = toStringArray(await this.command(["MGET", ...keys]));
+    const jsons = await this.mGet(keys);
     for (const json of jsons) {
       try {
         const activity = await Activity.fromJsonLd(JSON.parse(json));
@@ -702,7 +724,7 @@ export class RedisRepository implements Repository, AsyncDisposable {
     );
     if (ids.length < 1) return;
     const keys = ids.map((id) => this.botKey(identifier, "followers", id));
-    const jsons = toStringArray(await this.command(["MGET", ...keys]));
+    const jsons = await this.mGet(keys);
     for (const json of jsons) {
       try {
         const actor = await Object.fromJsonLd(JSON.parse(json));
@@ -1008,6 +1030,7 @@ export class RedisRepository implements Repository, AsyncDisposable {
     if (json == null) return undefined;
     try {
       const value = JSON.parse(json) as QuoteAuthorizationReferenceData;
+      if (typeof value !== "object" || value == null) return undefined;
       return value.messageId;
     } catch {
       return undefined;
