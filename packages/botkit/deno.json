@@ -34,7 +34,7 @@
     "dist",
     "junit.xml",
     "src/css",
-    "src/fonts"
+    "src/fonts/*.woff2"
   ],
   "publish": {
     "exclude": [

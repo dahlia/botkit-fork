@@ -87,6 +87,7 @@
   "sideEffects": false,
   "files": [
     "dist",
+    "src/fonts/LICENSE-inter.txt",
     "LICENSE",
     "package.json",
     "README.md"
