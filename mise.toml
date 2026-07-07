@@ -66,8 +66,22 @@ run = [
   "hongdown --write",
 ]
 
+[tasks."generate:assets"]
+description = "Compile the web-page CSS and fonts into src/static/*.ts"
+sources = [
+  "packages/botkit/scripts/build-assets.ts",
+  "packages/botkit/src/css/**/*.css",
+  "packages/botkit/src/fonts/*.woff2",
+]
+outputs = [
+  "packages/botkit/src/static/style.ts",
+  "packages/botkit/src/static/fonts.ts",
+]
+run = "deno run --allow-read --allow-write packages/botkit/scripts/build-assets.ts"
+
 [tasks."build:botkit"]
 description = "Build @fedify/botkit"
+depends = ["generate:assets"]
 sources = [
   "packages/botkit/deno.json",
   "packages/botkit/package.json",

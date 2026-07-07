@@ -13,7 +13,6 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-/** @jsx react-jsx */
 /** @jsxImportSource hono/jsx */
 import type { Context } from "@fedify/fedify/federation";
 import {
@@ -27,13 +26,19 @@ import {
   PUBLIC_COLLECTION,
 } from "@fedify/vocab";
 import { Hono } from "hono";
+import { STYLESHEET_PATH } from "./assets.ts";
 import { decode } from "html-entities";
 import { parseTemplate } from "url-template";
 import type { Context as HonoContext } from "hono";
 import type { BotImpl } from "./bot-impl.ts";
 import { FollowButton } from "./components/FollowButton.tsx";
 import { Follower } from "./components/Follower.tsx";
-import { Layout } from "./components/Layout.tsx";
+import {
+  BotKitCredit,
+  CopyIcon,
+  FeedIcon,
+  Layout,
+} from "./components/Layout.tsx";
 import { Message } from "./components/Message.tsx";
 import type { InstanceImpl } from "./instance-impl.ts";
 import { getMessageClass, isMessageObject, textXss } from "./message-impl.ts";
@@ -60,6 +65,25 @@ export interface InstanceEnv {
 
 // deno-lint-ignore no-explicit-any
 type PageContext = HonoContext<any>;
+
+interface PageHeadingProps {
+  readonly title: string;
+  readonly count?: string;
+  readonly back?: string;
+}
+
+/** A secondary-page heading with an optional back link and count caption. */
+function PageHeading({ title, count, back }: PageHeadingProps) {
+  return (
+    <header class="bk-page-head">
+      {back && <a class="bk-back" href={back} aria-label="Back">&larr;</a>}
+      <div>
+        <h1 class="bk-page-title">{title}</h1>
+        {count && <div class="bk-page-count">{count}</div>}
+      </div>
+    </header>
+  );
+}
 
 export const app = new Hono<Env>();
 
@@ -118,106 +142,126 @@ async function profilePage(
       activityLink={activityLink}
       feedLink={feedLink}
     >
-      <header class="container">
-        {image && (
-          <img
-            src={image.href}
-            width={imageWidth ?? undefined}
-            height={imageHeight ?? undefined}
-            alt={image instanceof Image
-              ? image.name?.toString() ?? undefined
-              : undefined}
-            style="width: 100%; margin-bottom: 1em;"
-          />
-        )}
-        <hgroup>
-          {icon && (
-            <img
-              src={icon.href}
-              width={iconWidth ?? undefined}
-              height={iconHeight ?? undefined}
-              style="float: left; margin-right: 1em; height: 72;"
-            />
-          )}
-          <h1>
-            <a href={home}>{bot.name ?? bot.username}</a>
-          </h1>
-          <p>
-            <span style="user-select: all;">{handle}</span> &middot;{" "}
-            <a
-              href={`${base}/feed.xml`}
-              rel="alternate"
-              type="application/atom+xml"
-              title="Atom feed"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width={18}
-                height={18}
-                viewBox="0 0 16 16"
-                aria-label="Atom feed"
-              >
-                <path
-                  fill="currentColor"
-                  d="M2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2zm1.5 2.5c5.523 0 10 4.477 10 10a1 1 0 1 1-2 0a8 8 0 0 0-8-8a1 1 0 0 1 0-2m0 4a6 6 0 0 1 6 6a1 1 0 1 1-2 0a4 4 0 0 0-4-4a1 1 0 0 1 0-2m.5 7a1.5 1.5 0 1 1 0-3a1.5 1.5 0 0 1 0 3"
+      <main>
+        <header class="bk-profile">
+          <div class="bk-banner">
+            {image && (
+              <img
+                src={image.href}
+                width={imageWidth ?? undefined}
+                height={imageHeight ?? undefined}
+                alt={image instanceof Image
+                  ? image.name?.toString() ?? undefined
+                  : undefined}
+              />
+            )}
+          </div>
+          <div class="bk-profile__body">
+            {icon
+              ? (
+                <img
+                  class="bk-avatar"
+                  src={icon.href}
+                  width={iconWidth ?? undefined}
+                  height={iconHeight ?? undefined}
+                  alt={bot.name ?? bot.username}
+                />
+              )
+              : (
+                <span
+                  class="bk-avatar bk-avatar--placeholder"
+                  aria-hidden="true"
                 >
-                </path>
-              </svg>
-            </a>{" "}
-            &middot;{" "}
-            <span>
-              <a href={`${base}/followers`}>
-                {followersCount === 1
-                  ? `1 follower`
-                  : `${followersCount.toLocaleString("en")} followers`}
-              </a>
-            </span>{" "}
-            &middot;{" "}
-            <span>
-              {postsCount === 1
-                ? `1 post`
-                : `${postsCount.toLocaleString("en")} posts`}
-            </span>{" "}
-            &middot; <FollowButton bot={bot} action={`${base}/follow`} />
-          </p>
-        </hgroup>
-        {summary &&
-          (
-            <div
-              dangerouslySetInnerHTML={{ __html: summary }}
-            />
-          )}
-        {globalThis.Object.keys(properties).length > 0 && (
-          <table>
-            <tbody>
-              {globalThis.Object.entries(properties).map(([name, value]) => (
-                <tr>
-                  <th scope="row" style="width: 1%; white-space: nowrap;">
-                    <strong>{name}</strong>
-                  </th>
-                  <td
-                    dangerouslySetInnerHTML={{ __html: value }}
-                  />
-                </tr>
+                  {(bot.name ?? bot.username).charAt(0).toUpperCase()}
+                </span>
+              )}
+            <h1 class="bk-name">
+              <a href={home}>{bot.name ?? bot.username}</a>
+            </h1>
+            <span class="bk-handle">
+              <span class="bk-handle__text">{handle}</span>
+              <button
+                type="button"
+                class="bk-copy"
+                data-copy={handle}
+                onclick="botkitCopy(this)"
+                aria-label="Copy handle"
+                title="Copy handle"
+              >
+                <CopyIcon />
+              </button>
+            </span>
+            {summary &&
+              (
+                <div
+                  class="bk-bio bk-prose"
+                  dangerouslySetInnerHTML={{ __html: summary }}
+                />
+              )}
+            {globalThis.Object.keys(properties).length > 0 && (
+              <dl class="bk-fields">
+                {globalThis.Object.entries(properties).map(([name, value]) => (
+                  <>
+                    <dt>{name}</dt>
+                    <dd
+                      class="bk-prose"
+                      dangerouslySetInnerHTML={{ __html: value }}
+                    />
+                  </>
+                ))}
+              </dl>
+            )}
+            <div class="bk-meta">
+              <div class="bk-counts">
+                <a href={`${base}/followers`}>
+                  <b>{followersCount.toLocaleString("en")}</b>{" "}
+                  {followersCount === 1 ? "follower" : "followers"}
+                </a>
+                <span>
+                  <b>{postsCount.toLocaleString("en")}</b>{" "}
+                  {postsCount === 1 ? "post" : "posts"}
+                </span>
+                <a
+                  class="bk-feed-link"
+                  href={`${base}/feed.xml`}
+                  rel="alternate"
+                  type="application/atom+xml"
+                  title="Atom feed"
+                  aria-label="Atom feed"
+                >
+                  <FeedIcon size={17} />
+                </a>
+              </div>
+              <span class="bk-meta__spacer" />
+              <FollowButton bot={bot} action={`${base}/follow`} />
+            </div>
+          </div>
+        </header>
+        {messages.length > 0
+          ? (
+            <div class="bk-feed">
+              {messages.map((message) => (
+                <Message message={message} session={session} />
               ))}
-            </tbody>
-          </table>
-        )}
-      </header>
-      <main class="container">
-        {messages.map((message) => (
-          <Message message={message} session={session} />
-        ))}
-      </main>
-      <footer class="container">
-        <nav style="display: block; text-align: end;">
-          {nextLink && (
-            <a rel="next" href={nextLink.href}>
-              Older posts &rarr;
-            </a>
+            </div>
+          )
+          : (
+            <div class="bk-feed">
+              <div class="bk-empty">No posts yet.</div>
+            </div>
           )}
-        </nav>
-      </footer>
+        {nextLink && (
+          <nav class="bk-pagination">
+            <a rel="next" href={nextLink.href}>Older posts &rarr;</a>
+          </nav>
+        )}
+      </main>
+      <script
+        dangerouslySetInnerHTML={{
+          __html:
+            `globalThis.botkitCopy=function(b){var t=b.getAttribute('data-copy');if(navigator.clipboard){navigator.clipboard.writeText(t)}b.classList.add('is-copied');setTimeout(function(){b.classList.remove('is-copied')},1200)}`,
+        }}
+      />
     </Layout>,
     {
       headers: {
@@ -260,22 +304,26 @@ async function followersPage(
       activityLink={activityLink}
       feedLink={feedLink}
     >
-      <header class="container">
-        <h1>
-          <a href={home}>&larr;</a>{" "}
-          {followersCount === 1
-            ? `1 follower`
+      <main>
+        <PageHeading
+          back={home}
+          title={followersCount === 1
+            ? "1 follower"
             : `${followersCount.toLocaleString("en")} followers`}
-        </h1>
-      </header>
-      <main class="container">
-        {followers.map((follower, index) => (
-          <Follower
-            key={follower.id?.href ?? index}
-            actor={follower}
-            session={session}
-          />
-        ))}
+        />
+        {followers.length > 0
+          ? (
+            <div class="bk-roster">
+              {followers.map((follower, index) => (
+                <Follower
+                  key={follower.id?.href ?? index}
+                  actor={follower}
+                  session={session}
+                />
+              ))}
+            </div>
+          )
+          : <div class="bk-empty">No followers yet.</div>}
       </main>
     </Layout>,
   );
@@ -294,6 +342,7 @@ async function hashtagPage(
 ): Promise<Response> {
   const hashtag = c.req.param("hashtag");
   if (hashtag == null) return c.notFound();
+  const home = base === "" ? "/" : base;
   const url = new URL(c.req.url);
   const ctx = bot.federation.createContext(c.req.raw, contextData);
   const session = bot.getSession(ctx);
@@ -309,26 +358,23 @@ async function hashtagPage(
   }
   return c.html(
     <Layout bot={bot} host={url.host} title={`#${hashtag}`}>
-      <header class="container">
-        <h1>#{hashtag}</h1>
-      </header>
-      <main class="container">
-        {posts.map((message) => (
-          <Message
-            message={message}
-            session={session}
-          />
-        ))}
+      <main>
+        <PageHeading back={home} title={`#${hashtag}`} />
+        {posts.length > 0
+          ? (
+            <div class="bk-feed">
+              {posts.map((message) => (
+                <Message message={message} session={session} />
+              ))}
+            </div>
+          )
+          : <div class="bk-empty">No posts tagged #{hashtag}.</div>}
+        {nextLink && (
+          <nav class="bk-pagination">
+            <a rel="next" href={nextLink.href}>Older posts &rarr;</a>
+          </nav>
+        )}
       </main>
-      <footer class="container">
-        <nav style="display: block; text-align: end;">
-          {nextLink && (
-            <a rel="next" href={nextLink.href}>
-              Older posts &rarr;
-            </a>
-          )}
-        </nav>
-      </footer>
     </Layout>,
     {
       headers: nextLink == null ? {} : {
@@ -351,6 +397,7 @@ async function messagePage(
 ): Promise<Response> {
   const id = c.req.param("id");
   if (id == null) return c.notFound();
+  const home = base === "" ? "/" : base;
   const url = new URL(c.req.url);
   const ctx = bot.federation.createContext(c.req.raw, contextData);
   const session = bot.getSession(ctx);
@@ -378,8 +425,11 @@ async function messagePage(
       feedLink={feedLink}
       title={title?.toString() ?? undefined}
     >
-      <main class="container">
-        <Message message={message} session={session} />
+      <main>
+        <PageHeading back={home} title={bot.name ?? bot.username} />
+        <div class="bk-feed">
+          <Message message={message} session={session} />
+        </div>
       </main>
     </Layout>,
     {
@@ -603,39 +653,57 @@ export const multiApp = new Hono<InstanceEnv>();
 multiApp.get("/", (c) => {
   const { instance } = c.env;
   const url = new URL(c.req.url);
-  const cssFilename = instance.pages.color === "azure"
-    ? `pico.min.css`
-    : `pico.${instance.pages.color}.min.css`;
   const bots = [...instance.bots];
   return c.html(
-    <html>
+    <html
+      lang="en"
+      data-botkit-color={instance.pages.color}
+      data-theme={instance.pages.theme === "auto"
+        ? undefined
+        : instance.pages.theme}
+    >
       <head>
         <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="generator" content="BotKit" />
         <title>{url.host}</title>
-        <link
-          rel="stylesheet"
-          href={`https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/${cssFilename}`}
-        />
+        <link rel="stylesheet" href={STYLESHEET_PATH} />
         <style dangerouslySetInnerHTML={{ __html: instance.pages.css }} />
       </head>
-      <body>
-        <header class="container">
-          <h1>{url.host}</h1>
-        </header>
-        <main class="container">
-          <ul>
-            {bots.map((bot) => (
-              <li>
-                <a href={`/@${encodeURIComponent(bot.username)}`}>
-                  {bot.name ?? bot.username}
-                </a>{" "}
-                <span style="user-select: all;">
-                  @{bot.username}@{url.host}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </main>
+      <body class="bk-page">
+        <div class="bk-container">
+          <main>
+            <PageHeading
+              title={url.host}
+              count={bots.length === 1 ? "1 bot" : `${bots.length} bots`}
+            />
+            {bots.length > 0
+              ? (
+                <div class="bk-roster">
+                  {bots.map((bot) => (
+                    <a
+                      class="bk-actor"
+                      href={`/@${encodeURIComponent(bot.username)}`}
+                    >
+                      <span class="bk-actor__ph" aria-hidden="true">
+                        {(bot.name ?? bot.username).charAt(0).toUpperCase()}
+                      </span>
+                      <span class="bk-actor__info">
+                        <span class="bk-actor__name">
+                          {bot.name ?? bot.username}
+                        </span>
+                        <span class="bk-actor__handle">
+                          @{bot.username}@{url.host}
+                        </span>
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              )
+              : <div class="bk-empty">No bots hosted here yet.</div>}
+          </main>
+          <BotKitCredit />
+        </div>
       </body>
     </html>,
   );

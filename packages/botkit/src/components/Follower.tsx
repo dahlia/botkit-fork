@@ -32,36 +32,37 @@ export async function Follower({ actor, session }: FollowerProps) {
     suppressError: true,
   });
   const authorHandle = await getActorHandle(author);
-
+  if (author?.id == null) {
+    return (
+      <div class="bk-actor">
+        <span class="bk-actor__ph" />
+        <em class="bk-actor__name">deleted account</em>
+      </div>
+    );
+  }
+  const iconUrl = authorIcon?.url == null
+    ? null
+    : authorIcon.url instanceof Link
+    ? authorIcon.url.href?.href
+    : authorIcon.url.href;
   return (
-    <article>
-      <header>
-        {author?.id
-          ? (
-            <hgroup>
-              {authorIcon?.url && (
-                <img
-                  src={authorIcon.url instanceof Link
-                    ? authorIcon.url.href?.href
-                    : authorIcon.url.href}
-                  width={authorIcon.width ?? undefined}
-                  height={authorIcon.height ?? undefined}
-                  alt={authorIcon.name?.toString() ?? undefined}
-                  style="float: left; margin-right: 1em; height: 64px;"
-                />
-              )}
-              <h3>
-                <a href={author.url?.href?.toString() ?? author.id.href}>
-                  {author.name}
-                </a>
-              </h3>{" "}
-              <p>
-                <span style="user-select: all;">{authorHandle}</span>
-              </p>
-            </hgroup>
-          )
-          : <em>(Deleted account)</em>}
-      </header>
-    </article>
+    <a
+      class="bk-actor"
+      href={author.url?.href?.toString() ?? author.id.href}
+    >
+      {iconUrl
+        ? (
+          <img
+            src={iconUrl}
+            alt={authorIcon?.name?.toString() ?? undefined}
+            loading="lazy"
+          />
+        )
+        : <span class="bk-actor__ph" />}
+      <span class="bk-actor__info">
+        <span class="bk-actor__name">{author.name?.toString()}</span>
+        <span class="bk-actor__handle">{authorHandle}</span>
+      </span>
+    </a>
   );
 }

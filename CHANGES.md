@@ -8,6 +8,22 @@ To be released.
 
 ### @fedify/botkit
 
+ -  Redesigned the bot's web pages with a new, self-contained design language.
+
+    The profile, post, and follower pages now use BotKit's own quiet, modern
+    design instead of Pico CSS.  The look is driven by the bot's accent color,
+    adapts to light and dark color schemes automatically, and foregrounds the
+    bot's own identity rather than BotKit's brand.  Reposts are now clearly
+    distinguished from the bot's own posts.  The full system is described in
+    the new <DESIGN.md> document.
+
+    The stylesheet and web fonts are bundled with the package and served
+    locally, so the pages no longer load anything from an external CDN and
+    work with no build step on either Deno or Node.js.
+
+     -  Added the `~PagesOptions.theme` option, which selects the color
+        scheme (`"auto"`, `"light"`, or `"dark"`; default `"auto"`).
+
  -  Added support for hosting multiple bots on a single instance.
     [[#16], [#24]]
 
