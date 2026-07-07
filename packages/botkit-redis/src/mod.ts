@@ -251,8 +251,18 @@ export class RedisRepository implements Repository, AsyncDisposable {
 
   private async ensureReady(): Promise<void> {
     if (!this.ownsClient) return;
-    if (this.client.isOpen) return;
-    const ready = this.ready ?? this.connect();
+    const ready = this.ready;
+    if (ready == null) {
+      if (this.client.isOpen) return;
+      const nextReady = this.connect();
+      try {
+        await nextReady;
+      } catch (error) {
+        if (this.ready === nextReady) this.ready = undefined;
+        throw error;
+      }
+      return;
+    }
     try {
       await ready;
     } catch (error) {

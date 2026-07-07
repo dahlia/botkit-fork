@@ -334,6 +334,49 @@ if (redisUrl == null) {
       }
     });
 
+    test("awaits pending readiness before commands", async () => {
+      const ready = createDeferred();
+      let readyResolved = false;
+      let connectCalled = false;
+      let commandFinished = false;
+      const repository = new RedisRepository({
+        client: {
+          get isOpen(): boolean {
+            return true;
+          },
+
+          connect(): Promise<unknown> {
+            connectCalled = true;
+            return Promise.reject(new TypeError("Unexpected reconnect."));
+          },
+
+          sendCommand(args: readonly string[]): Promise<unknown> {
+            assert.deepStrictEqual(args[0], "ZCARD");
+            assert.ok(readyResolved);
+            return Promise.resolve(0);
+          },
+        },
+      });
+      Reflect.set(repository, "ownsClient", true);
+      Reflect.set(
+        repository,
+        "ready",
+        ready.promise.then(() => {
+          readyResolved = true;
+        }),
+      );
+      const countPromise = repository.countMessages("bot").then((count) => {
+        commandFinished = true;
+        return count;
+      });
+      await delay(50);
+      assert.ok(!commandFinished);
+      assert.ok(!connectCalled);
+      ready.resolve();
+      assert.deepStrictEqual(await countPromise, 0);
+      assert.ok(!connectCalled);
+    });
+
     test("messages basic operations and ordering", async () => {
       const { repository, cleanup } = createHarness();
       try {
